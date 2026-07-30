@@ -36,9 +36,8 @@ function showToast(message) {
 
 document.querySelectorAll("[data-section]").forEach((button) => {
   button.addEventListener("click", () => {
-    if (button.dataset.section === "الاختبارات") {
-      sessionStorage.setItem("madar-student-view", "tests");
-      window.location.href = "/student/";
+    if (button.dataset.section === "الألعاب التفاعلية") {
+      window.location.href = "games/percentage.html";
       return;
     }
     showToast(`لا يوجد محتوى منشور في قسم ${button.dataset.section} لـ${currentStage.label} حتى الآن.`);
