@@ -52,6 +52,10 @@ document.getElementById("startLearningButton")?.addEventListener("click", (event
   );
 });
 
+document.getElementById("demoGameButton")?.addEventListener("click", () => {
+  window.location.href = "games/percentage.html";
+});
+
 document.getElementById("helpButton")?.addEventListener("click", () => {
   showModal(
     "كيف نساعدك؟",
@@ -67,8 +71,6 @@ document.querySelectorAll("[data-close-modal]").forEach((element) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") hideModal();
 });
-
-
 
 document.querySelectorAll(".stage-hotspot, .mobile-stage-card").forEach((button) => {
   button.addEventListener("click", () => {
