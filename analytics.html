@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تحليل بيانات الطالبات</title>
+  <style>
+    :root{--p:#40208c;--t:#3eaaa6;--g:#efa91f;--ink:#251064;--muted:#77788b}
+    *{box-sizing:border-box}
+    body{margin:0;padding:4px 18px 18px;font-family:Tahoma,Arial,sans-serif;color:var(--ink);background:transparent}
+    button,input{font:inherit}
+    .dashboard{max-width:1420px;margin:auto}
+    .head,.heading,.panel-head,.stars-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
+    .heading{justify-content:flex-start}
+    .icon{width:46px;height:46px;display:grid;place-items:center;border-radius:15px;background:#edf9f8;color:var(--t);font-size:24px}
+    .head h1{margin:0 0 5px;font-size:29px}
+    .head p,.stars-head p{margin:0;color:var(--muted);font-size:13px}
+    .save{color:var(--muted);font-size:12px}
+    .save:before{content:"";display:inline-block;width:8px;height:8px;margin-left:8px;border-radius:50%;background:var(--t);box-shadow:0 0 0 4px #3eaaa620}
+    .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:17px 0}
+    .stat,.panel{background:#fff;border:1px solid #eee3d5;border-radius:16px;box-shadow:0 7px 19px #36210d0b}
+    .stat{min-height:86px;padding:12px;display:flex;align-items:center;justify-content:center;gap:12px}
+    .stat i{width:40px;height:40px;display:grid;place-items:center;border-radius:50%;background:#f7f3ff;font-style:normal;font-size:23px}
+    .stat p{margin:0 0 3px;color:var(--muted);font-size:14px}
+    .stat strong{font-size:23px}
+    .teal strong{color:var(--t)}
+    .gold strong{color:var(--g)}
+    .main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(215px,.72fr) minmax(260px,.83fr);gap:14px;align-items:stretch}
+    .panel{padding:16px}
+    .panel h2{margin:0;font-size:17px}
+    .tabs{display:flex;padding:3px;border:1px solid #e4d9cc;border-radius:99px}
+    .tabs button{border:0;padding:6px 10px;border-radius:99px;background:transparent;color:var(--muted);font-size:12px;cursor:pointer}
+    .tabs .active{color:#fff;background:var(--t)}
+    .chart{height:205px;margin-top:15px;display:flex;align-items:end;gap:7%;padding:12px 5%;border-bottom:1px solid #ddd;background:repeating-linear-gradient(to bottom,transparent 0 39px,#e9e9ee 40px)}
+    .bar{position:relative;flex:1;min-width:28px;border-radius:11px 11px 3px 3px;background:linear-gradient(#54c4bd,var(--p));transition:.35s}
+    .bar:after{content:attr(data-v) '%';position:absolute;top:-24px;left:50%;transform:translateX(-50%);font-size:12px;font-weight:bold}
+    .bar span{position:absolute;bottom:-35px;width:95px;left:50%;transform:translateX(-50%);text-align:center;color:var(--muted);font-size:10px}
+    .donut-wrap{min-height:225px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px}
+    .donut{width:125px;aspect-ratio:1;border-radius:50%;background:conic-gradient(var(--p) 0 34%,var(--g) 34% 67%,var(--t) 67%);position:relative}
+    .donut:after{content:"التحسن";position:absolute;inset:28%;display:grid;place-items:center;border-radius:50%;background:#fff;color:var(--muted);font-size:11px}
+    .legend{width:100%;list-style:none;padding:0;margin:0;display:grid;gap:8px;color:var(--muted);font-size:11px}
+    .legend b{float:left;color:var(--ink);margin-right:8px}
+    .stars-head>span{font-size:24px;color:var(--g)}
+    .student{display:grid;grid-template-columns:20px minmax(0,1fr) 48px 55px;align-items:center;gap:5px;padding:6px 7px;margin-top:7px;border:1px solid #ece8e2;border-radius:11px}
+    .student>span{color:var(--g);font-size:17px}
+    .student input{width:100%;height:29px;border:1px solid transparent;border-radius:7px;padding:0 4px;color:var(--ink);font-size:11px;font-weight:bold}
+    .student input[type="number"]{padding:0;text-align:center}
+    .student input:focus{outline:0;border-color:var(--t);box-shadow:0 0 0 3px #3eaaa61c}
+    .progress{grid-column:2/-1;height:6px;border-radius:99px;background:#f1eee9;overflow:hidden;direction:ltr}
+    .progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#5b35b9,var(--p))}
+    @media(max-width:980px){
+      .main{grid-template-columns:1fr 1fr}
+      .performance{grid-column:1/-1}
+      .stats{grid-template-columns:1fr 1fr}
+    }
+    @media(max-width:800px){
+      body{padding:4px 2px 14px}
+      .head{align-items:flex-start;flex-direction:column}
+      .head h1{font-size:25px}
+      .main{grid-template-columns:1fr}
+      .performance{grid-column:auto}
+      .panel-head{align-items:stretch;flex-direction:column}
+      .donut-wrap{min-height:220px}
+    }
+    @media(max-width:480px){
+      .stats{grid-template-columns:1fr}
+      .chart{gap:4%;padding-inline:2%}
+      .bar span{width:72px;font-size:9px}
+    }
+  </style>
+</head>
+<body>
+  <section class="dashboard">
+    <header class="head">
+      <div class="heading">
+        <span class="icon">▥</span>
+        <div><h1>تحليل بيانات الطالبات</h1><p>متوسط الدرجات ومستوى التحسن</p></div>
+      </div>
+      <div class="save">تُحفظ التعديلات تلقائيًا</div>
+    </header>
+
+    <div class="stats">
+      <article class="stat teal"><i>✿</i><div><p>متوسط درجات الطالبات</p><strong id="avg">94%</strong></div></article>
+      <article class="stat gold"><i>↗</i><div><p>نسبة التحسن</p><strong id="imp">+10%</strong></div></article>
+      <article class="stat"><i>♙</i><div><p>عدد الطالبات</p><strong>3 طالبات</strong></div></article>
+      <article class="stat"><i>☆</i><div><p>أعلى متوسط</p><strong id="high">98%</strong></div></article>
+    </div>
+
+    <div class="main">
+      <article class="panel performance">
+        <div class="panel-head">
+          <h2>تطور متوسط الدرجات</h2>
+          <div class="tabs">
+            <button class="active" data-period="أسبوعي">أسبوعي</button>
+            <button data-period="شهري">شهري</button>
+            <button data-period="فصلي">فصلي</button>
+          </div>
+        </div>
+        <div class="chart" id="chart"></div>
+      </article>
+
+      <article class="panel improvement">
+        <h2>مستوى التحسن</h2>
+        <div class="donut-wrap">
+          <div class="donut"></div>
+          <ul class="legend">
+            <li>● تحسن مرتفع <b>34%</b></li>
+            <li>● تحسن متوسط <b>33%</b></li>
+            <li>● بحاجة متابعة <b>33%</b></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="panel stars">
+        <div class="stars-head"><div><h2>نجوم مدار</h2><p>اضغطي على أي خانة لتعديلها</p></div><span>★</span></div>
+        <div id="students"></div>
+      </article>
+    </div>
+  </section>
+
+  <script>
+    const initial=[{name:'',score:98,imp:12},{name:'',score:94,imp:10},{name:'',score:91,imp:8}];
+    const periods={'أسبوعي':[48,61,75],'شهري':[42,57,73],'فصلي':[38,55,72]};
+    let students;
+    try{students=JSON.parse(localStorage.getItem('madar-stars-static'))||initial}catch(e){students=initial}
+    let period='أسبوعي';
+    const avgEl=document.getElementById('avg'),impEl=document.getElementById('imp'),highEl=document.getElementById('high');
+
+    function calc(){
+      const avg=Math.round(students.reduce((a,s)=>a+(+s.score||0),0)/3);
+      const imp=Math.round(students.reduce((a,s)=>a+(+s.imp||0),0)/3);
+      const high=Math.max(...students.map(s=>+s.score||0));
+      avgEl.textContent=avg+'%';
+      impEl.textContent='+'+imp+'%';
+      highEl.textContent=high+'%';
+      renderChart(avg);
+      localStorage.setItem('madar-stars-static',JSON.stringify(students));
+    }
+
+    function renderChart(avg){
+      const labels=period==='أسبوعي'?['الأسبوع الأول','الأسبوع الثاني','الأسبوع الثالث','الأسبوع الرابع']:period==='شهري'?['الشهر الأول','الشهر الثاني','الشهر الثالث','الشهر الرابع']:['بداية الفصل','منتصف الفصل','التقييم الثالث','نهاية الفصل'];
+      document.getElementById('chart').innerHTML=[...periods[period],avg].map((v,i)=>`<div class="bar" data-v="${v}" style="height:${v*1.65}px"><span>${labels[i]}</span></div>`).join('');
+    }
+
+    function renderStudents(){
+      document.getElementById('students').innerHTML=students.map((s,i)=>`<div class="student"><span>★</span><input data-i="${i}" data-k="name" value="${s.name}" placeholder="اسم الطالبة ${i+1}"><input aria-label="درجة الطالبة ${i+1}" type="number" min="0" max="100" data-i="${i}" data-k="score" value="${s.score}"><input aria-label="تحسن الطالبة ${i+1}" class="improve" type="number" min="0" max="100" data-i="${i}" data-k="imp" value="${s.imp}"><div class="progress"><i style="width:${s.score}%"></i></div></div>`).join('');
+      document.querySelectorAll('.student input').forEach(el=>el.oninput=e=>{
+        students[+e.target.dataset.i][e.target.dataset.k]=e.target.value;
+        if(e.target.dataset.k==='score')e.target.parentElement.querySelector('.progress i').style.width=e.target.value+'%';
+        calc();
+      });
+    }
+
+    document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+      document.querySelector('.tabs .active').classList.remove('active');
+      b.classList.add('active');
+      period=b.dataset.period;
+      calc();
+    });
+    renderStudents();
+    calc();
+  </script>
+</body>
+</html>

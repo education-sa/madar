@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="مداري التعليمي - أقسام منصة مدار التعليمية" />
+  <title>مداري التعليمي | مدار</title>
+  <link rel="stylesheet" href="stage.css?v=20260715-1815" />
+</head>
+<body>
+  <div class="page-glow glow-one" aria-hidden="true"></div>
+  <div class="page-glow glow-two" aria-hidden="true"></div>
+
+  <header class="stage-header">
+    <a class="stage-brand" href="index.html" aria-label="العودة إلى منصة مدار">
+      <span class="brand-word">مدار<i aria-hidden="true">✦</i></span>
+      <span class="brand-subtitle">منصة الرياضيات التفاعلية</span>
+    </a>
+
+    <div class="welcome-box">
+      <span id="welcomeName">أهلًا بدخولكِ يا طالبة مدار</span>
+      <strong id="stageBadge">المرحلة الابتدائية</strong>
+    </div>
+
+    <a class="home-button" href="index.html">
+      <span aria-hidden="true">⌂</span>
+      الرئيسية
+    </a>
+  </header>
+
+  <main>
+    <section class="learning-hero" aria-labelledby="pageTitle">
+      <span class="hero-kicker" id="stageKicker">مساركِ في المرحلة الابتدائية</span>
+      <h1 id="pageTitle">مداري التعليمي</h1>
+      <p>رحلتكِ التعليمية في مكان واحد: تعلّمي، تدرّبي، العبي، وتابعي تقدّمكِ بثقة.</p>
+
+      <button class="profile-button" id="profileButton" type="button">
+        <img src="student-profile-button.webp" alt="" aria-hidden="true" />
+        <span class="profile-button__label">ملفي الدراسي</span>
+      </button>
+    </section>
+
+    <section class="learning-grid" aria-label="أقسام مداري التعليمي">
+      <article class="learning-card tests-card">
+        <span class="card-number">01</span>
+        <span class="card-icon icon-tests" role="img" aria-label="أيقونة الاختبارات"></span>
+        <h2>اختبارات</h2>
+        <p>قيّمي مهاراتكِ من خلال اختبارات مخصصة وتحليل واضح للنتائج.</p>
+        <button type="button" data-section="الاختبارات">استكشفي الاختبارات</button>
+      </article>
+
+      <article class="learning-card games-card">
+        <span class="card-number">02</span>
+        <span class="card-icon icon-games" role="img" aria-label="أيقونة الألعاب التفاعلية"></span>
+        <h2>ألعاب تفاعلية</h2>
+        <p>تعلّمي من خلال تحديات ممتعة ومحفزة تجمع اللعب بالمعرفة.</p>
+        <button type="button" data-section="الألعاب التفاعلية">استكشفي الألعاب</button>
+      </article>
+
+      <article class="learning-card practice-card">
+        <span class="card-number">03</span>
+        <span class="card-icon icon-practice" role="img" aria-label="أيقونة التدريب"></span>
+        <h2>تدريب</h2>
+        <p>تمارين متدرجة ومكثفة تساعدكِ على ترسيخ المفاهيم وإتقانها.</p>
+        <button type="button" data-section="التدريبات">ابدئي التدريب</button>
+      </article>
+
+      <article class="learning-card videos-card">
+        <span class="card-number">04</span>
+        <span class="card-icon icon-videos" role="img" aria-label="أيقونة الفيديوهات"></span>
+        <h2>فيديوهات</h2>
+        <p>شاهدي دروسًا مرئية وشروحات مبسطة وواضحة في أي وقت.</p>
+        <button type="button" data-section="الفيديوهات">شاهدي الفيديوهات</button>
+      </article>
+
+      <article class="learning-card flipped-card">
+        <span class="card-number">05</span>
+        <span class="card-icon icon-flipped" role="img" aria-label="أيقونة الصف المقلوب"></span>
+        <h2>الصف المقلوب</h2>
+        <p>استعدي للدرس مسبقًا ثم شاركي وتفاعلي بثقة داخل الفصل.</p>
+        <button type="button" data-section="الصف المقلوب">اكتشفي الصف المقلوب</button>
+      </article>
+
+      <article class="learning-card more-card">
+        <span class="card-number">06</span>
+        <span class="card-icon icon-more" role="img" aria-label="أيقونة الموارد الإضافية"></span>
+        <h2>أخرى</h2>
+        <p>مواد إثرائية وملفات مساعدة وموارد تعليمية متنوعة إضافية.</p>
+        <button type="button" data-section="الموارد الإضافية">اكتشفي المزيد</button>
+      </article>
+    </section>
+  </main>
+
+  <footer class="stage-footer">
+    <a class="footer-brand" href="index.html">
+      <span>مدار<i aria-hidden="true">✦</i></span>
+      <small>منصة الرياضيات التفاعلية</small>
+    </a>
+    <p>إعداد وتصميم الموقع: <strong>أ. عبير القثامي</strong></p>
+    <span class="footer-note">تعلّم • تدرّب • العب • أتقن</span>
+  </footer>
+
+  <div class="stage-toast" id="stageToast" role="status" aria-live="polite" hidden>
+    <span aria-hidden="true">✨</span>
+    <p id="toastText"></p>
+    <button id="closeToast" type="button" aria-label="إغلاق">×</button>
+  </div>
+
+  <script src="stage.js?v=20260715-2200"></script>
+</body>
+</html>

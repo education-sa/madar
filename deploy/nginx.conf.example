@@ -1,0 +1,28 @@
+server {
+    listen 443 ssl http2;
+    server_name example.com;
+    root /var/www/madar;
+    index index.html index.php;
+
+    location ~ ^/(?:config|lib|database|scripts|deploy|storage|owner/protected)/ { return 404; }
+    location ~ ^/(?:\.env|\.git|server\.js|package(?:-lock)?\.json) { return 404; }
+
+    location /api/ {
+        try_files $uri /api/index.php?$query_string;
+    }
+    location = /teacher/ { try_files /teacher/index.php =404; }
+    location = /teacher/index.html { try_files /teacher/index.php =404; }
+    location = /owner/dashboard { try_files /owner/dashboard.php =404; }
+    location ~ ^/owner/(login\.html|dashboard\.css|dashboard\.js|login\.js)$ {
+        try_files /owner/public/$1 =404;
+    }
+    location = /student/ { try_files /student/index.php =404; }
+    location = /student/index.html { try_files /student/index.php =404; }
+    location / { try_files $uri $uri/ =404; }
+
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+    }
+}

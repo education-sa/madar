@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>لوحة المالكة | مدار</title>
+  <link rel="stylesheet" href="/owner/dashboard.css?v=3" />
+  <link rel="stylesheet" href="/assets/responsive-tables.css?v=11">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">مدار<i>✦</i> <span style="font-size:.7rem;font-weight:500;opacity:.7">لوحة المالكة</span></div>
+
+      <button class="nav-item active" data-route="home"><span class="ic">🏠</span> نظرة عامة</button>
+
+      <div class="nav-group-label">الحسابات</div>
+      <button class="nav-item" data-route="users"><span class="ic">👥</span> إدارة جميع المستخدمين</button>
+      <button class="nav-item" data-route="teachers"><span class="ic">👩‍🏫</span> حسابات المعلمات</button>
+      <button class="nav-item" data-route="students"><span class="ic">🎓</span> حسابات الطالبات</button>
+
+      <div class="nav-group-label">الإشراف</div>
+      <button class="nav-item" data-route="tests"><span class="ic">📝</span> الاختبارات والنتائج</button>
+      <button class="nav-item" data-route="preview"><span class="ic">👁️</span> معاينة صفحات المستخدمين</button>
+      <button class="nav-item" data-route="permissions"><span class="ic">🔐</span> الأدوار والصلاحيات</button>
+      <button class="nav-item" data-route="activity"><span class="ic">🕓</span> سجل العمليات</button>
+      <button class="nav-item" data-route="system"><span class="ic">🛡️</span> حالة النظام والنسخ</button>
+      <button class="nav-item" data-route="settings"><span class="ic">⚙️</span> الإعدادات</button>
+
+      <button class="nav-item" id="logoutBtn"><span class="ic">🚪</span> تسجيل الخروج</button>
+    </aside>
+
+    <div class="main-area">
+      <header class="topbar">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <button class="menu-toggle" id="menuToggle">☰</button>
+          <h2 id="pageTitle">نظرة عامة</h2>
+        </div>
+        <div class="topbar-right">
+          <div class="topbar-teacher">
+            <div class="avatar-circle" id="avatarCircle">م</div>
+            <span id="ownerNameLabel">—</span>
+          </div>
+        </div>
+      </header>
+      <main class="content" id="content"></main>
+    </div>
+  </div>
+
+  <div id="modalRoot"></div>
+  <div id="toastRoot"></div>
+
+  <script src="/owner/dashboard.js?v=4" type="module"></script>
+  <script src="/assets/responsive-tables.js?v=11"></script>
+  <script src="/assets/privacy-consent.js?v=11"></script>
+</body>
+</html>

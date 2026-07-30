@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>متابعة الأبناء | مدار</title>
+  <link rel="stylesheet" href="app.css?v=11">
+  <link rel="stylesheet" href="../shared-footer.css?v=1">
+  <link rel="stylesheet" href="../preview-banner.css?v=1">
+  <link rel="stylesheet" href="../assets/responsive-tables.css?v=11">
+</head>
+<body>
+  <header class="parent-topbar">
+    <a class="parent-brand" href="/" aria-label="الرئيسية">
+      <span class="parent-orbit" aria-hidden="true">✦</span>
+      <span><strong>مَدار</strong><small>متابعة الأسرة التعليمية</small></span>
+    </a>
+    <div class="parent-account">
+      <span>أهلًا <strong id="parentName">—</strong></span>
+      <button id="parentLogout" type="button">تسجيل الخروج</button>
+    </div>
+  </header>
+
+  <main class="parent-main">
+    <section class="parent-hero">
+      <div class="parent-hero-copy">
+        <span class="eyebrow">لوحة ولي الأمر</span>
+        <h1>كل ما يخص أبنائك في مكان واحد</h1>
+        <p>تابع الدرجات، الاختبارات، التحليل، نقاط التحفيز، الحضور، الواجبات والملفات لكل ابن مرتبط بحسابك.</p>
+      </div>
+      <div class="parent-hero-art" aria-hidden="true"><span>👨‍👩‍👧‍👦</span><i></i></div>
+    </section>
+
+    <section class="parent-summary" id="parentSummary" aria-label="ملخص الحساب"></section>
+
+    <section class="children-section">
+      <div class="section-heading">
+        <div><span>الأبناء المرتبطون</span><h2>اختاري الابنة المراد متابعتها</h2></div>
+        <small id="childrenCount">٠ أبناء</small>
+      </div>
+      <div class="children-switcher" id="childrenSwitcher"></div>
+    </section>
+
+    <section class="parent-workspace" id="parentWorkspace" hidden>
+      <header class="selected-child-head" id="selectedChildHead"></header>
+      <nav class="parent-tabs" id="parentTabs" aria-label="أقسام متابعة الابنة">
+        <button type="button" data-tab="overview" class="active"><span>🏠</span>نظرة عامة</button>
+        <button type="button" data-tab="tests"><span>📝</span>الاختبارات والدرجات</button>
+        <button type="button" data-tab="analysis"><span>📊</span>التحليل والمهارات</button>
+        <button type="button" data-tab="remedial"><span>🩺</span>الخطة العلاجية</button>
+        <button type="button" data-tab="points"><span>⭐</span>نقاط التحفيز</button>
+        <button type="button" data-tab="follow-up"><span>📅</span>الحضور والمتابعة</button>
+        <button type="button" data-tab="files"><span>📁</span>الملفات والموارد</button>
+        <button type="button" data-tab="calendar"><span>📅</span>التقويم والمواعيد</button>
+        <button type="button" data-tab="messages"><span>✉️</span>الرسائل الخاصة</button>
+        <button type="button" data-tab="help"><span>❓</span>مركز المساعدة</button>
+        <button type="button" data-tab="community"><span>💬</span>مجمع مدار</button>
+      </nav>
+      <section class="parent-content" id="parentContent" aria-live="polite"></section>
+    </section>
+
+    <section class="empty-parent" id="emptyParent" hidden>
+      <span>🔗</span><h2>لا توجد أبناء مرتبطة بالحساب بعد</h2>
+      <p>تواصلي مع معلمة الطالبة لربط حساب ولي الأمر بحساب الابنة.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer madar-shared-footer" aria-label="ذيل الصفحة">
+    <div class="site-footer-brand"><strong>مَدار</strong><span>منصة الرياضيات التفاعلية</span><small>© ٢٠٢٦ مدار. جميع الحقوق محفوظة.</small></div>
+    <div class="site-footer-contact"><h2>للتواصل</h2><div class="footer-contact-lines"><a href="mailto:contact@madar.sa">✉ بريد إلكتروني: <b dir="ltr">contact@madar.sa</b></a><a href="tel:0560441259">☎ هاتف: <b dir="ltr">٠٥٦٠٤٤١٢٥٩</b></a></div></div>
+    <div class="site-footer-credit"><p><span>إعداد وتصميم الموقع:</span><b>أ. عبير القثامي</b></p></div>
+  </footer>
+
+  <div class="parent-toast" id="parentToast" hidden></div>
+  <script src="app.js?v=11"></script>
+  <script src="../preview-banner.js?v=1"></script>
+  <script src="../assets/responsive-tables.js?v=11"></script>
+  <script src="../assets/privacy-consent.js?v=11"></script>
+</body>
+</html>

@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="مدار - منصة الرياضيات التفاعلية" />
+  <title>مدار | منصة الرياضيات التفاعلية</title>
+  <link rel="stylesheet" href="styles.css?v=20260717-0332" />
+  <link rel="stylesheet" href="shared-footer.css?v=1" />
+  <style>
+    /* لوحة الدخول الزجاجية المضيئة */
+    .site-header { overflow: visible !important; }
+
+    .login-menu-wrap {
+      position: relative;
+      z-index: 3000;
+      flex-shrink: 0;
+    }
+
+    .login-options[hidden] { display: none !important; }
+
+    .login-options {
+      --mouse-x: 50%;
+      --mouse-y: 20%;
+      position: absolute;
+      top: calc(100% + 7px);
+      right: 0;
+      width: 320px;
+      padding: 28px 20px;
+      direction: rtl;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.78);
+      border-radius: 26px;
+      background:
+        linear-gradient(155deg, rgba(213, 240, 237, 0.34), rgba(40, 70, 84, 0.56)),
+        rgba(49, 68, 86, 0.36);
+      box-shadow:
+        inset 0 0 28px rgba(255, 255, 255, 0.18),
+        0 22px 55px rgba(39, 43, 82, 0.26);
+      backdrop-filter: blur(18px) saturate(125%);
+      -webkit-backdrop-filter: blur(18px) saturate(125%);
+      animation: none;
+    }
+
+    .login-options::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at var(--mouse-x) var(--mouse-y), rgba(163, 255, 245, 0.30), transparent 30%),
+        linear-gradient(120deg, rgba(255,255,255,.15), transparent 45%);
+    }
+
+    .login-cursor-glow {
+      position: absolute;
+      z-index: 1;
+      left: var(--mouse-x);
+      top: var(--mouse-y);
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(circle, rgba(226,255,251,.48), rgba(94,236,230,.18) 38%, transparent 72%);
+      filter: blur(5px);
+      transition: opacity .18s ease;
+    }
+
+    .login-options.pointer-active .login-cursor-glow { opacity: 1; }
+
+    .login-options-title {
+      position: relative;
+      z-index: 2;
+      margin: -4px 5px 14px;
+      color: rgba(255,255,255,.92);
+      text-align: center;
+    }
+
+    .login-options-title span { display: none; }
+
+    .login-options-title strong {
+      font-size: 17px;
+      text-shadow: 0 0 12px rgba(255,255,255,.42);
+    }
+
+    .login-option {
+      --neon: 157, 255, 205;
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      min-height: 104px;
+      margin-top: 15px;
+      padding: 14px 17px;
+      display: grid;
+      grid-template-columns: 66px minmax(0, 1fr);
+      align-items: center;
+      gap: 12px;
+      direction: ltr;
+      text-align: right;
+      cursor: pointer;
+      border: 2px solid rgb(var(--neon));
+      border-radius: 16px;
+      color: #fff;
+      background:
+        linear-gradient(100deg, rgba(var(--neon), .13), rgba(var(--neon), .24)),
+        rgba(255,255,255,.035);
+      box-shadow:
+        inset 0 0 18px rgba(var(--neon), .13),
+        0 0 8px rgba(var(--neon), .58),
+        0 0 21px rgba(var(--neon), .22);
+      transition: transform .22s ease, box-shadow .22s ease, background .22s ease;
+    }
+
+    .login-option[data-role="parent"] { --neon: 241, 157, 255; }
+    .login-option[data-role="teacher"] { --neon: 255, 231, 116; }
+    .login-option[data-role="staff"] { --neon: 131, 211, 255; }
+
+    .login-option:hover,
+    .login-option:focus-visible,
+    .login-option.selected {
+      outline: none;
+      transform: translateX(-5px) scale(1.025);
+      background:
+        linear-gradient(100deg, rgba(var(--neon), .23), rgba(var(--neon), .36)),
+        rgba(255,255,255,.08);
+      box-shadow:
+        inset 0 0 25px rgba(var(--neon), .25),
+        0 0 11px rgba(var(--neon), .95),
+        0 0 32px rgba(var(--neon), .58),
+        0 0 54px rgba(var(--neon), .23);
+    }
+
+    .login-option > span:nth-child(2) {
+      direction: rtl;
+      min-width: 0;
+    }
+
+    .login-option strong { display: block; font-size: 22px; line-height: 1.25; }
+    .login-option small { display: none; }
+    .login-option > b { display: none; }
+
+    .role-icon {
+      width: 62px;
+      height: 62px;
+      display: grid;
+      place-items: center;
+      color: rgb(var(--neon));
+      filter: drop-shadow(0 0 8px rgba(var(--neon), .9));
+    }
+
+    .role-icon svg {
+      width: 50px;
+      height: 50px;
+      stroke: currentColor;
+      stroke-width: 1.7;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .login-button[aria-expanded="true"] {
+      background: linear-gradient(135deg, #3fb9ae, #228d91) !important;
+      box-shadow: 0 0 14px rgba(78, 232, 218, .65), 0 14px 30px rgba(40, 152, 149, .28) !important;
+    }
+
+    @keyframes showLoginOptions {
+      from { opacity: 0; transform: translateY(-16px) scale(.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @media (max-width: 820px) {
+      .login-menu-wrap {
+        position: absolute;
+        width: 0;
+        height: 0;
+      }
+
+      .login-options {
+        position: fixed;
+        top: 88px;
+        right: 12px;
+        left: 12px;
+        width: auto;
+        max-height: calc(100vh - 118px);
+        padding: 18px 15px;
+        overflow-y: auto;
+      }
+
+      .login-option {
+        min-height: 82px;
+        margin-top: 11px;
+      }
+
+      .login-option strong { font-size: 18px; }
+      .role-icon { width: 52px; height: 52px; }
+      .role-icon svg { width: 42px; height: 42px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-glow page-glow-one"></div>
+  <div class="page-glow page-glow-two"></div>
+
+  <header class="site-header">
+    <a href="#home" class="brand" aria-label="العودة إلى الرئيسية">
+      <span class="brand-orbit" aria-hidden="true">
+        <span class="brand-star">✦</span>
+      </span>
+      <span class="brand-copy">
+        <strong>مدار</strong>
+        <small>منصة الرياضيات التفاعلية</small>
+      </span>
+    </a>
+
+    <button class="menu-toggle" id="menuToggle" aria-label="فتح القائمة" aria-expanded="false">
+      <span class="menu-lines" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="mobile-login-text">تسجيل الدخول / إنشاء حساب</span>
+    </button>
+
+    <nav class="main-nav" id="mainNav">
+      <a class="active" href="#home">الرئيسية</a>
+      <a href="#home" data-placeholder="اختبارات">اختبارات</a>
+      <a href="#home" data-placeholder="التدريبات">التدريبات</a>
+      <a href="games/percentage.html">الألعاب</a>
+      <a href="#about">عن المنصة</a>
+    </nav>
+
+    <div class="login-menu-wrap">
+      <button
+        class="login-button"
+        id="loginButton"
+        type="button"
+        aria-expanded="false"
+        aria-controls="loginOptions"
+      >
+        <span class="user-icon" aria-hidden="true">●</span>
+        تسجيل الدخول / إنشاء حساب
+      </button>
+
+      <div class="login-options" id="loginOptions" hidden>
+        <span class="login-cursor-glow" aria-hidden="true"></span>
+        <div class="login-options-title">
+          <span>مرحبًا بك في مدار</span>
+          <strong>اختاري نوع الدخول</strong>
+        </div>
+
+        <button class="login-option" type="button" data-role="student">
+          <span class="role-icon student-icon" aria-hidden="true">
+            <svg viewBox="0 0 64 64" fill="none"><path d="m8 23 24-11 24 11-24 11L8 23Z"/><path d="M18 29v13c7 7 21 7 28 0V29M53 25v16"/><path d="M47 50c-2-5-7-8-15-8s-13 3-15 8"/></svg>
+          </span>
+          <span><strong>دخول الطالبة</strong><small>الدروس والاختبارات والنتائج</small></span>
+          <b aria-hidden="true">←</b>
+        </button>
+
+        <button class="login-option" type="button" data-role="parent">
+          <span class="role-icon parent-icon" aria-hidden="true">
+            <svg viewBox="0 0 64 64" fill="none"><circle cx="22" cy="20" r="7"/><circle cx="43" cy="21" r="6"/><circle cx="33" cy="35" r="5"/><path d="M8 49c1-11 7-16 14-16 5 0 9 2 11 6M56 49c-1-10-6-15-13-15-4 0-7 1-10 4M23 55c1-8 4-12 10-12s9 4 10 12"/></svg>
+          </span>
+          <span><strong>دخول ولي الأمر</strong><small>متابعة مستوى الأبناء والنتائج</small></span>
+          <b aria-hidden="true">←</b>
+        </button>
+
+        <button class="login-option" type="button" data-role="teacher">
+          <span class="role-icon teacher-icon" aria-hidden="true">
+            <svg viewBox="0 0 64 64" fill="none"><path d="M8 14h17c5 0 7 3 7 8v30c0-5-3-8-8-8H8V14Z"/><path d="M56 14H39c-5 0-7 3-7 8v30c0-5 3-8 8-8h16V14Z"/><path d="m43 30 10-10M43 30l-2 7 7-2 5-5"/></svg>
+          </span>
+          <span><strong>دخول المعلم</strong><small>إدارة الطالبات والاختبارات</small></span>
+          <b aria-hidden="true">←</b>
+        </button>
+
+        <button class="login-option" type="button" data-role="staff">
+          <span class="role-icon staff-icon" aria-hidden="true">
+            <svg viewBox="0 0 64 64" fill="none"><path d="M10 54V22h18v32M36 54V10h18v44M5 54h54"/><path d="M16 29h6M16 36h6M16 43h6M42 18h6M42 25h6"/><circle cx="48" cy="42" r="7"/><path d="M48 31v4M48 49v4M37 42h4M55 42h4M40 34l3 3M53 47l3 3M56 34l-3 3M43 47l-3 3"/></svg>
+          </span>
+          <span><strong>دخول الكادر الإداري</strong><small>الإدارة والإشراف ومالكة الموقع</small></span>
+          <b aria-hidden="true">←</b>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero-shell" id="home">
+      <div class="hero-card">
+
+        <img
+          class="hero-final-art"
+          src="hero-madar-final.png"
+          alt="واجهة مدار التعليمية مع الطالبة وشعار رؤية 2030 وأشكال هندسية مضيئة"
+        />
+
+        <span class="hero-math-symbol integral-symbol" aria-hidden="true">∫</span>
+        <span class="hero-math-symbol sigma-symbol" aria-hidden="true">Σ</span>
+        <span class="hero-math-symbol equation-symbol" aria-hidden="true">x²</span>
+
+        <div class="student-side">
+          <div class="student-frame">
+            <img
+              src="student-character.png"
+              alt="طالبة تحمل كتب الرياضيات"
+              class="student-image"
+            />
+          </div>
+        </div>
+
+        <div class="hero-copy">
+          <div class="vision-2030">
+            <img src="vision-2030-logo.png" alt="شعار رؤية السعودية 2030" />
+          </div>
+          <div class="madar-title-wrap">
+            <h1>مَدار</h1>
+          </div>
+          <h2>منصة الرياضيات التفاعلية</h2>
+          <p class="slogan">
+            <span>تعلّم</span><i></i>
+            <span>تدرّب</span><i></i>
+            <span>العب</span><i></i>
+            <span>أتقن</span>
+          </p>
+          <p class="hero-description">
+            تجربة تعليمية ممتعة تجمع الشرح المبسّط، والتدريبات الذكية،
+            والألعاب التفاعلية، وتحليل النتائج في مكان واحد.
+          </p>
+
+          <div class="hero-actions">
+            <a href="#home" class="primary-action" id="startLearningButton">
+              ابدئي التعلّم
+              <span>←</span>
+            </a>
+            <a class="orange-action" id="demoGameButton" href="games/percentage.html">
+              جرّبي لعبة تفاعلية
+              <span>🎮</span>
+            </a>
+          </div>
+
+          <div class="trust-row">
+            <div class="avatars" aria-label="طالبات المنصة">
+              <span>👩🏻</span><span>👧🏽</span><span>👩🏾</span><span>👧🏻</span>
+            </div>
+            <span>تجربة مصممة لتناسب كل مستوى</span>
+            <strong>★ 4.9</strong>
+          </div>
+        </div>
+
+        <div class="right-visuals">
+          <div class="future-note-uploaded" aria-label="كل معادلة خطوة نحو مستقبلك">
+            <div class="compact-future-card">
+              <span class="compact-bulb" aria-hidden="true">💡</span>
+              <div class="compact-future-copy">
+                <strong>كل معادلة</strong>
+                <strong>خطوة نحو</strong>
+                <strong>مستقبلك</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature-row" id="about">
+        <article class="feature-card">
+          <span class="feature-icon gears">⚙️</span>
+          <div>
+            <h3>تعلّم مخصص</h3>
+            <p>مسارات تتكيّف مع المستوى وتعرض الخطوة التالية المناسبة.</p>
+          </div>
+        </article>
+
+        <article class="feature-card">
+          <span class="feature-icon idea">💡</span>
+          <div>
+            <h3>تفكير ناقد</h3>
+            <p>أسئلة تنمّي التحليل وحل المشكلات بطريقة ممتعة.</p>
+          </div>
+        </article>
+
+        <article class="feature-card">
+          <span class="feature-icon cup">🏆</span>
+          <div>
+            <h3>منافسات وتحديات</h3>
+            <p>نقاط وشارات وترتيب يحفّز الطالبات على الاستمرار.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="exact-stages-section" id="stages" aria-label="المراحل الدراسية">
+      <div class="exact-stage-canvas">
+        <img
+          class="exact-stage-image"
+          src="stages-exact-reference.png"
+          alt="اختيار المرحلة الدراسية: ابتدائي ومتوسط وثانوي"
+        />
+
+        <button
+          class="stage-hotspot hotspot-secondary"
+          data-stage="المرحلة الثانوية"
+          aria-label="استكشفي المرحلة الثانوية"
+        ></button>
+
+        <button
+          class="stage-hotspot hotspot-middle"
+          data-stage="المرحلة المتوسطة"
+          aria-label="استكشفي المرحلة المتوسطة"
+        ></button>
+
+        <button
+          class="stage-hotspot hotspot-primary"
+          data-stage="المرحلة الابتدائية"
+          aria-label="استكشفي المرحلة الابتدائية"
+        ></button>
+
+        <span class="light-spark spark-a" aria-hidden="true"></span>
+        <span class="light-spark spark-b" aria-hidden="true"></span>
+        <span class="light-spark spark-c" aria-hidden="true"></span>
+      </div>
+
+      <div class="mobile-stage-list" aria-label="اختيار المرحلة الدراسية للجوال">
+        <button class="mobile-stage-card mobile-stage-primary" data-stage="المرحلة الابتدائية" aria-label="استكشفي المرحلة الابتدائية">
+          <img src="stages-exact-reference.png" alt="" aria-hidden="true" />
+        </button>
+
+        <button class="mobile-stage-card mobile-stage-middle" data-stage="المرحلة المتوسطة" aria-label="استكشفي المرحلة المتوسطة">
+          <img src="stages-exact-reference.png" alt="" aria-hidden="true" />
+        </button>
+
+        <button class="mobile-stage-card mobile-stage-secondary" data-stage="المرحلة الثانوية" aria-label="استكشفي المرحلة الثانوية">
+          <img src="stages-exact-reference.png" alt="" aria-hidden="true" />
+        </button>
+      </div>
+    </section>
+
+    <section class="analytics-embed" aria-label="تحليل بيانات الطالبات">
+      <iframe src="analytics.html" title="لوحة تحليل بيانات الطالبات" loading="lazy"></iframe>
+    </section>
+
+    <section class="inspiration-grid" aria-label="الوقت وكلمة ملهمة">
+      <article class="quote-square">
+        <img
+          class="prince-portrait"
+          src="mohammed-bin-salman.jpg"
+          alt="صاحب السمو الملكي الأمير محمد بن سلمان"
+        />
+        <div class="quote-copy">
+          <span class="quote-mark" aria-hidden="true">”</span>
+          <blockquote>
+            ثروتنا الأولى التي لا تعادلها ثروة مهما بلغت: شعب طموح، معظمه من الشباب، هو فخر بلادنا وضمان مستقبلها بعون الله.
+          </blockquote>
+          <cite>صاحب السمو الملكي الأمير محمد بن سلمان</cite>
+        </div>
+      </article>
+
+      <article class="clock-square" aria-label="ساعة مدار">
+        <iframe
+          src="neon-clock.html"
+          title="ساعة مدار المضيئة"
+          loading="lazy"
+        ></iframe>
+      </article>
+    </section>
+
+  </main>
+
+  <footer class="site-footer madar-shared-footer" aria-label="ذيل الصفحة ومعلومات التواصل">
+    <div class="site-footer-brand">
+      <strong>مَدار</strong>
+      <span>منصة الرياضيات التفاعلية</span>
+      <small>© ٢٠٢٦ مدار. جميع الحقوق محفوظة.</small>
+    </div>
+
+    <div class="site-footer-contact">
+      <h2>للتواصل</h2>
+      <div class="footer-contact-lines">
+        <a href="mailto:contact@madar.sa"><span aria-hidden="true">✉</span> بريد إلكتروني: <b dir="ltr">contact@madar.sa</b></a>
+        <a href="tel:0560441259"><span aria-hidden="true">☎</span> هاتف: <b dir="ltr">٠٥٦٠٤٤١٢٥٩</b></a>
+      </div>
+    </div>
+
+    <div class="site-footer-credit">
+      <p><span>إعداد وتصميم الموقع:</span><b>أ. عبير القثامي</b></p>
+    </div>
+  </footer>
+
+  <div class="modal" id="modal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <button class="modal-close" data-close-modal aria-label="إغلاق">×</button>
+      <span class="modal-icon" id="modalIcon">✨</span>
+      <h2 id="modalTitle">مرحبًا بك في مدار</h2>
+      <p id="modalText">هذه نافذة تجريبية ويمكن ربطها لاحقًا بصفحة حقيقية.</p>
+      <button class="primary-action modal-action" data-close-modal>حسنًا</button>
+    </div>
+  </div>
+
+  <script src="script.js?v=20260716-game1"></script>
+  <script>
+    (() => {
+      const loginButton = document.getElementById("loginButton");
+      const loginOptions = document.getElementById("loginOptions");
+      const loginMenuWrap = document.querySelector(".login-menu-wrap");
+      const mobileLoginButton = document.getElementById("menuToggle");
+      const mobileQuery = window.matchMedia("(max-width: 820px)");
+      let closeTimer;
+
+      if (!loginButton || !loginOptions) return;
+
+      function closeLoginOptions() {
+        loginOptions.hidden = true;
+        loginButton.setAttribute("aria-expanded", "false");
+        if (mobileQuery.matches) mobileLoginButton?.setAttribute("aria-expanded", "false");
+      }
+
+      function openLoginOptions() {
+        clearTimeout(closeTimer);
+        loginOptions.hidden = false;
+        loginButton.setAttribute("aria-expanded", "true");
+        if (mobileQuery.matches) mobileLoginButton?.setAttribute("aria-expanded", "true");
+      }
+
+      function updateMobileLoginLabel() {
+        mobileLoginButton?.setAttribute("aria-label", mobileQuery.matches ? "تسجيل الدخول أو إنشاء حساب" : "فتح القائمة");
+      }
+
+      updateMobileLoginLabel();
+      mobileQuery.addEventListener?.("change", updateMobileLoginLabel);
+
+      mobileLoginButton?.addEventListener(
+        "click",
+        (event) => {
+          if (!mobileQuery.matches) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (loginOptions.hidden) openLoginOptions();
+          else closeLoginOptions();
+        },
+        true
+      );
+
+      loginButton.addEventListener("pointerenter", () => {
+        if (!mobileQuery.matches) openLoginOptions();
+      });
+
+      loginMenuWrap?.addEventListener("mouseenter", openLoginOptions);
+      loginMenuWrap?.addEventListener("mouseleave", () => {
+        clearTimeout(closeTimer);
+        closeTimer = setTimeout(closeLoginOptions, 220);
+      });
+
+      loginButton.addEventListener(
+        "click",
+        (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+
+          const shouldOpen = loginOptions.hidden;
+          if (shouldOpen) openLoginOptions();
+          else closeLoginOptions();
+        },
+        true
+      );
+
+      loginOptions.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+
+      loginOptions.addEventListener("pointerenter", () => {
+        loginOptions.classList.add("pointer-active");
+      });
+
+      loginOptions.addEventListener("pointermove", (event) => {
+        const bounds = loginOptions.getBoundingClientRect();
+        loginOptions.style.setProperty("--mouse-x", `${event.clientX - bounds.left}px`);
+        loginOptions.style.setProperty("--mouse-y", `${event.clientY - bounds.top}px`);
+      });
+
+      loginOptions.addEventListener("pointerleave", () => {
+        loginOptions.classList.remove("pointer-active");
+      });
+
+      document.addEventListener("click", closeLoginOptions);
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeLoginOptions();
+          loginButton.focus();
+        }
+      });
+
+      document.querySelectorAll(".login-option").forEach((option) => {
+        option.addEventListener("click", () => {
+          document.querySelectorAll(".login-option").forEach((item) => {
+            item.classList.remove("selected");
+            item.setAttribute("aria-pressed", "false");
+          });
+          option.classList.add("selected");
+          option.setAttribute("aria-pressed", "true");
+          const role = option.dataset.role || "student";
+          localStorage.setItem("madar-login-role", role);
+          window.location.href = `login.html?role=${encodeURIComponent(role)}`;
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

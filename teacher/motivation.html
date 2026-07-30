@@ -1,0 +1,1825 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🏆 نظام نقاط التحفيز</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f0f8;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(128, 0, 128, 0.1);
+            padding: 30px;
+            border: 2px solid #e8d5f5;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .page-header h1 {
+            color: #7b1fa2;
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .bulk-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+
+        .bulk-btn {
+            padding: 8px 18px;
+            border: none;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .bulk-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.15);
+        }
+
+        .bulk-btn.add { background: #2e7d32; color: white; }
+        .bulk-btn.add:hover { background: #1b5e20; }
+
+        .bulk-btn.deduct { background: #c62828; color: white; }
+        .bulk-btn.deduct:hover { background: #b71c1c; }
+
+        .search-filters {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin-bottom: 25px;
+            padding: 20px;
+            background: #f8f4fc;
+            border-radius: 15px;
+            align-items: center;
+            border: 1px solid #e8d5f5;
+        }
+
+        .search-filters select,
+        .search-filters input {
+            padding: 10px 15px;
+            border: 2px solid #dcc8e8;
+            border-radius: 10px;
+            font-size: 14px;
+            background: white;
+            min-width: 150px;
+            transition: border-color 0.3s;
+        }
+
+        .search-filters select:focus,
+        .search-filters input:focus {
+            border-color: #7b1fa2;
+            outline: none;
+        }
+
+        .search-filters .search-btn {
+            padding: 10px 30px;
+            background: #7b1fa2;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .search-filters .search-btn:hover {
+            background: #6a1b9a;
+        }
+
+        .search-filters .clear-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            transition: all 0.3s;
+            padding: 5px 10px;
+            border-radius: 10px;
+            color: #7b1fa2;
+        }
+
+        .search-filters .clear-btn:hover {
+            transform: scale(1.2);
+            background: #f3ebf8;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+            border-radius: 15px;
+            border: 2px solid #e8d5f5;
+            background: #faf7fc;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 1200px;
+        }
+
+        thead {
+            background: #7b1fa2;
+            color: white;
+        }
+
+        thead th {
+            padding: 15px 10px;
+            text-align: center;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+
+        thead th .icon-label {
+            font-size: 10px;
+            display: block;
+            color: rgba(255,255,255,0.8);
+            margin-top: 2px;
+        }
+
+        tbody td {
+            padding: 10px 8px;
+            text-align: center;
+            border-bottom: 1px solid #e8d5f5;
+            font-size: 13px;
+            background: white;
+        }
+
+        tbody tr:nth-child(even) td {
+            background: #faf7fc;
+        }
+
+        tbody tr:hover td {
+            background: #f3ebf8;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .quick-point-btn {
+            background: none;
+            border: none;
+            font-size: 28px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            padding: 5px 10px;
+            border-radius: 10px;
+            width: 50px;
+            height: 50px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .quick-point-btn:hover {
+            transform: scale(1.4);
+            background: #e8f5e9;
+        }
+
+        .quick-point-btn:active {
+            transform: scale(0.8);
+        }
+
+        .action-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.15);
+        }
+
+        .action-btn:active {
+            transform: scale(0.95);
+        }
+
+        .action-btn.add {
+            background: #1565c0;
+            color: white;
+        }
+        .action-btn.add:hover {
+            background: #0d47a1;
+        }
+
+        .action-btn.deduct {
+            background: #c62828;
+            color: white;
+        }
+        .action-btn.deduct:hover {
+            background: #b71c1c;
+        }
+
+        .total-points {
+            font-weight: bold;
+            font-size: 16px;
+            color: #7b1fa2;
+        }
+
+        .total-points.high {
+            color: #2e7d32;
+        }
+        .total-points.medium {
+            color: #e65100;
+        }
+        .total-points.low {
+            color: #c62828;
+        }
+
+        .points-label {
+            font-size: 11px;
+            color: #7b1fa2;
+            display: block;
+            font-weight: normal;
+        }
+
+        /* ===== مودال الإضافة للطالبة ===== */
+        .modal-add {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.3s;
+        }
+
+        .modal-add.active {
+            display: flex;
+        }
+
+        .modal-add .modal-content {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 20px;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(21, 101, 192, 0.3);
+            animation: slideUp 0.3s ease;
+            border: 3px solid #1565c0;
+        }
+
+        .modal-add .modal-content h3 {
+            color: #1565c0;
+            margin-bottom: 10px;
+            font-size: 18px;
+            text-align: center;
+        }
+
+        .modal-add .modal-content .student-name {
+            text-align: center;
+            color: #666;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .modal-add .modal-content .hint-text {
+            text-align: center;
+            color: #999;
+            font-size: 12px;
+            margin-bottom: 12px;
+            background: #f5f5f5;
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .modal-add .icon-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .modal-add .icon-grid button {
+            padding: 10px 5px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 22px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 3px;
+        }
+
+        .modal-add .icon-grid button span {
+            font-size: 10px;
+            color: #666;
+        }
+
+        .modal-add .icon-grid button:hover {
+            border-color: #1565c0;
+            background: #e3f2fd;
+            transform: scale(1.05);
+        }
+
+        .modal-add .icon-grid button.selected {
+            border-color: #1565c0;
+            background: #1565c0;
+            color: white;
+        }
+
+        .modal-add .icon-grid button.selected span {
+            color: white;
+        }
+
+        .modal-add .skills-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .modal-add .skills-grid button {
+            padding: 8px 4px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 13px;
+            font-weight: bold;
+        }
+
+        .modal-add .skills-grid button:hover {
+            border-color: #1565c0;
+            background: #e3f2fd;
+            transform: scale(1.05);
+        }
+
+        .modal-add .skills-grid button.selected {
+            border-color: #1565c0;
+            background: #1565c0;
+            color: white;
+        }
+
+        .modal-add .custom-add-section {
+            border-top: 2px dashed #e0e0e0;
+            margin: 10px 0;
+            padding-top: 10px;
+        }
+
+        .modal-add .custom-add-section .custom-title {
+            text-align: center;
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+
+        .modal-add .custom-add-section .custom-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .modal-add .custom-add-section .custom-row input[type="number"] {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            width: 80px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .modal-add .custom-add-section .custom-row input[type="number"]:focus {
+            border-color: #1565c0;
+            outline: none;
+        }
+
+        .modal-add .custom-add-section .custom-row input[type="text"] {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            flex: 1;
+            font-size: 13px;
+        }
+
+        .modal-add .custom-add-section .custom-row input[type="text"]:focus {
+            border-color: #1565c0;
+            outline: none;
+        }
+
+        .modal-add .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 12px;
+        }
+
+        .modal-add .modal-actions .add-btn {
+            background: #1565c0;
+            color: white;
+            padding: 8px 30px;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+        .modal-add .modal-actions .add-btn:hover {
+            background: #0d47a1;
+            transform: scale(1.05);
+        }
+
+        .modal-add .modal-actions .cancel-btn {
+            background: #e0e0e0;
+            color: #333;
+            padding: 8px 25px;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+        .modal-add .modal-actions .cancel-btn:hover {
+            background: #bdbdbd;
+        }
+
+        /* ===== مودال الخسارة للطالبة ===== */
+        .modal-deduct {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.3s;
+        }
+
+        .modal-deduct.active {
+            display: flex;
+        }
+
+        .modal-deduct .modal-content {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 20px;
+            max-width: 420px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(198, 40, 40, 0.3);
+            animation: slideUp 0.3s ease;
+            border: 3px solid #c62828;
+        }
+
+        .modal-deduct .modal-content h3 {
+            color: #c62828;
+            margin-bottom: 10px;
+            font-size: 18px;
+            text-align: center;
+        }
+
+        .modal-deduct .modal-content .student-name {
+            text-align: center;
+            color: #666;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .modal-deduct .modal-content .deduct-hint {
+            text-align: center;
+            color: #999;
+            font-size: 12px;
+            margin-bottom: 12px;
+            background: #f5f5f5;
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .modal-deduct .quick-deduct-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .modal-deduct .quick-deduct-grid button {
+            padding: 10px 5px;
+            border: 2px solid #c62828;
+            border-radius: 10px;
+            background: #fff5f5;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+            font-weight: bold;
+            color: #c62828;
+        }
+
+        .modal-deduct .quick-deduct-grid button:hover {
+            background: #c62828;
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .modal-deduct .quick-deduct-grid button:active {
+            transform: scale(0.95);
+        }
+
+        .modal-deduct .icon-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .modal-deduct .icon-grid button {
+            padding: 10px 5px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 3px;
+        }
+
+        .modal-deduct .icon-grid button span {
+            font-size: 10px;
+            color: #666;
+        }
+
+        .modal-deduct .icon-grid button:hover {
+            border-color: #c62828;
+            background: #ffebee;
+            transform: scale(1.05);
+        }
+
+        .modal-deduct .icon-grid button:active {
+            transform: scale(0.95);
+        }
+
+        .modal-deduct .custom-deduct {
+            border-top: 2px dashed #e0e0e0;
+            margin: 10px 0;
+            padding-top: 10px;
+        }
+
+        .modal-deduct .custom-deduct .custom-title {
+            text-align: center;
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+
+        .modal-deduct .custom-deduct .custom-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .modal-deduct .custom-deduct .custom-row input[type="number"] {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            width: 80px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .modal-deduct .custom-deduct .custom-row input[type="number"]:focus {
+            border-color: #c62828;
+            outline: none;
+        }
+
+        .modal-deduct .custom-deduct .custom-row input[type="text"] {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            flex: 1;
+            font-size: 13px;
+        }
+
+        .modal-deduct .custom-deduct .custom-row input[type="text"]:focus {
+            border-color: #c62828;
+            outline: none;
+        }
+
+        .modal-deduct .custom-deduct .deduct-custom-btn {
+            width: 100%;
+            padding: 10px;
+            background: #c62828;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .modal-deduct .custom-deduct .deduct-custom-btn:hover {
+            background: #b71c1c;
+            transform: scale(1.02);
+        }
+
+        .modal-deduct .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 12px;
+        }
+
+        .modal-deduct .modal-actions .cancel-btn {
+            background: #e0e0e0;
+            color: #333;
+            padding: 8px 25px;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+        .modal-deduct .modal-actions .cancel-btn:hover {
+            background: #bdbdbd;
+        }
+
+        /* ===== مودال الإضافة الجماعية ===== */
+        .modal-bulk-add {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.3s;
+        }
+
+        .modal-bulk-add.active {
+            display: flex;
+        }
+
+        .modal-bulk-add .modal-content {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 20px;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(46, 125, 50, 0.3);
+            animation: slideUp 0.3s ease;
+            border: 3px solid #2e7d32;
+        }
+
+        .modal-bulk-add .modal-content h3 {
+            color: #2e7d32;
+            margin-bottom: 10px;
+            font-size: 18px;
+            text-align: center;
+        }
+
+        .modal-bulk-add .modal-content .info-text {
+            text-align: center;
+            color: #666;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+
+        .modal-bulk-add .bulk-reason-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .modal-bulk-add .bulk-reason-grid button {
+            padding: 10px 5px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .modal-bulk-add .bulk-reason-grid button:hover {
+            border-color: #2e7d32;
+            background: #e8f5e9;
+        }
+
+        .modal-bulk-add .bulk-reason-grid button:active {
+            transform: scale(0.95);
+        }
+
+        .modal-bulk-add .bulk-custom-section {
+            border-top: 2px dashed #e0e0e0;
+            margin: 10px 0;
+            padding-top: 10px;
+        }
+
+        .modal-bulk-add .bulk-custom-section .custom-title {
+            text-align: center;
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+
+        .modal-bulk-add .bulk-custom-section .custom-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .modal-bulk-add .bulk-custom-section .custom-row input[type="number"] {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            width: 80px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .modal-bulk-add .bulk-custom-section .custom-row input[type="number"]:focus {
+            border-color: #2e7d32;
+            outline: none;
+        }
+
+        .modal-bulk-add .bulk-custom-section .custom-row input[type="text"] {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            flex: 1;
+            font-size: 13px;
+        }
+
+        .modal-bulk-add .bulk-custom-section .custom-row input[type="text"]:focus {
+            border-color: #2e7d32;
+            outline: none;
+        }
+
+        .modal-bulk-add .bulk-custom-section .bulk-custom-add-btn {
+            width: 100%;
+            padding: 10px;
+            background: #2e7d32;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .modal-bulk-add .bulk-custom-section .bulk-custom-add-btn:hover {
+            background: #1b5e20;
+            transform: scale(1.02);
+        }
+
+        .modal-bulk-add .modal-actions .cancel-btn {
+            background: #e0e0e0;
+            color: #333;
+            padding: 8px 25px;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+        .modal-bulk-add .modal-actions .cancel-btn:hover {
+            background: #bdbdbd;
+        }
+
+        /* ===== مودال الخصم الجماعي ===== */
+        .modal-bulk-deduct {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.3s;
+        }
+
+        .modal-bulk-deduct.active {
+            display: flex;
+        }
+
+        .modal-bulk-deduct .modal-content {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 20px;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(198, 40, 40, 0.3);
+            animation: slideUp 0.3s ease;
+            border: 3px solid #c62828;
+        }
+
+        .modal-bulk-deduct .modal-content h3 {
+            color: #c62828;
+            margin-bottom: 10px;
+            font-size: 18px;
+            text-align: center;
+        }
+
+        .modal-bulk-deduct .modal-content .info-text {
+            text-align: center;
+            color: #666;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+
+        .modal-bulk-deduct .bulk-deduct-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .modal-bulk-deduct .bulk-deduct-grid button {
+            padding: 10px 5px;
+            border: 2px solid #c62828;
+            border-radius: 10px;
+            background: #fff5f5;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+            font-weight: bold;
+            color: #c62828;
+        }
+
+        .modal-bulk-deduct .bulk-deduct-grid button:hover {
+            background: #c62828;
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .modal-bulk-deduct .bulk-deduct-grid button:active {
+            transform: scale(0.95);
+        }
+
+        .modal-bulk-deduct .bulk-custom-section {
+            border-top: 2px dashed #e0e0e0;
+            margin: 10px 0;
+            padding-top: 10px;
+        }
+
+        .modal-bulk-deduct .bulk-custom-section .custom-title {
+            text-align: center;
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+
+        .modal-bulk-deduct .bulk-custom-section .custom-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .modal-bulk-deduct .bulk-custom-section .custom-row input[type="number"] {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            width: 80px;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .modal-bulk-deduct .bulk-custom-section .custom-row input[type="number"]:focus {
+            border-color: #c62828;
+            outline: none;
+        }
+
+        .modal-bulk-deduct .bulk-custom-section .custom-row input[type="text"] {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            flex: 1;
+            font-size: 13px;
+        }
+
+        .modal-bulk-deduct .bulk-custom-section .custom-row input[type="text"]:focus {
+            border-color: #c62828;
+            outline: none;
+        }
+
+        .modal-bulk-deduct .bulk-custom-section .bulk-custom-deduct-btn {
+            width: 100%;
+            padding: 10px;
+            background: #c62828;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .modal-bulk-deduct .bulk-custom-section .bulk-custom-deduct-btn:hover {
+            background: #b71c1c;
+            transform: scale(1.02);
+        }
+
+        .modal-bulk-deduct .modal-actions .cancel-btn {
+            background: #e0e0e0;
+            color: #333;
+            padding: 8px 25px;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+        .modal-bulk-deduct .modal-actions .cancel-btn:hover {
+            background: #bdbdbd;
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 15px 30px;
+            border-radius: 12px;
+            color: white;
+            font-weight: bold;
+            z-index: 2000;
+            animation: slideDown 0.5s ease;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+        }
+
+        .toast.success { background: #2e7d32; }
+        .toast.error { background: #c62828; }
+        .toast.warning { background: #e65100; }
+        .toast.blue { background: #1565c0; }
+        .toast.purple { background: #7b1fa2; }
+
+        .btn {
+            padding: 10px 25px;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 2px solid #7b1fa2;
+            color: #7b1fa2;
+        }
+        .btn-outline:hover {
+            background: #7b1fa2;
+            color: white;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideDown {
+            from { transform: translateX(-50%) translateY(-100px); opacity: 0; }
+            to { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+
+        @media print {
+            .bulk-actions, .search-filters, .page-header .btn {
+                display: none !important;
+            }
+            .container {
+                box-shadow: none !important;
+                padding: 10px !important;
+                border: none !important;
+            }
+            .action-btn {
+                padding: 4px 10px !important;
+                font-size: 11px !important;
+            }
+            thead {
+                background: #7b1fa2 !important;
+                color: white !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            tbody td {
+                background: white !important;
+            }
+            tbody tr:nth-child(even) td {
+                background: #faf7fc !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+        }
+    
+
+        /* ===== هوية مدار: تغيير الألوان والخط فقط ===== */
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap');
+        body { font-family: 'Tajawal', sans-serif; background: #f7f4fc; color: #241b3c; }
+        button, input, select { font-family: 'Tajawal', sans-serif; }
+        .container { max-width: 1500px; border-color: #dfd4ef; box-shadow: 0 18px 48px rgba(64,32,118,.10); }
+        .page-header h1, .total-points, .points-label { color: #47218c; }
+        .btn-outline { border-color: #6137c8; color: #47218c; }
+        .btn-outline:hover, .search-filters .search-btn { background: #47218c; color: #fff; }
+        .search-filters { background: #faf8fe; border-color: #dfd4ef; }
+        .search-filters select, .search-filters input { border-color: #d8cbea; }
+        .search-filters select:focus, .search-filters input:focus { border-color: #7848e8; }
+        .table-wrapper { border-color: #dfd4ef; background: #fff; }
+        thead { background: linear-gradient(135deg,#25104f,#6137c8); }
+        tbody td { border-bottom-color: #eee8f6; }
+        tbody tr:nth-child(even) td { background: #fcfaff; }
+        tbody tr:hover td { background: #f5f0ff; }
+        .action-btn.add { background: #6137c8; }
+        .action-btn.add:hover { background: #47218c; }
+        .bulk-btn.add { background: #1fae66; }
+        .bulk-btn.add:hover { background: #158a52; }
+        .modal-add .modal-content { border-color: #6137c8; box-shadow: 0 20px 60px rgba(71,33,140,.25); }
+        .modal-add .modal-content h3 { color: #47218c; }
+        .modal-add .icon-grid button:hover, .modal-add .skills-grid button:hover { border-color: #7848e8; background: #f5f0ff; }
+        .modal-add .icon-grid button.selected, .modal-add .skills-grid button.selected { border-color: #6137c8; background: #6137c8; }
+        .modal-add .modal-actions .add-btn { background: #6137c8; }
+        .modal-add .modal-actions .add-btn:hover { background: #47218c; }
+        .modal-bulk-add .modal-content { border-color: #1fae66; }
+        .modal-bulk-add .modal-content h3 { color: #158a52; }
+        .modal-bulk-add .bulk-reason-grid button:hover { border-color: #1fae66; background: #e9f9f1; }
+        .modal-bulk-add .bulk-custom-section .bulk-custom-add-btn { background: #1fae66; }
+        .modal-bulk-add .bulk-custom-section .bulk-custom-add-btn:hover { background: #158a52; }
+        .toast.purple { background: #6137c8; }
+        .toast.blue { background: #47218c; }
+        .project-status { margin-inline-start: auto; padding: 8px 14px; border-radius: 999px; color: #47218c; background: #f1ebff; font-size: 13px; font-weight: 800; }
+        .loading-state { padding: 55px 20px; text-align: center; color: #766e88; font-size: 17px; }
+        button:disabled { opacity: .55; cursor: wait; transform: none !important; }
+        .header-tools { display: flex; min-width: 360px; flex-direction: column; align-items: center; gap: 14px; }
+        .header-buttons { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: nowrap; }
+        .top-student-orb { width: 148px; height: 148px; display: grid; place-content: center; gap: 3px; padding: 15px; border: 5px solid #fff; border-radius: 50%; color: #fff; background: radial-gradient(circle at 34% 28%,#8b63e8,#48208e 58%,#25104f); box-shadow: 0 14px 30px rgba(60,28,112,.24),0 0 0 3px #ded2f0; text-align: center; }
+        .top-student-orb span { font-size: 12px; font-weight: 800; opacity: .84; }
+        .top-student-orb strong { max-width: 112px; overflow: hidden; font-size: 15px; font-weight: 900; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+        .top-student-orb small { font-size: 12px; font-weight: 800; color: #ffe697; }
+        .table-wrapper { overflow-x: hidden; }
+        table { min-width: 0; table-layout: fixed; }
+        thead th { padding: 11px 4px; font-size: 11.5px; }
+        tbody td { padding: 8px 4px; font-size: 11.5px; overflow-wrap: anywhere; }
+        thead th:nth-child(1),tbody td:nth-child(1){width:18%}
+        thead th:nth-child(2),tbody td:nth-child(2){width:15%}
+        thead th:nth-child(3),tbody td:nth-child(3){width:8%}
+        thead th:nth-child(4),tbody td:nth-child(4){width:10%}
+        thead th:nth-child(5),tbody td:nth-child(5){width:8%}
+        thead th:nth-child(6),tbody td:nth-child(6){width:7%}
+        thead th:nth-child(7),tbody td:nth-child(7){width:11%}
+        thead th:nth-child(8),tbody td:nth-child(8){width:11%}
+        thead th:nth-child(9),tbody td:nth-child(9){width:8%}
+        tbody td:first-child { word-break: break-all; }
+        .quick-point-btn { width: 38px; height: 38px; padding: 3px; font-size: 22px; }
+        .action-btn { justify-content: center; width: 100%; padding: 7px 3px; font-size: 11px; gap: 3px; }
+        .points-label { font-size: 9px; }
+        .search-filters { gap: 9px; padding: 14px; }
+        .search-filters select,.search-filters input { min-width: 125px; padding: 9px 10px; }
+        .term-switch { display: inline-flex; overflow: hidden; min-height: 40px; border: 2px solid #d8cbea; border-radius: 11px; background: #fff; }
+        .term-switch button { min-width: 92px; padding: 8px 11px; border: 0; color: #5f5277; background: transparent; font-size: 13px; font-weight: 800; cursor: default; }
+        .term-switch button[aria-disabled="true"] { opacity: .72; }
+        .term-switch button.active[aria-disabled="true"] { opacity: 1; }
+        .term-switch button + button { border-inline-start: 1px solid #e5dcf0; }
+        .term-switch button.active { color: #fff; background: linear-gradient(135deg,#47218c,#7848e8); }
+        @media (max-width: 720px) {
+            body { padding: 10px; }
+            .container { padding: 18px 10px; border-radius: 16px; }
+            .page-header { align-items: flex-start; }
+            .header-tools { width: 100%; min-width: 0; }
+            .header-buttons { width: 100%; gap: 5px; }
+            .page-header .btn { flex: 1; justify-content: center; padding: 9px 5px; font-size: 11px; }
+            .top-student-orb { width: 128px; height: 128px; }
+            .search-filters { padding: 10px; gap: 7px; }
+            .search-filters select, .search-filters input { min-width: calc(50% - 4px); flex: 1; }
+            .search-filters input { min-width: 100%; }
+            .term-switch { width: 100%; }
+            .term-switch button { flex: 1; min-width: 0; }
+            thead th,tbody td { padding-inline: 2px; font-size: 9.5px; }
+            .action-btn { font-size: 0; }
+            .action-btn::first-letter { font-size: 15px; }
+            .quick-point-btn { width: 30px; height: 30px; font-size: 18px; }
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Header -->
+    <div class="page-header">
+        <h1>🏆 نظام نقاط التحفيز</h1>
+        <div class="header-tools">
+            <div class="header-buttons">
+                <button class="btn btn-outline" id="printPointsBtn" type="button">🖨️ طباعة</button>
+                <button class="btn btn-outline" id="exportPointsBtn" type="button">📊 تصدير</button>
+                <button class="btn btn-outline" id="importPointsBtn" type="button">📥 استيراد</button>
+                <input id="pointsImportInput" type="file" accept=".csv,.txt" hidden>
+            </div>
+            <div class="top-student-orb" id="topStudentOrb" aria-live="polite">
+                <span>أعلى نقاط</span>
+                <strong>—</strong>
+                <small>لا توجد بيانات</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- أزرار الإضافة الجماعية (بدون النص المزعج) -->
+    <div class="bulk-actions">
+        <button class="bulk-btn add">➕ إضافة للجميع</button>
+        <button class="bulk-btn deduct">➖ خصم للجميع</button>
+    </div>
+
+    <!-- أدوات البحث والتصفية -->
+    <div class="search-filters">
+        <select id="filter-stage" aria-label="المرحلة">
+            <option value="all">جميع المراحل</option>
+            <option value="ابتدائي">ابتدائي</option>
+            <option value="متوسط">متوسط</option>
+            <option value="ثانوي">ثانوي</option>
+        </select>
+
+        <select id="filter-class" aria-label="الصف">
+            <option value="all">جميع الصفوف</option>
+        </select>
+
+        <select id="filter-semester" aria-label="الفصل">
+            <option value="all">جميع الفصول</option>
+            <option value="1">الفصل ١</option>
+            <option value="2">الفصل ٢</option>
+            <option value="3">الفصل ٣</option>
+            <option value="4">الفصل ٤</option>
+        </select>
+
+        <div class="term-switch" id="filter-term" role="group" aria-label="الترم المحفوظ في الإعدادات" title="يتم تحديد الترم من الإعدادات فقط">
+            <button type="button" data-term="1" aria-disabled="true" tabindex="-1">الترم الأول</button>
+            <button type="button" data-term="2" aria-disabled="true" tabindex="-1">الترم الثاني</button>
+        </div>
+
+        <input type="text" id="search-input" placeholder="🔍 بحث باسم الطالبة...">
+
+        <button class="search-btn" type="button">🔍 بحث</button>
+        <button class="clear-btn" type="button" title="إلغاء التصفية">🔄</button>
+    </div>
+
+    <!-- الجدول -->
+    <div class="table-wrapper">
+        <table id="points-table">
+            <thead>
+                <tr>
+                    <th>الإيميل</th>
+                    <th>اسم الطالبة</th>
+                    <th>المرحلة</th>
+                    <th>الصف</th>
+                    <th>الفصل</th>
+                    <th>
+                        ⭐
+                        <span class="icon-label">نقطة سريعة</span>
+                    </th>
+                    <th>
+                        ➕
+                        <span class="icon-label">إضافة نقطة</span>
+                    </th>
+                    <th>
+                        ➖
+                        <span class="icon-label">خسارة نقاط</span>
+                    </th>
+                    <th>
+                        🏆
+                        <span class="icon-label">نقاط مدار</span>
+                    </th>
+                </tr>
+            </thead>
+            <tbody id="table-body">
+                <!-- سيتم ملؤها بواسطة JavaScript -->
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ===== مودال الإضافة للطالبة ===== -->
+<div class="modal-add" id="modal-add">
+    <div class="modal-content">
+        <h3>➕ إضافة نقاط</h3>
+        <div class="student-name" id="add-student-name">👩‍🎓 سارة أحمد (31 نقطة مدار)</div>
+        
+        <div class="hint-text" id="add-hint">👇 اختر عدد النقاط أو المهارة أو كليهما معاً</div>
+        
+        <div class="icon-grid">
+            <button id="add-point-1">
+                ⭐
+                <span>نقطة</span>
+            </button>
+            <button id="add-point-2">
+                ⭐⭐
+                <span>نقطتان</span>
+            </button>
+            <button id="add-point-5">
+                🏅
+                <span>خمس نقاط</span>
+            </button>
+            <button id="add-point-10">
+                👑
+                <span>عشر نقاط</span>
+            </button>
+        </div>
+
+        <div class="skills-grid">
+            <button id="add-skill-حضور">✅ حضور</button>
+            <button id="add-skill-مشاركة">🤝 مشاركة</button>
+            <button id="add-skill-واجب">📚 واجب</button>
+            <button id="add-skill-مهام">📋 مهام</button>
+            <button id="add-skill-تساعد_معلمتها">👩‍🏫 تساعد معلمتها</button>
+            <button id="add-skill-متعاونة">🤝 متعاونة</button>
+            <button id="add-skill-هادئة">🤫 هادئة</button>
+            <button id="add-skill-متميزة">⭐ متميزة</button>
+        </div>
+
+        <div class="custom-add-section">
+            <div class="custom-title">✏️ سبب آخر</div>
+            <div class="custom-row">
+                <input type="number" id="add-custom-points" placeholder="نقاط" min="1" max="20" value="1">
+                <input type="text" id="add-custom-reason" placeholder="سبب الإضافة...">
+            </div>
+        </div>
+
+        <div class="modal-actions">
+            <button class="add-btn">➕ إضافة</button>
+            <button class="cancel-btn">❌ إلغاء</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== مودال الخسارة للطالبة ===== -->
+<div class="modal-deduct" id="modal-deduct">
+    <div class="modal-content">
+        <h3>➖ خسارة نقاط</h3>
+        <div class="student-name" id="deduct-student-name">👩‍🎓 سارة أحمد (19 نقطة مدار)</div>
+        
+        <div class="deduct-hint">👇 اختر سبب الخسارة للخصم الفوري</div>
+
+        <div class="quick-deduct-grid">
+            <button>✅ حضور</button>
+            <button>🤝 مشاركة</button>
+            <button>📚 واجب</button>
+            <button>📋 مهام</button>
+        </div>
+
+        <div class="icon-grid">
+            <button>😤 <span>مشاغب</span></button>
+            <button>🗣️ <span>يتحدث بالحصة</span></button>
+            <button>⏰ <span>يتأخر عن الحصة</span></button>
+            <button>🍔 <span>يأكل بالحصة</span></button>
+            <button>😴 <span>ينام</span></button>
+            <button>📕 <span>لم يخرج الكتاب</span></button>
+            <button>😒 <span>لا مبالاة</span></button>
+            <button>🤦 <span>تصرف غير لائق</span></button>
+        </div>
+
+        <div class="custom-deduct">
+            <div class="custom-title">✏️ خسارة مخصصة</div>
+            <div class="custom-row">
+                <input type="number" id="custom-deduct-points" placeholder="نقاط" min="1" max="20" value="1">
+                <input type="text" id="custom-deduct-reason" placeholder="سبب الخسارة...">
+            </div>
+            <button class="deduct-custom-btn">➖ خصم</button>
+        </div>
+
+        <div class="modal-actions">
+            <button class="cancel-btn">❌ إلغاء</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== مودال الإضافة الجماعية ===== -->
+<div class="modal-bulk-add" id="modal-bulk-add">
+    <div class="modal-content">
+        <h3>➕ إضافة للجميع</h3>
+        <div class="info-text">📌 سيتم إضافة نقطة واحدة لجميع الطالبات</div>
+        
+        <div class="bulk-reason-grid">
+            <button>✅ حضور</button>
+            <button>🤝 مشاركة</button>
+            <button>📚 واجب</button>
+            <button>📋 مهام</button>
+            <button>⭐ متميزة</button>
+        </div>
+
+        <div class="bulk-custom-section">
+            <div class="custom-title">✏️ سبب آخر</div>
+            <div class="custom-row">
+                <input type="number" id="bulk-add-custom-points" placeholder="نقاط" min="1" max="20" value="1">
+                <input type="text" id="bulk-add-custom-reason" placeholder="سبب الإضافة...">
+            </div>
+            <button class="bulk-custom-add-btn">➕ إضافة</button>
+        </div>
+
+        <div class="modal-actions">
+            <button class="cancel-btn">❌ إلغاء</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== مودال الخصم الجماعي ===== -->
+<div class="modal-bulk-deduct" id="modal-bulk-deduct">
+    <div class="modal-content">
+        <h3>➖ خصم للجميع</h3>
+        <div class="info-text">📌 سيتم خصم نقطة واحدة من جميع الطالبات</div>
+        
+        <div class="bulk-deduct-grid">
+            <button>✅ حضور</button>
+            <button>🤝 مشاركة</button>
+            <button>📚 واجب</button>
+            <button>📋 مهام</button>
+        </div>
+
+        <div class="bulk-custom-section">
+            <div class="custom-title">✏️ سبب آخر</div>
+            <div class="custom-row">
+                <input type="number" id="bulk-deduct-custom-points" placeholder="نقاط" min="1" max="20" value="1">
+                <input type="text" id="bulk-deduct-custom-reason" placeholder="سبب الخصم...">
+            </div>
+            <button class="bulk-custom-deduct-btn">➖ خصم</button>
+        </div>
+
+        <div class="modal-actions">
+            <button class="cancel-btn">❌ إلغاء</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let studentsData = [];
+    let selectedStudentId = null;
+    let selectedAddPoints = null;
+    let selectedAddSkill = null;
+    let csrfToken = '';
+    let operationBusy = false;
+    let currentTerm = 1;
+    let schoolPrintSettings = null;
+
+    const gradesByStage = {
+        'ابتدائي': ['رابع ابتدائي', 'خامس ابتدائي', 'سادس ابتدائي'],
+        'متوسط': ['أول متوسط', 'ثاني متوسط', 'ثالث متوسط'],
+        'ثانوي': ['أول ثانوي', 'ثاني ثانوي', 'ثالث ثانوي']
+    };
+
+    async function apiRequest(path, options = {}) {
+        const method = (options.method || 'GET').toUpperCase();
+        const response = await fetch(`/api/teacher${path}`, {
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...(method !== 'GET' && csrfToken ? {'X-CSRF-Token': csrfToken} : {}),
+                ...(options.headers || {})
+            }
+        });
+        if (response.status === 401) {
+            location.href = 'login.html';
+            throw new Error('انتهت جلسة الدخول. سجّلي الدخول مرة أخرى.');
+        }
+        const raw = await response.text();
+        let data = {};
+        if (raw.trim()) {
+            try { data = JSON.parse(raw); }
+            catch { throw new Error('تعذّر الاتصال بقاعدة البيانات. لم يتم تغيير رصيد أي طالبة.'); }
+        }
+        if (!response.ok) throw new Error(data.error || 'تعذّر تنفيذ عملية النقاط.');
+        if (data.csrfToken) csrfToken = data.csrfToken;
+        return data;
+    }
+
+    function reasonPayload(reason) {
+        const clean = String(reason || '').replace(/^❌\s*/, '').trim();
+        const map = {'واجب':'homework','مشاركة':'participation','حضور':'attendance','مهام':'task','مهمة':'task'};
+        const category = map[clean] || 'other';
+        return {category, otherReason: category === 'other' ? (clean || 'نقاط تحفيزية') : '', details: '', term: currentTerm};
+    }
+
+    function setBusy(value) {
+        operationBusy = value;
+        document.querySelectorAll('button').forEach(button => {
+            if (!button.classList.contains('cancel-btn') && !button.classList.contains('clear-btn')) button.disabled = value;
+        });
+    }
+
+    function escapeHtml(value='') {
+        return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    }
+
+    function studentById(id) {
+        return studentsData.find(student => Number(student.id) === Number(id));
+    }
+
+    function normalizeGradeLabel(stage, label) {
+        const text = String(label || '').replace(/الصف/g, '').trim();
+        const stageName = String(stage || '').trim();
+        if (stageName === 'ابتدائي') {
+            if (text.includes('رابع')) return 'رابع ابتدائي';
+            if (text.includes('خامس')) return 'خامس ابتدائي';
+            if (text.includes('سادس')) return 'سادس ابتدائي';
+        }
+        if (stageName === 'متوسط') {
+            if (text.includes('أول') || text.includes('اول')) return 'أول متوسط';
+            if (text.includes('ثاني')) return 'ثاني متوسط';
+            if (text.includes('ثالث')) return 'ثالث متوسط';
+        }
+        if (stageName === 'ثانوي') {
+            if (text.includes('أول') || text.includes('اول')) return 'أول ثانوي';
+            if (text.includes('ثاني')) return 'ثاني ثانوي';
+            if (text.includes('ثالث')) return 'ثالث ثانوي';
+        }
+        return text || '—';
+    }
+
+    function extractSection(className) {
+        const value = String(className || '').trim();
+        const arabicDigits = {'١':'1','٢':'2','٣':'3','٤':'4'};
+        const letters = {'أ':'1','ا':'1','ب':'2','ج':'3','د':'4'};
+        const afterSlash = value.match(/[\/\-]\s*([1-4١-٤أابجد])\s*$/u);
+        const explicit = value.match(/(?:فصل|الفصل|شعبة)\s*([1-4١-٤أابجد])/u);
+        const ending = value.match(/([1-4١-٤])\s*$/u);
+        const token = (afterSlash || explicit || ending || [])[1] || '';
+        return arabicDigits[token] || letters[token] || token || '';
+    }
+
+    function mapStudent(student) {
+        const stage = student.stage || '—';
+        return {
+            id: Number(student.id),
+            email: student.email || '',
+            name: student.name || '',
+            stage,
+            class: normalizeGradeLabel(stage, student.grade_label),
+            semester: extractSection(student.class_name),
+            className: student.class_name || '',
+            points: Number(student.points || 0),
+            reasons: []
+        };
+    }
+
+    function updateGradeOptions() {
+        const stage = document.getElementById('filter-stage').value;
+        const gradeSelect = document.getElementById('filter-class');
+        const oldValue = gradeSelect.value;
+        const grades = stage === 'all' ? Object.values(gradesByStage).flat() : (gradesByStage[stage] || []);
+        gradeSelect.innerHTML = '<option value="all">جميع الصفوف</option>' + grades.map(grade => `<option value="${escapeHtml(grade)}">${escapeHtml(grade)}</option>`).join('');
+        gradeSelect.value = grades.includes(oldValue) ? oldValue : 'all';
+    }
+
+    async function saveStudentPoints(student, points, reason) {
+        let actual = Number(points);
+        if (!Number.isInteger(actual) || actual === 0) throw new Error('عدد النقاط غير صالح.');
+        if (actual < 0) {
+            const available = Math.max(0, Number(student.points || 0));
+            if (!available) throw new Error(`لا توجد نقاط يمكن خصمها من ${student.name}.`);
+            actual = -Math.min(Math.abs(actual), available);
+        }
+        const result = await apiRequest(`/motivation/${student.id}`, {
+            method: 'POST',
+            body: JSON.stringify({points: actual, ...reasonPayload(reason)})
+        });
+        student.points = Number(result.total || 0);
+        return actual;
+    }
+
+    function setTermButtons(term) {
+        document.querySelectorAll('#filter-term [data-term]').forEach(button => {
+            const active = Number(button.dataset.term) === Number(term);
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+            button.setAttribute('aria-disabled', 'true');
+        });
+    }
+
+    function applyMotivationData(data) {
+        currentTerm = Number(data.settings?.currentTerm || currentTerm || 1) === 2 ? 2 : 1;
+        setTermButtons(currentTerm);
+        studentsData = (data.students || []).map(mapStudent);
+        updateGradeOptions();
+        renderTable(getFilteredData());
+    }
+
+    async function initializePage() {
+        document.getElementById('table-body').innerHTML = '<tr><td colspan="9" class="loading-state">جارٍ تحميل طالباتكِ...</td></tr>';
+        try {
+            const me = await apiRequest('/me');
+            csrfToken = me.csrfToken || csrfToken;
+            bindEvents();
+            const [data, printSettings] = await Promise.all([
+                apiRequest('/motivation'),
+                apiRequest('/school-settings').catch(() => null)
+            ]);
+            schoolPrintSettings = printSettings;
+            applyMotivationData(data);
+        } catch (error) {
+            document.getElementById('table-body').innerHTML = `<tr><td colspan="9" class="loading-state">⚠️ ${escapeHtml(error.message)}</td></tr>`;
+            renderTopStudent([]);
+        }
+    }
+
+    function bindEvents() {
+        document.getElementById('printPointsBtn').addEventListener('click', printPage);
+        document.getElementById('exportPointsBtn').addEventListener('click', exportExcel);
+        document.getElementById('importPointsBtn').addEventListener('click', () => document.getElementById('pointsImportInput').click());
+        document.getElementById('pointsImportInput').addEventListener('change', importPointsFile);
+        document.querySelector('.bulk-btn.add').addEventListener('click', openBulkAddModal);
+        document.querySelector('.bulk-btn.deduct').addEventListener('click', openBulkDeductModal);
+        document.getElementById('filter-stage').addEventListener('change', () => { updateGradeOptions(); filterTable(); });
+        ['filter-class','filter-semester'].forEach(id => document.getElementById(id).addEventListener('change', filterTable));
+        document.getElementById('search-input').addEventListener('input', filterTable);
+        document.querySelector('.search-btn').addEventListener('click', filterTable);
+        document.querySelector('.clear-btn').addEventListener('click', resetFilters);
+
+        document.querySelectorAll('#modal-add .icon-grid button').forEach((button,index) => {
+            const points = [1,2,5,10][index];
+            button.addEventListener('click', () => selectAddPoints(points, button));
+        });
+        document.querySelectorAll('#modal-add .skills-grid button').forEach(button => {
+            const skill = button.textContent.replace(/^[^\p{L}]+/u,'').trim();
+            button.addEventListener('click', () => selectAddSkill(skill, button));
+        });
+        document.querySelector('#modal-add .add-btn').addEventListener('click', executeAdd);
+        document.querySelector('#modal-add .cancel-btn').addEventListener('click', closeAddModal);
+
+        document.querySelectorAll('#modal-deduct .quick-deduct-grid button, #modal-deduct .icon-grid button').forEach(button => {
+            const reason = button.textContent.trim().replace(/^\S+\s*/,'').trim() || button.textContent.trim();
+            button.addEventListener('click', () => quickDeduct(reason));
+        });
+        document.querySelector('.deduct-custom-btn').addEventListener('click', saveCustomDeduct);
+        document.querySelector('#modal-deduct .cancel-btn').addEventListener('click', closeDeductModal);
+
+        document.querySelectorAll('#modal-bulk-add .bulk-reason-grid button').forEach(button => {
+            const reason = button.textContent.trim().replace(/^\S+\s*/,'').trim() || button.textContent.trim();
+            button.addEventListener('click', () => bulkAddAuto(reason));
+        });
+        document.querySelector('.bulk-custom-add-btn').addEventListener('click', saveBulkAddCustom);
+        document.querySelector('#modal-bulk-add .cancel-btn').addEventListener('click', closeBulkAddModal);
+
+        document.querySelectorAll('#modal-bulk-deduct .bulk-deduct-grid button').forEach(button => {
+            const reason = button.textContent.trim().replace(/^\S+\s*/,'').trim() || button.textContent.trim();
+            button.addEventListener('click', () => bulkDeductAuto(reason));
+        });
+        document.querySelector('.bulk-custom-deduct-btn').addEventListener('click', saveBulkDeductCustom);
+        document.querySelector('#modal-bulk-deduct .cancel-btn').addEventListener('click', closeBulkDeductModal);
+
+        document.querySelectorAll('.modal-add,.modal-deduct,.modal-bulk-add,.modal-bulk-deduct').forEach(modal => {
+            modal.addEventListener('click', event => { if (event.target === modal) closeAllModals(); });
+        });
+    }
+
+
+    function renderTopStudent(data) {
+        const orb = document.getElementById('topStudentOrb');
+        if (!data.length) {
+            orb.innerHTML = '<span>أعلى نقاط</span><strong>—</strong><small>لا توجد بيانات</small>';
+            return;
+        }
+        const top = [...data].sort((a,b) => Number(b.points || 0) - Number(a.points || 0) || a.name.localeCompare(b.name,'ar'))[0];
+        orb.innerHTML = `<span>أعلى نقاط</span><strong title="${escapeHtml(top.name)}">${escapeHtml(top.name)}</strong><small>${Number(top.points || 0)} نقطة</small>`;
+    }
+
+    function renderTable(data) {
+        const tbody = document.getElementById('table-body');
+        tbody.innerHTML = '';
+        renderTopStudent(studentsData);
+        if (!data.length) {
+            tbody.innerHTML = '<tr><td colspan="9" class="loading-state">🕵️‍♀️ لا توجد طالبات مطابقة للبحث</td></tr>';
+            return;
+        }
+        data.forEach(student => {
+            const points = Number(student.points || 0);
+            let totalClass = 'total-points';
+            if (points >= 15) totalClass += ' high'; else if (points >= 8) totalClass += ' medium'; else if (points > 0) totalClass += ' low';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td style="color:#666;" dir="ltr" title="${escapeHtml(student.email)}">${escapeHtml(student.email)}</td>
+                <td><strong>${escapeHtml(student.name)}</strong></td>
+                <td>${escapeHtml(student.stage)}</td>
+                <td>${escapeHtml(student.class)}</td>
+                <td>${student.semester ? `الفصل ${escapeHtml(student.semester)}` : escapeHtml(student.className || '—')}</td>
+                <td><button class="quick-point-btn" type="button" title="إضافة نقطة سريعة">⭐</button></td>
+                <td><button class="action-btn add" type="button">➕ إضافة</button></td>
+                <td><button class="action-btn deduct" type="button">➖ خسارة</button></td>
+                <td><span class="${totalClass}">${points}</span><span class="points-label">نقاط مدار</span></td>`;
+            tr.querySelector('.quick-point-btn').addEventListener('click', () => quickAddPoint(student.id));
+            tr.querySelector('.action-btn.add').addEventListener('click', () => openAddModal(student.id));
+            tr.querySelector('.action-btn.deduct').addEventListener('click', () => openDeductModal(student.id));
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function quickAddPoint(studentId) {
+        const student = studentById(studentId); if (!student || operationBusy) return;
+        try { setBusy(true); await saveStudentPoints(student,1,'⭐ نقطة سريعة'); showToast(`⭐ تمت إضافة نقطة سريعة للطالبة ${student.name}`,'success'); renderTable(getFilteredData()); }
+        catch(error) { showToast(error.message,'error'); } finally { setBusy(false); }
+    }
+
+    function openAddModal(studentId) {
+        const student = studentById(studentId); if (!student) return;
+        selectedStudentId = studentId; selectedAddPoints = null; selectedAddSkill = null;
+        document.getElementById('add-student-name').textContent = `👩‍🎓 ${student.name} (${student.points || 0} نقطة مدار)`;
+        document.getElementById('modal-add').classList.add('active');
+        document.querySelectorAll('#modal-add .icon-grid button,#modal-add .skills-grid button').forEach(b=>b.classList.remove('selected'));
+        const hint=document.getElementById('add-hint'); hint.textContent='👇 اختاري عدد النقاط أو المهارة أو كليهما معًا'; hint.style.color='#999';
+        document.getElementById('add-custom-points').value=1; document.getElementById('add-custom-reason').value='';
+    }
+
+    async function selectAddPoints(points, button) {
+        document.querySelectorAll('#modal-add .icon-grid button').forEach(b=>b.classList.remove('selected')); button.classList.add('selected'); selectedAddPoints=points;
+        if(selectedAddSkill) await executeAutoAdd(); else { const hint=document.getElementById('add-hint'); hint.textContent=`✅ تم اختيار ${points} نقاط، اختاري المهارة أو اضغطي إضافة`; hint.style.color='#47218c'; }
+    }
+
+    async function selectAddSkill(skill, button) {
+        document.querySelectorAll('#modal-add .skills-grid button').forEach(b=>b.classList.remove('selected')); button.classList.add('selected'); selectedAddSkill=skill;
+        if(selectedAddPoints) await executeAutoAdd(); else { const hint=document.getElementById('add-hint'); hint.textContent=`✅ تم اختيار مهارة (${skill})، اختاري النقاط أو اضغطي إضافة`; hint.style.color='#47218c'; }
+    }
+
+    async function executeAutoAdd() {
+        if(!selectedStudentId||!selectedAddPoints||!selectedAddSkill||operationBusy)return;
+        const student=studentById(selectedStudentId);
+        try{setBusy(true);await saveStudentPoints(student,selectedAddPoints,selectedAddSkill);showToast(`✅ تمت إضافة ${selectedAddPoints} نقاط للطالبة ${student.name} (${selectedAddSkill})`,'blue');closeAddModal();renderTable(getFilteredData());}
+        catch(error){showToast(error.message,'error');}finally{setBusy(false);}
+    }
+
+    async function executeAdd() {
+        if(!selectedStudentId||operationBusy)return; const student=studentById(selectedStudentId); let points=0,reason='';
+        if(selectedAddPoints&&!selectedAddSkill){points=selectedAddPoints;reason=({1:'⭐ نقطة',2:'⭐⭐ نقطتان',5:'🏅 خمس نقاط',10:'👑 عشر نقاط'})[points]||`${points} نقاط`;}
+        else if(!selectedAddPoints&&selectedAddSkill){points=1;reason=selectedAddSkill;}
+        else if(!selectedAddPoints&&!selectedAddSkill){points=Number(document.getElementById('add-custom-points').value);reason=document.getElementById('add-custom-reason').value.trim();if(!Number.isInteger(points)||points<1)return showToast('⚠️ الرجاء إدخال عدد صحيح من النقاط','warning');if(!reason)return showToast('⚠️ الرجاء كتابة سبب الإضافة','warning');}
+        else return executeAutoAdd();
+        try{setBusy(true);await saveStudentPoints(student,points,reason);showToast(`✅ تمت إضافة ${points} نقاط للطالبة ${student.name} (${reason})`,'blue');closeAddModal();renderTable(getFilteredData());}
+        catch(error){showToast(error.message,'error');}finally{setBusy(false);}
+    }
+
+    function closeAddModal(){document.getElementById('modal-add').classList.remove('active');selectedStudentId=null;selectedAddPoints=null;selectedAddSkill=null;}
+    function openDeductModal(studentId){const student=studentById(studentId);if(!student)return;selectedStudentId=studentId;document.getElementById('deduct-student-name').textContent=`👩‍🎓 ${student.name} (${student.points||0} نقطة مدار)`;document.getElementById('custom-deduct-points').value=1;document.getElementById('custom-deduct-reason').value='';document.getElementById('modal-deduct').classList.add('active');}
+    function closeDeductModal(){document.getElementById('modal-deduct').classList.remove('active');selectedStudentId=null;}
+
+    async function quickDeduct(reason){const student=studentById(selectedStudentId);if(!student||operationBusy)return;try{setBusy(true);const actual=await saveStudentPoints(student,-1,`❌ ${reason}`);showToast(`⚠️ تم خصم ${Math.abs(actual)} نقطة من ${student.name} (${reason})`,'error');closeDeductModal();renderTable(getFilteredData());}catch(error){showToast(error.message,'error');}finally{setBusy(false);}}
+    async function saveCustomDeduct(){const student=studentById(selectedStudentId);if(!student||operationBusy)return;const points=Number(document.getElementById('custom-deduct-points').value);const reason=document.getElementById('custom-deduct-reason').value.trim();if(!Number.isInteger(points)||points<1)return showToast('⚠️ الرجاء إدخال عدد صحيح من النقاط','warning');if(!reason)return showToast('⚠️ الرجاء إدخال سبب الخسارة','warning');try{setBusy(true);const actual=await saveStudentPoints(student,-points,`❌ ${reason}`);showToast(`⚠️ تم خصم ${Math.abs(actual)} نقاط من ${student.name}`,'error');closeDeductModal();renderTable(getFilteredData());}catch(error){showToast(error.message,'error');}finally{setBusy(false);}}
+
+    function openBulkAddModal(){const data=getFilteredData();if(!data.length)return showToast('⚠️ لا توجد طالبات ضمن نتائج البحث','warning');document.querySelector('#modal-bulk-add .info-text').textContent='📌 سيتم التطبيق على نتائج البحث الحالية فقط';document.getElementById('bulk-add-custom-points').value=1;document.getElementById('bulk-add-custom-reason').value='';document.getElementById('modal-bulk-add').classList.add('active');}
+    function closeBulkAddModal(){document.getElementById('modal-bulk-add').classList.remove('active');}
+    function openBulkDeductModal(){const data=getFilteredData();if(!data.length)return showToast('⚠️ لا توجد طالبات ضمن نتائج البحث','warning');document.querySelector('#modal-bulk-deduct .info-text').textContent='📌 سيتم التطبيق على نتائج البحث الحالية فقط';document.getElementById('bulk-deduct-custom-points').value=1;document.getElementById('bulk-deduct-custom-reason').value='';document.getElementById('modal-bulk-deduct').classList.add('active');}
+    function closeBulkDeductModal(){document.getElementById('modal-bulk-deduct').classList.remove('active');}
+    function closeAllModals(){closeAddModal();closeDeductModal();closeBulkAddModal();closeBulkDeductModal();}
+
+    async function applyBulk(points,reason){const data=getFilteredData();if(!data.length||operationBusy)return;let success=0,skipped=0,failed=0;setBusy(true);try{for(let i=0;i<data.length;i+=6){const chunk=data.slice(i,i+6);const results=await Promise.allSettled(chunk.map(async student=>{let actual=points;if(points<0){const available=Math.max(0,Number(student.points||0));if(!available)return{skipped:true};actual=-Math.min(Math.abs(points),available);}await saveStudentPoints(student,actual,reason);return{skipped:false};}));results.forEach(result=>{if(result.status==='fulfilled'){result.value.skipped?skipped++:success++;}else failed++;});}closeAllModals();renderTable(getFilteredData());if(failed)showToast(`تم تحديث ${success} طالبة وتعذّر تحديث ${failed} طالبة`,'warning');else if(points>0)showToast(`✅ تمت إضافة ${points} ${points===1?'نقطة':'نقاط'} إلى ${success} طالبة (${reason})`,'success');else showToast(`⚠️ تم الخصم من ${success} طالبة${skipped?` وتجاوز ${skipped} بلا رصيد`:''}`,'error');}finally{setBusy(false);}}
+    function bulkAddAuto(reason){return applyBulk(1,reason);}
+    function saveBulkAddCustom(){const points=Number(document.getElementById('bulk-add-custom-points').value);const reason=document.getElementById('bulk-add-custom-reason').value.trim();if(!Number.isInteger(points)||points<1)return showToast('⚠️ الرجاء إدخال عدد صحيح من النقاط','warning');if(!reason)return showToast('⚠️ الرجاء كتابة سبب الإضافة','warning');return applyBulk(points,reason);}
+    function bulkDeductAuto(reason){return applyBulk(-1,`❌ ${reason}`);}
+    function saveBulkDeductCustom(){const points=Number(document.getElementById('bulk-deduct-custom-points').value);const reason=document.getElementById('bulk-deduct-custom-reason').value.trim();if(!Number.isInteger(points)||points<1)return showToast('⚠️ الرجاء إدخال عدد صحيح من النقاط','warning');if(!reason)return showToast('⚠️ الرجاء إدخال سبب الخصم','warning');return applyBulk(-points,`❌ ${reason}`);}
+
+    function getFilteredData(){const stage=document.getElementById('filter-stage').value;const classFilter=document.getElementById('filter-class').value;const semester=document.getElementById('filter-semester').value;const search=document.getElementById('search-input').value.trim().toLocaleLowerCase('ar');return studentsData.filter(student=>{if(stage!=='all'&&student.stage!==stage)return false;if(classFilter!=='all'&&student.class!==classFilter)return false;if(semester!=='all'&&student.semester!==semester)return false;const text=`${student.name} ${student.email}`.toLocaleLowerCase('ar');return !search||text.includes(search);});}
+    function filterTable(){renderTable(getFilteredData());}
+    function resetFilters(){document.getElementById('filter-stage').value='all';updateGradeOptions();document.getElementById('filter-class').value='all';document.getElementById('filter-semester').value='all';document.getElementById('search-input').value='';renderTable(studentsData);}
+
+    function parseCsv(text) {
+        const rows=[]; let row=[]; let field=''; let quoted=false;
+        const source=String(text||'').replace(/^\uFEFF/,'');
+        for(let i=0;i<source.length;i++){
+            const char=source[i];
+            if(quoted){
+                if(char==='"'&&source[i+1]==='"'){field+='"';i++;}
+                else if(char==='"'){quoted=false;}
+                else field+=char;
+            } else if(char==='"'){quoted=true;}
+            else if(char===','||char===';'){row.push(field.trim());field='';}
+            else if(char==='\n'){row.push(field.trim());if(row.some(value=>value!==''))rows.push(row);row=[];field='';}
+            else if(char!=='\r'){field+=char;}
+        }
+        row.push(field.trim()); if(row.some(value=>value!=='')) rows.push(row);
+        return rows;
+    }
+
+    async function importPointsFile(event) {
+        const input=event.target; const file=input.files?.[0]; input.value='';
+        if(!file)return;
+        try{
+            const rows=parseCsv(await file.text());
+            if(rows.length<2)throw new Error('الملف لا يحتوي بيانات قابلة للاستيراد.');
+            const headers=rows[0].map(item=>String(item).trim());
+            const emailIndex=headers.findIndex(item=>/الإيميل|البريد|email/i.test(item));
+            const pointsIndex=headers.findIndex(item=>/نقاط مدار|النقاط|points/i.test(item));
+            if(emailIndex<0||pointsIndex<0)throw new Error('يجب أن يحتوي الملف على عمود الإيميل وعمود نقاط مدار.');
+            const changes=[]; let skipped=0;
+            rows.slice(1).forEach(row=>{
+                const email=String(row[emailIndex]||'').trim().toLowerCase();
+                const target=Number(String(row[pointsIndex]||'').replace(/[^0-9-]/g,''));
+                const student=studentsData.find(item=>item.email.trim().toLowerCase()===email);
+                if(!student||!Number.isInteger(target)||target<0){skipped++;return;}
+                const delta=target-Number(student.points||0);
+                if(delta!==0)changes.push({student,delta});
+            });
+            if(!changes.length){showToast(skipped?'لم توجد صفوف صالحة للتحديث.':'النقاط مطابقة للملف ولا تحتاج تحديثًا.','warning');return;}
+            if(!confirm(`سيتم تحديث نقاط ${changes.length} طالبة في الترم ${currentTerm===1?'الأول':'الثاني'}. هل تريدين المتابعة؟`))return;
+            setBusy(true); let success=0,failed=0;
+            for(const item of changes){
+                try{await saveStudentPoints(item.student,item.delta,'استيراد ملف النقاط');success++;}
+                catch{failed++;}
+            }
+            renderTable(getFilteredData());
+            showToast(failed?`تم تحديث ${success} وتعذّر تحديث ${failed}.`:`📥 تم استيراد نقاط ${success} طالبة بنجاح.` ,failed?'warning':'success');
+        }catch(error){showToast(error.message,'error');}
+        finally{setBusy(false);}
+    }
+
+    function showToast(message,type='success'){const item=document.createElement('div');item.className=`toast ${type}`;item.textContent=message;document.body.appendChild(item);setTimeout(()=>{item.style.opacity='0';item.style.transition='opacity .5s';setTimeout(()=>item.remove(),500);},3000);}
+    async function printPage(){
+        const data=getFilteredData();
+        if(!data.length)return showToast('لا توجد بيانات لطباعتها','warning');
+        const popup=window.open('','_blank');
+        if(!popup)return showToast('اسمحي بالنوافذ المنبثقة حتى تفتح معاينة الطباعة.','warning');
+        popup.document.write('<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>جارٍ تجهيز الطباعة...</title></head><body style="font-family:Tahoma;padding:30px;text-align:center">جارٍ تجهيز كشف نقاط التحفيز...</body></html>');
+        try{
+            schoolPrintSettings=schoolPrintSettings||await apiRequest('/school-settings');
+            const settings=schoolPrintSettings||{};
+            const h=value=>escapeHtml(value??'');
+            const stageFilter=document.getElementById('filter-stage').value;
+            const gradeFilter=document.getElementById('filter-class').value;
+            const classFilter=document.getElementById('filter-semester').value;
+            const stage=stageFilter!=='all'?stageFilter:(settings.stageLabel||'');
+            const grade=gradeFilter!=='all'?gradeFilter:(settings.gradeLabel||'');
+            const className=classFilter!=='all'?`الفصل ${classFilter}`:'';
+            const semesterLabel=currentTerm===2?'الفصل الدراسي الثاني':'الفصل الدراسي الأول';
+            const stageGrade=[stage,grade].filter(Boolean).join(' — ')||'—';
+            const government=`<strong>المملكة العربية السعودية</strong>${settings.educationDepartment?`<div>إدارة التعليم: ${h(settings.educationDepartment)}</div>`:''}${settings.educationOffice?`<div>مكتب التعليم: ${h(settings.educationOffice)}</div>`:''}${settings.schoolName?`<div>المدرسة: ${h(settings.schoolName)}</div>`:''}`;
+            const logos=`<img class="madar-logo" src="${h(settings.madarLogoUrl||'/assets/print/madar-logo.svg')}" alt="شعار مدار"><img class="vision-logo" src="${h(settings.visionLogoUrl||'/vision-2030-logo.png')}" alt="شعار رؤية السعودية 2030">${settings.additionalLogoUrl?`<img class="additional-logo" src="${h(settings.additionalLogoUrl)}" alt="الشعار الإضافي">`:''}`;
+            const rows=data.map(student=>`<tr><td class="print-email">${h(student.email)}</td><td>${h(student.name)}</td><td>${h(student.stage)}</td><td>${h(student.class)}</td><td>${h(student.semester||student.className||'—')}</td><td>${semesterLabel}</td><td><strong>${Number(student.points||0).toLocaleString('ar-SA')}</strong></td></tr>`).join('');
+            const html=`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>كشف نقاط التحفيز</title><link rel="stylesheet" href="/teacher/print-official.css?v=4"><style>@page{size:A4 landscape;margin:7mm}.motivation-print-table{font-size:8pt}.motivation-print-table .print-email{direction:ltr;text-align:left}.motivation-print-table td:nth-child(2){text-align:right;font-weight:700}</style></head><body class="print-landscape"><div class="print-actions"><button onclick="window.print()">طباعة / حفظ PDF</button><button onclick="window.close()">إغلاق</button></div><main class="official-sheet"><table class="official-document-frame"><thead><tr><td><header class="official-print-header"><section class="government-block"><div class="government-copy">${government}</div></section><section class="center-identity"><div class="identity-logos">${logos}</div><div class="document-heading"><h1>كشف نقاط التحفيز</h1></div></section><section class="report-meta"><div><b>المادة:</b> ${h(settings.subjectName||'الرياضيات')}</div><div><b>المرحلة والصف:</b> ${h(stageGrade)}</div>${className?`<div><b>الفصل:</b> ${h(className)}</div>`:''}<div><b>الفصل الدراسي:</b> ${semesterLabel}</div><div><b>العام الدراسي:</b> ${h(settings.academicYear||'—')}</div></section></header></td></tr></thead><tbody><tr><td><section class="report-content"><table class="motivation-print-table"><thead><tr><th>الإيميل</th><th>اسم الطالبة</th><th>المرحلة</th><th>الصف</th><th>الفصل</th><th>الترم</th><th>نقاط مدار</th></tr></thead><tbody>${rows}</tbody></table></section></td></tr></tbody></table><footer class="official-footer"><span>مديرة المدرسة: ${h(settings.schoolLeaderName||'____________________')}</span><span>المعلمة: ${h(settings.teacherName||'____________________')}</span></footer></main></body></html>`;
+            popup.document.open();popup.document.write(html);popup.document.close();
+        }catch(error){popup.close();showToast(error.message||'تعذّر تجهيز الطباعة.','error');}
+    }
+    function exportExcel(){const data=getFilteredData();if(!data.length)return showToast('لا توجد بيانات لتصديرها','warning');const quote=value=>`"${String(value??'').replace(/"/g,'""')}"`;const rows=[['الإيميل','اسم الطالبة','المرحلة','الصف','الفصل','الترم','نقاط مدار'],...data.map(s=>[s.email,s.name,s.stage,s.class,s.semester||s.className,currentTerm===1?'الأول':'الثاني',s.points||0])];const csv=rows.map(row=>row.map(quote).join(',')).join('\n');const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');const url=URL.createObjectURL(blob);link.href=url;link.download=`نقاط_التحفيز_مدار_الترم_${currentTerm}.csv`;document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);showToast('📊 تم تصدير الملف بنجاح','success');}
+
+    window.addEventListener('load', initializePage);
+</script>
+
+</body>
+</html>

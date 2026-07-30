@@ -1,0 +1,248 @@
+.register-page {
+  min-height: 100vh;
+  padding-block: 74px 45px;
+  overflow-y: auto;
+}
+
+.register-card {
+  width: min(500px, 92vw);
+  padding: 26px 32px 28px;
+}
+
+.register-card h1 {
+  margin-bottom: 5px;
+  font-size: clamp(25px, 2vw, 31px);
+}
+
+.register-intro {
+  position: relative;
+  margin: 0 0 20px;
+  color: #6d667b;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.register-form {
+  position: relative;
+  text-align: right;
+}
+
+.name-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.name-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.name-grid-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.name-grid .register-field {
+  min-width: 0;
+}
+
+.name-grid .register-field input {
+  min-width: 0;
+}
+
+.register-field {
+  margin-bottom: 14px;
+}
+
+.field-label {
+  display: block;
+  margin: 0 4px 6px;
+  color: #3f315c;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.field-label small {
+  color: #7f778c;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.register-card .field input {
+  height: 51px;
+  padding: 0 15px;
+  border-radius: 15px;
+  font-size: 16px;
+}
+
+.registration-school-grid {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 10px;
+}
+
+.register-card .field select {
+  width: 100%;
+  height: 51px;
+  padding: 0 14px;
+  border: 1px solid rgba(71,33,140,.13);
+  border-radius: 15px;
+  outline: none;
+  color: #3f315c;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 7px 15px rgba(55,45,76,.08);
+  font: inherit;
+}
+
+.register-card .field select:focus {
+  border-color: var(--mauve-500);
+  box-shadow: 0 0 0 3px rgba(141,103,222,.16);
+}
+
+.register-card .field select:disabled { color: #928b9d; background: #f4f1f7; }
+
+.register-card .password-field input {
+  padding-left: 52px;
+}
+
+.input-wrap {
+  position: relative;
+  display: block;
+}
+
+.register-card .password-toggle {
+  right: auto;
+  left: 12px;
+  color: #686478;
+}
+
+.password-note {
+  display: block;
+  margin: 7px 4px 0;
+  color: #736b80;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.daughter-emails {
+  margin-bottom: 14px;
+  padding: 13px;
+  border: 1px solid rgba(71,33,140,.12);
+  border-radius: 17px;
+  background: rgba(255,255,255,.40);
+}
+
+.daughter-emails-title {
+  margin: 0 2px 8px;
+  color: #3f315c;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.daughter-email-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.daughter-email-row input {
+  width: 100%;
+  height: 49px;
+  padding: 0 14px;
+  border: 1px solid rgba(71,33,140,.13);
+  border-radius: 14px;
+  outline: none;
+  color: #34313e;
+  background: #fff;
+  font-size: 15px;
+  direction: ltr;
+  text-align: left;
+  box-shadow: 0 7px 15px rgba(55,45,76,.08);
+}
+
+.daughter-email-row input:focus {
+  border-color: var(--mauve-500);
+  box-shadow: 0 0 0 3px rgba(141,103,222,.16);
+}
+
+.remove-daughter {
+  width: 42px;
+  border: 0;
+  border-radius: 13px;
+  color: #8a4260;
+  background: #f9e9ef;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.add-daughter {
+  width: 100%;
+  min-height: 45px;
+  margin-top: 10px;
+  border: 1px dashed var(--mauve-500);
+  border-radius: 13px;
+  color: var(--mauve-800);
+  background: rgba(245,240,255,.68);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.register-message {
+  min-height: 20px;
+  margin: 3px 2px 8px;
+  font-size: 13px;
+}
+
+.register-submit {
+  min-height: 54px;
+  margin-top: 2px;
+  border-radius: 15px;
+  font-size: 18px;
+}
+
+.success-panel {
+  position: relative;
+  padding: 42px 12px 28px;
+  text-align: center;
+}
+
+.success-icon {
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(135deg, #35bbb7, #178f98);
+  font-size: 42px;
+  font-weight: 900;
+  box-shadow: 0 13px 30px rgba(25,143,152,.25);
+}
+
+.success-panel p {
+  margin: 12px auto 24px;
+  color: #625a73;
+  line-height: 1.8;
+}
+
+.success-link {
+  color: #fff;
+  text-decoration: none;
+}
+
+@media (max-width: 680px) {
+  .register-page { padding: 78px 12px 34px; }
+  .register-card { padding: 24px 18px; }
+  .register-intro { font-size: 13px; }
+  .register-card .field input { height: 52px; }
+
+  .name-grid-three {
+    grid-template-columns: 1fr;
+  }
+
+  .registration-school-grid { grid-template-columns: 1fr; }
+}
+
+/* نطاق البريد المدرسي الثابت */
+.register-school-email,.daughter-school-email{display:flex;align-items:center;direction:ltr;width:100%;height:51px;border:1px solid rgba(71,33,140,.13);border-radius:15px;background:rgba(255,255,255,.94);box-shadow:0 7px 15px rgba(55,45,76,.08);overflow:hidden}.register-school-email:focus-within,.daughter-school-email:focus-within{border-color:var(--mauve-500);box-shadow:0 0 0 3px rgba(141,103,222,.16)}.register-card .register-school-email input,.daughter-school-email input{min-width:0;flex:1;height:100%!important;padding:0 12px!important;border:0!important;border-radius:0!important;box-shadow:none!important;text-align:left;direction:ltr}.register-school-email>span,.daughter-school-email>span{height:100%;display:flex;align-items:center;padding:0 11px;color:#4f3b76;background:#f2edf9;border-left:1px solid rgba(71,33,140,.13);font-size:.78rem;font-weight:800;white-space:nowrap}.daughter-email-row .daughter-school-email{flex:1}
+@media(max-width:520px){.register-school-email>span,.daughter-school-email>span{font-size:.68rem;padding:0 7px}}

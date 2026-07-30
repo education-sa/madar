@@ -1,0 +1,25 @@
+Options -Indexes
+RewriteEngine On
+
+RewriteRule ^\.env(?:\..*)?$ - [F,L]
+RewriteRule ^(?:\.replit|server\.js|package(?:-lock)?\.json|replit\.md)$ - [F,L]
+RewriteRule ^(config|lib|database|scripts|backend|storage|owner/protected)/ - [F,L]
+
+RewriteRule ^api(?:/.*)?$ api/index.php [QSA,L]
+RewriteRule ^owner/(login\.html|dashboard\.css|dashboard\.js|login\.js)$ owner/public/$1 [L]
+RewriteRule ^teacher/?$ teacher/index.php [L]
+RewriteRule ^teacher/index\.html$ teacher/index.php [L]
+RewriteRule ^owner/dashboard/?$ owner/dashboard.php [L]
+RewriteRule ^student/?$ student/index.php [L]
+RewriteRule ^student/index\.html$ student/index.php [L]
+RewriteRule ^admin/?$ admin/index.php [L]
+RewriteRule ^admin/index\.html$ admin/index.php [L]
+RewriteRule ^parent/?$ parent/index.php [L]
+RewriteRule ^parent/index\.html$ parent/index.php [L]
+
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+</IfModule>

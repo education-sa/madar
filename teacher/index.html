@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>لوحة المعلمة | مدار</title>
+  <link rel="stylesheet" href="dashboard.css?v=62" />
+  <link rel="stylesheet" href="../shared-footer.css?v=1" />
+  <link rel="stylesheet" href="weekly-followup.css?v=4" />
+  <link rel="stylesheet" href="../preview-banner.css?v=1" />
+  <link rel="stylesheet" href="../assets/responsive-tables.css?v=11">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="topbar-brand" aria-label="العودة إلى الصفحة الرئيسية">
+      <span class="brand-orbit" aria-hidden="true"><span class="brand-star">✦</span></span>
+      <span class="brand-copy"><strong>مدار</strong><small>منصة الرياضيات التفاعلية</small></span>
+    </a>
+    <div class="topbar-page">
+      <button class="menu-toggle" id="menuToggle">☰</button>
+      <h2 id="pageTitle">الرئيسية</h2>
+    </div>
+    <div class="global-search" id="globalSearchBox">
+      <span aria-hidden="true">⌕</span>
+      <input id="globalSearchInput" type="search" autocomplete="off" placeholder="بحث شامل: طالبة، اختبار، سؤال، فصل، ولي أمر..." aria-label="البحث الشامل في منصة مدار" />
+      <kbd>⌘ K</kbd>
+      <div class="global-search-results" id="globalSearchResults" hidden></div>
+    </div>
+    <div class="topbar-welcome">
+      <button class="bell-btn" id="bellBtn" aria-label="فتح التنبيهات"><span class="bell-core" aria-hidden="true"></span><span class="bell-dot" id="bellDot" hidden></span></button>
+      <div class="topbar-teacher">أهلًا بكِ أستاذة <strong id="teacherNameLabel">—</strong></div>
+      <button class="topbar-logout" id="headerLogoutBtn" type="button">تسجيل الخروج</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand"><strong>لوحة المعلمة</strong><span class="sidebar-brand-icon" aria-hidden="true">🗓️</span></div>
+
+      <button class="nav-item active" data-route="home"><span class="ic">🏠</span> الرئيسية</button>
+      <button class="nav-item" data-route="profile"><span class="ic">👤</span> الأداء الوظيفي</button>
+
+      <div class="nav-group-label">إدارة الطالبات</div>
+      <button class="nav-item" data-route="student-panel"><span class="ic">🎓</span> قائمة الطالبات</button>
+      <button class="nav-item" data-route="student-files"><span class="ic">📁</span> ملفات الطالبات</button>
+      <button class="nav-item" data-route="follow-up"><span class="ic">📖</span> سجل متابعة</button>
+      <button class="nav-item" data-route="motivation"><span class="ic">✨</span> نقاط تحفيزية</button>
+      <button class="nav-item" data-route="remedial-plans"><span class="ic">🩺</span> الخطط العلاجية</button>
+
+      <div class="nav-group-label">الاختبارات والتحاليل</div>
+      <button class="nav-item" data-route="analysis-learning"><span class="ic">🎨</span> أنماط التعلم</button>
+
+      <button class="nav-item" data-route="tests-panel"><span class="ic">📝</span> الاختبارات</button>
+      <button class="nav-item" data-route="question-bank"><span class="ic">🏦</span> بنك الأسئلة الذكي</button>
+
+      <button class="nav-item" data-route="analysis-panel"><span class="ic">📊</span> تحليل النتائج</button>
+
+      <div class="nav-group-label nav-content-heading">المحتوى التعليمي</div>
+      <button class="nav-item" data-route="games-panel"><span class="ic">🎮</span> الألعاب</button>
+
+      <button class="nav-item" data-route="strategies-panel"><span class="ic">💡</span> الاستراتيجيات</button>
+
+      <button class="nav-item" data-route="library-panel"><span class="ic">📚</span> الموارد المكتبية</button>
+      <button class="nav-item" data-route="knowledge-exchange"><span class="ic">🤝</span> تبادل المعرفة</button>
+
+      <div class="nav-group-label">أخرى</div>
+      <button class="nav-item" data-route="parent-panel"><span class="ic">👨‍👩‍👧</span> ولي الأمر</button>
+      <button class="nav-item" data-route="calendar"><span class="ic">📅</span> التقويم والمواعيد</button>
+      <button class="nav-item" data-route="reports"><span class="ic">📑</span> التقارير الذكية</button>
+      <button class="nav-item" data-route="help-center"><span class="ic">❓</span> مركز المساعدة</button>
+      <button class="nav-item" data-route="notifications"><span class="ic">🔔</span> الإشعارات</button>
+      <button class="nav-item" data-route="activity"><span class="ic">🕓</span> سجل الأنشطة</button>
+      <button class="nav-item" data-route="settings"><span class="ic">⚙️</span> الإعدادات</button>
+      <button class="nav-item" id="logoutBtn"><span class="ic">🚪</span> تسجيل الخروج</button>
+    </aside>
+
+    <div class="main-area">
+      <main class="content" id="content"></main>
+    </div>
+  </div>
+
+  <footer class="site-footer madar-shared-footer" aria-label="ذيل الصفحة ومعلومات التواصل">
+    <div class="site-footer-brand">
+      <strong>مَدار</strong>
+      <span>منصة الرياضيات التفاعلية</span>
+      <small>© ٢٠٢٦ مدار. جميع الحقوق محفوظة.</small>
+    </div>
+
+    <div class="site-footer-contact">
+      <h2>للتواصل</h2>
+      <div class="footer-contact-lines">
+        <a href="mailto:contact@madar.sa"><span aria-hidden="true">✉</span> بريد إلكتروني: <b dir="ltr">contact@madar.sa</b></a>
+        <a href="tel:0560441259"><span aria-hidden="true">☎</span> هاتف: <b dir="ltr">٠٥٦٠٤٤١٢٥٩</b></a>
+      </div>
+    </div>
+
+    <div class="site-footer-credit">
+      <p><span>إعداد وتصميم الموقع:</span><b>أ. عبير القثامي</b></p>
+    </div>
+  </footer>
+
+  <div id="modalRoot"></div>
+  <div id="toastRoot"></div>
+
+  <script src="dashboard.js?v=63" type="module"></script>
+  <script src="weekly-followup.js?v=4"></script>
+  <script src="../preview-banner.js?v=1"></script>
+  <script src="../assets/responsive-tables.js?v=11"></script>
+  <script src="../assets/privacy-consent.js?v=11"></script>
+</body>
+</html>

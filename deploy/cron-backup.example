@@ -1,0 +1,6 @@
+# مثال لتشغيل نسخة قاعدة البيانات يوميًا الساعة 02:15
+# عدلي مسار PHP ومسار المشروع وفق جهازك أو الاستضافة:
+15 2 * * * /usr/bin/php /path/to/madar-php-mysql/scripts/daily_backup.php >> /path/to/madar-php-mysql/backups/backup.log 2>&1
+
+# على MAMP في ماك قد يكون المسار:
+# 15 2 * * * /Applications/MAMP/bin/php/php8.3.30/bin/php /Applications/MAMP/htdocs/madar-php-mysql/scripts/daily_backup.php >> /Applications/MAMP/htdocs/madar-php-mysql/backups/backup.log 2>&1

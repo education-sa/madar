@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>لوحة الكادر الإداري | مدار</title>
+  <link rel="stylesheet" href="dashboard.css?v=11">
+  <link rel="stylesheet" href="../assets/responsive-tables.css?v=11">
+  <link rel="stylesheet" href="../preview-banner.css?v=1">
+</head>
+<body>
+<header class="admin-topbar"><a class="admin-brand" href="/"><i>✦</i><span><strong>مدار</strong><small>لوحة الكادر الإداري</small></span></a><div class="admin-user"><span>أهلًا <strong id="adminName">—</strong></span><button id="adminLogout">تسجيل الخروج</button></div></header>
+<main class="admin-main">
+  <section class="admin-hero"><div><span>إشراف المدرسة</span><h1>متابعة الأداء التعليمي من مكان واحد</h1><p>ملخصات المدرسة والفصول والطالبات المتعثرات والاختبارات الحديثة وفق صلاحيات الكادر الإداري.</p></div><b>🏢</b></section>
+  <section class="admin-summary" id="adminSummary"></section>
+  <div class="admin-grid-two">
+    <section class="admin-card"><header><div><small>تنبيه مبكر</small><h2>طالبات يحتجن متابعة</h2></div><input id="riskSearch" type="search" placeholder="بحث باسم الطالبة"></header><div id="riskTable"></div></section>
+    <section class="admin-card"><header><div><small>المقارنة</small><h2>مؤشرات الفصول</h2></div></header><div id="classTable"></div></section>
+  </div>
+  <section class="admin-card"><header><div><small>الاختبارات</small><h2>أحدث الاختبارات المنشورة والمسودات</h2></div></header><div id="testTable"></div></section>
+  <section class="admin-card"><header><div><small>سجل حديث</small><h2>آخر العمليات في المنصة</h2></div></header><div id="activityTable"></div></section>
+  <section class="admin-help"><div><h2>دليل سريع للكادر الإداري</h2><p>تُستخدم هذه اللوحة للمتابعة والإشراف فقط. لا يستطيع الإداري الوصول إلى حساب المالكة أو تغيير دور OWNER.</p></div><div><a href="/privacy.html">سياسة الخصوصية</a><a href="/terms.html">شروط الاستخدام</a></div></section>
+</main>
+<div class="admin-toast" id="adminToast" hidden></div>
+<script src="dashboard.js?v=11"></script>
+<script src="../assets/responsive-tables.js?v=11"></script>
+<script src="../assets/privacy-consent.js?v=11"></script>
+<script src="../preview-banner.js?v=1"></script>
+</body></html>

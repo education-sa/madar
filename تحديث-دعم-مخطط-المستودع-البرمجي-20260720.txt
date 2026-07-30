@@ -1,0 +1,28 @@
+تحديث مستودع مدار — دعم مخطط الأعمدة البرمجية
+التاريخ: 20 يوليو 2026
+
+تمت إضافة دعم مباشر للأعمدة التالية مع استمرار دعم نموذج مدار العربي القديم:
+subject_id, subject_name, grade, unit_id, unit_name, lesson_id, lesson_name,
+skill_id, skill_name, questions_to_display, question_id, question_order,
+question_text, option_a, option_b, option_c, option_d, correct_answer,
+question_category, difficulty, question_type, explanation, status,
+question_source, source_reference.
+
+أهم السلوكيات:
+1) يستنتج النظام المرحلة من قيمة grade، مثل: أول متوسط.
+2) يحفظ معرّفات المادة والوحدة والدرس والمهارة والسؤال دون فقدها.
+3) يقبل correct_answer كحرف A/B/C/D أو كنص الإجابة.
+4) يدعم أنواع multiple_choice وmcq وtrue_false وboolean وshort_answer وessay.
+5) يحول status إلى حالة المراجعة والنشاط داخل المستودع.
+6) يستخدم questions_to_display فعليًا لتحديد عدد الأسئلة المعروضة من كل مهارة في الاختبار التشخيصي.
+7) يستخدم question_order في ترتيب بدائل أسئلة المهارة.
+8) يعرض source_reference وquestion_source داخل جدول المستودع.
+9) أضيف زر لتحميل نموذج الأعمدة البرمجية بجانب نموذج مدار العربي.
+
+قاعدة البيانات:
+- عند فتح بنك الأسئلة سيضيف الموقع الأعمدة الجديدة تلقائيًا.
+- ويمكن تنفيذ الملف التالي يدويًا عند الحاجة:
+  database/migration_20260720_structured_question_repository.sql
+
+الاختبار:
+php scripts/test_structured_question_bank.php

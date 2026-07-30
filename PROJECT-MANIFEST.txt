@@ -1,0 +1,15 @@
+منصة مدار — بيان النسخة المتكاملة
+تاريخ الإنشاء: 2026-07-18
+هذه الحزمة مبنية على آخر نسخة كاملة، مع استعادة واجهة المتابعة وسجل الدرجات وإضافة الترم والطباعة الرسمية.
+
+الملفات الحرجة:
+teacher/dashboard.js  767e955665277d8ec401e6316e039786f673b229639e5c8c054410256c860b52
+teacher/weekly-followup.js  5ae0f97d641078f720cdc527084f18cedda2c2dc806ae59fcf0561d0f59e84a1
+teacher/dashboard.css  1f4863ba406a0ec0c468a7940e30c0da0870f0ddadad06dfa0b2e639812a5e04
+teacher/weekly-followup.css  a39d4579c268cdacf8d3548ecda47119932337aaf51409189a2242b7667df057
+api/teacher_followup.php  2382232535a89cb41b875aa40e7b3708e5eaa892f9868e40213cbb825155f323
+api/teacher_weekly_followup.php  21c6e1f57d191fcbc2a46707adb0a6f5f9d190129b3c22203e26fe535e8d9b5a
+api/teacher_school_settings.php  d76d90106e83d2bd7980972c0fe159432a210d3aeb269bb42e01fd7892f85dd4
+database/migration_20260718_teacher_academic_settings.sql  fbba81c6e0c774a757f8765181f4c4f643f6911ad2048c4c637549bdaa3ce51f
+
+إجمالي الملفات: 112

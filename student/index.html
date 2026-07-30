@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ملفي الدراسي | مدار</title>
+  <link rel="stylesheet" href="app.css?v=14" />
+  <link rel="stylesheet" href="../shared-footer.css?v=1" />
+  <link rel="stylesheet" href="../preview-banner.css?v=1" />
+  <link rel="stylesheet" href="../assets/responsive-tables.css?v=11">
+</head>
+<body class="student-page">
+  <header class="student-header">
+    <a class="student-home-brand" href="/" aria-label="العودة إلى الصفحة الرئيسية">
+      <span class="brand-orbit" aria-hidden="true">
+        <span class="brand-star">✦</span>
+      </span>
+      <span class="brand-copy">
+        <strong>مدار</strong>
+        <small>منصة الرياضيات التفاعلية</small>
+      </span>
+    </a>
+    <div class="student-page-title" id="studentPageTitle">الرئيسية</div>
+    <div class="student-user">
+      <span class="student-greeting">أهلًا بكِ الطالبة <strong id="studentName">—</strong></span>
+      <button id="studentLogout" aria-label="تسجيل الخروج">خروج</button>
+    </div>
+  </header>
+
+  <div class="student-dashboard-shell">
+    <aside class="student-sidebar" aria-label="قائمة لوحة الطالبة">
+      <div class="student-sidebar-heading"><img src="assets/sidebar-emblem.png" alt="" aria-hidden="true" /><strong>لوحة الطالبة</strong></div>
+      <nav>
+        <button class="student-nav-button active" data-view="home" data-title="الرئيسية"><span aria-hidden="true">🏠</span><b>الرئيسية</b></button>
+        <button class="student-nav-button" data-view="portfolio" data-title="ملف إنجازي"><span aria-hidden="true">📜</span><b>ملف إنجازي</b></button>
+        <button class="student-nav-button" data-view="points" data-title="نقاطي"><span aria-hidden="true">🪙</span><b>نقاطي</b></button>
+        <button class="student-nav-button" data-view="tests" data-title="اختباراتي"><span aria-hidden="true">📋</span><b>اختباراتي</b></button>
+        <button class="student-nav-button" data-view="games" data-title="الألعاب"><span aria-hidden="true">🎮</span><b>الألعاب</b></button>
+        <button class="student-nav-button" data-view="strategies" data-title="الاستراتيجيات"><span aria-hidden="true">💡</span><b>الاستراتيجيات</b></button>
+        <button class="student-nav-button" data-view="library" data-title="الموارد المكتبية"><span aria-hidden="true">📚</span><b>الموارد المكتبية</b></button>
+        <button class="student-nav-button" data-view="knowledge-exchange" data-title="تبادل المعرفة"><span aria-hidden="true">🤝</span><b>تبادل المعرفة</b></button>
+        <button class="student-nav-button" data-view="calendar" data-title="التقويم والمواعيد"><span aria-hidden="true">📅</span><b>التقويم</b></button>
+        <button class="student-nav-button" data-view="remedial" data-title="خطتي العلاجية"><span aria-hidden="true">🩺</span><b>خطتي العلاجية</b></button>
+        <button class="student-nav-button" data-view="results" data-title="نتائجي"><span aria-hidden="true">📊</span><b>نتائجي</b></button>
+        <button class="student-nav-button" data-view="learning" data-title="نمط تعلّمي"><span aria-hidden="true">🎨</span><b>نمط تعلّمي</b></button>
+        <button class="student-nav-button" data-view="help" data-title="مركز المساعدة"><span aria-hidden="true">❓</span><b>مركز المساعدة</b></button>
+        <button class="student-nav-button" data-view="account" data-title="حسابي"><span aria-hidden="true">👤</span><b>حسابي</b></button>
+      </nav>
+    </aside>
+
+    <main id="studentContent" class="student-content"><div class="loading">جارٍ التحميل...</div></main>
+  </div>
+  <footer class="site-footer madar-shared-footer" aria-label="ذيل الصفحة ومعلومات التواصل">
+    <div class="site-footer-brand">
+      <strong>مَدار</strong>
+      <span>منصة الرياضيات التفاعلية</span>
+      <small>© ٢٠٢٦ مدار. جميع الحقوق محفوظة.</small>
+    </div>
+
+    <div class="site-footer-contact">
+      <h2>للتواصل</h2>
+      <div class="footer-contact-lines">
+        <a href="mailto:contact@madar.sa"><span aria-hidden="true">✉</span> بريد إلكتروني: <b dir="ltr">contact@madar.sa</b></a>
+        <a href="tel:0560441259"><span aria-hidden="true">☎</span> هاتف: <b dir="ltr">٠٥٦٠٤٤١٢٥٩</b></a>
+      </div>
+    </div>
+
+    <div class="site-footer-credit">
+      <p><span>إعداد وتصميم الموقع:</span><b>أ. عبير القثامي</b></p>
+    </div>
+  </footer>
+  <div id="studentModal"></div>
+  <div id="studentToast"></div>
+  <script src="app.js?v=14" type="module"></script>
+  <script src="../preview-banner.js?v=1"></script>
+  <script src="../assets/responsive-tables.js?v=11"></script>
+  <script src="../assets/privacy-consent.js?v=11"></script>
+</body>
+</html>

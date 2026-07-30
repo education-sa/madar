@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>لوحة المالكة | مدار</title>
+  <link rel="stylesheet" href="dashboard.css?v=1" />
+</head>
+<body class="login-body">
+  <div class="login-card">
+    <a href="../../index.html" class="login-brand">مدار<i>✦</i></a>
+    <h1>لوحة مالكة الموقع</h1>
+    <p class="login-sub">دخول خاص بمالكة الموقع لإدارة الحسابات والصلاحيات والإشراف العام على المنصة</p>
+
+    <form id="loginForm" novalidate>
+      <label>البريد الإلكتروني
+        <input type="email" id="email" required autocomplete="username" placeholder="owner@madar.sa" />
+      </label>
+      <label>كلمة المرور
+        <input type="password" id="password" required autocomplete="current-password" placeholder="••••••••" />
+      </label>
+      <label>رمز المصادقة الثنائية <small>(عند تفعيلها فقط)</small>
+        <input type="text" id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" />
+      </label>
+      <div id="loginError" class="form-error" hidden></div>
+      <button type="submit" class="btn btn-primary btn-block">تسجيل الدخول</button>
+    </form>
+
+    <p class="login-hint">هذه الصفحة مخصصة لمالكة الموقع فقط. لا يوجد إنشاء حساب جديد من هنا.</p>
+  </div>
+  <script src="login.js?v=3" type="module"></script>
+</body>
+</html>

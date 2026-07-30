@@ -1,0 +1,28 @@
+Madar OWNER/RBAC Test Report
+Generated: 2026-07-20T19:29:43
+
+PHP syntax: 38 files - PASS
+JavaScript syntax: 16 files - PASS
+Server-side real OWNER guard: PASS
+Direct owner route middleware: PASS
+OWNER blocked in normal user creation: PASS
+OWNER permission matrix immutable: PASS
+Current owner email field is read-only: PASS
+No owner email sent in normal profile save: PASS
+Secret redaction in audit log: PASS
+Teacher routes use central permissions: PASS
+Student routes use central permissions: PASS
+Role preview start is audited: PASS
+Role preview end is audited: PASS
+Soft delete and restore endpoints: PASS
+Permanent delete requires current password: PASS
+Permanent files use quarantine: PASS
+2FA TOTP support: PASS
+Login attempt throttling: PASS
+Session idle timeout: PASS
+Sensitive .env excluded: PASS
+Known local credentials absent: PASS
+
+TOTP RFC vector is checked separately during packaging: expected 287082.
+OVERALL: PASS
+TOTP RFC vector actual: 287082 - PASS

@@ -1,0 +1,3177 @@
+// لوحة تحكم المعلمة - منطق العرض والتنقل بين الأقسام (SPA بسيطة بدون مكتبات خارجية)
+
+const contentEl = document.getElementById("content");
+const pageTitleEl = document.getElementById("pageTitle");
+const modalRoot = document.getElementById("modalRoot");
+const toastRoot = document.getElementById("toastRoot");
+
+const ROUTE_TITLES = {
+  home: "الرئيسية",
+  profile: "الأداء الوظيفي",
+  "student-panel": "قائمة الطالبات",
+  "student-files": "ملفات الطالبات",
+  "follow-up": "سجل متابعة",
+  motivation: "نقاط تحفيزية",
+  "tests-panel": "الاختبارات",
+  "tests-pre": "الاختبار التشخيصي القبلي",
+  "tests-post": "الاختبار التشخيصي البعدي",
+  "tests-quiz": "الاختبارات القصيرة",
+  "question-bank": "بنك الأسئلة الذكي",
+  "analysis-panel": "تحليل النتائج",
+  "analysis-student": "تحليل لكل طالبة",
+  "analysis-class": "تحليل الفصل العام",
+  "analysis-skill": "تحليل كل مهارة",
+  "analysis-learning": "أنماط التعلم",
+  "games-panel": "الألعاب",
+  "interactive-games": "الألعاب التفاعلية",
+  competitions: "المسابقات",
+  "strategies-panel": "الاستراتيجيات",
+  "flipped-classroom": "الصف المقلوب",
+  "library-panel": "الموارد المكتبية",
+  videos: "الفيديوهات",
+  training: "التدريبات",
+  "knowledge-exchange": "تبادل المعرفة",
+  reports: "التقارير",
+  notifications: "الإشعارات",
+  classes: "الفصول والمجموعات",
+  activity: "سجل الأنشطة",
+  settings: "الإعدادات",
+};
+
+let currentTeacher = null;
+let allClasses = [];
+let allSkills = [];
+let csrfToken = "";
+
+let schoolSettings = null;
+const ACADEMIC_GRADES = {
+  "ابتدائي": ["رابع ابتدائي", "خامس ابتدائي", "سادس ابتدائي"],
+  "متوسط": ["أول متوسط", "ثاني متوسط", "ثالث متوسط"],
+  "ثانوي": ["أول ثانوي", "ثاني ثانوي", "ثالث ثانوي"],
+};
+const academicSelections = {
+  followUp: JSON.parse(sessionStorage.getItem("madarAcademicFollowUp") || "null") || {},
+  tests: JSON.parse(sessionStorage.getItem("madarAcademicTests") || "null") || {},
+};
+let recentCreatedTestId = Number(sessionStorage.getItem("madarRecentCreatedTestId") || 0);
+let recentCreatedTestType = sessionStorage.getItem("madarRecentCreatedTestType") || "";
+
+function normalizeGradeKey(stage, label) {
+  const text = String(label || "").replace(/الصف/g, "").replace(/\s+/g, " ").trim();
+  const ordinal = text.includes("الرابع") || text.includes("رابع") ? "رابع"
+    : text.includes("الخامس") || text.includes("خامس") ? "خامس"
+    : text.includes("السادس") || text.includes("سادس") ? "سادس"
+    : text.includes("الأول") || text.includes("اول") || text.includes("أول") ? "أول"
+    : text.includes("الثاني") || text.includes("ثاني") ? "ثاني"
+    : text.includes("الثالث") || text.includes("ثالث") ? "ثالث" : "";
+  if (stage === "ابتدائي" && ["رابع", "خامس", "سادس"].includes(ordinal)) return `${ordinal} ابتدائي`;
+  if (stage === "متوسط" && ["أول", "ثاني", "ثالث"].includes(ordinal)) return `${ordinal} متوسط`;
+  if (stage === "ثانوي" && ["أول", "ثاني", "ثالث"].includes(ordinal)) return `${ordinal} ثانوي`;
+  return text;
+}
+
+function selectedAcademicClass(kind) {
+  const selection = academicSelections[kind];
+  return allClasses.find((item) => String(item.id) === String(selection?.classId)) || null;
+}
+
+function actualAcademicGradeLabel(kind) {
+  return selectedAcademicClass(kind)?.grade_label || academicSelections[kind]?.gradeLabel || "";
+}
+
+async function loadSchoolSettings(force = false) {
+  if (!schoolSettings || force) schoolSettings = await api("/school-settings");
+  return schoolSettings;
+}
+
+function normalizedAcademicYear(value) {
+  return String(value || "").replace(/[^0-9-]/g, "");
+}
+
+function academicClasses(selection) {
+  const matching = allClasses.filter((item) => (!selection.stage || item.level === selection.stage) && (!selection.gradeLabel || normalizeGradeKey(item.level, item.grade_label) === selection.gradeLabel));
+  const selectedYear = normalizedAcademicYear(schoolSettings?.academicYear);
+  if (!selectedYear) return matching;
+  const sameYear = matching.filter((item) => normalizedAcademicYear(item.academic_year) === selectedYear);
+  return sameYear.length ? sameYear : matching;
+}
+
+function normalizeAcademicSelection(kind) {
+  const selection = academicSelections[kind];
+  const firstClass = allClasses[0];
+  if (!selection.stage) selection.stage = firstClass?.level || "ابتدائي";
+  const grades = ACADEMIC_GRADES[selection.stage] || [];
+  if (!grades.includes(selection.gradeLabel)) {
+    const classGrade = normalizeGradeKey(selection.stage, allClasses.find((item) => item.level === selection.stage)?.grade_label);
+    selection.gradeLabel = grades.includes(classGrade) ? classGrade : (grades[0] || "");
+  }
+  const classes = academicClasses(selection);
+  if (!classes.some((item) => String(item.id) === String(selection.classId))) selection.classId = classes[0]?.id ? String(classes[0].id) : "";
+  sessionStorage.setItem(kind === "followUp" ? "madarAcademicFollowUp" : "madarAcademicTests", JSON.stringify(selection));
+  return selection;
+}
+
+async function prepareAcademicSelection(kind) {
+  await loadSchoolSettings();
+  return normalizeAcademicSelection(kind);
+}
+
+function arabicClassNumber(index) {
+  return ["١", "٢", "٣", "٤", "٥", "٦"][index] || String(index + 1);
+}
+
+function academicClassLabel(item, index) {
+  const name = String(item?.name || "");
+  const digitMatch = name.match(/(?:فصل|الفصل)?\s*([١٢٣٤1-4])(?:\D|$)/);
+  const digitMap = { "1": "١", "2": "٢", "3": "٣", "4": "٤", "١": "١", "٢": "٢", "٣": "٣", "٤": "٤" };
+  const normalizedDigit = digitMatch ? digitMap[digitMatch[1]] : arabicClassNumber(index);
+  return `الفصل ${normalizedDigit}${name && !/^\s*(?:فصل|الفصل)?\s*[١٢٣٤1-4]\s*$/u.test(name) ? ` — ${escapeHtml(name)}` : ""}`;
+}
+
+function academicSelectorHtml(kind) {
+  const selection = normalizeAcademicSelection(kind);
+  const grades = ACADEMIC_GRADES[selection.stage] || [];
+  const classes = academicClasses(selection);
+  const semesterLabel = schoolSettings?.semesterLabel || "الترم الأول";
+  return `<section class="academic-filter" data-academic-kind="${kind}">
+    <div class="academic-filter-fields">
+      <label>المرحلة<select data-academic-stage>${Object.keys(ACADEMIC_GRADES).map((value) => `<option value="${value}" ${selection.stage === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+      <label>الصف<select data-academic-grade>${grades.map((value) => `<option value="${value}" ${selection.gradeLabel === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+      <label>الفصل<select data-academic-class>${classes.length ? classes.map((item, index) => `<option value="${item.id}" ${String(selection.classId) === String(item.id) ? "selected" : ""}>${academicClassLabel(item, index)}</option>`).join("") : '<option value="">لا يوجد فصل مسجل لهذا الصف</option>'}</select></label>
+    </div>
+    <div class="semester-indicator"><strong>${escapeHtml(semesterLabel)}</strong></div>
+  </section>`;
+}
+
+function bindAcademicSelector(kind, onChange) {
+  const root = document.querySelector(`[data-academic-kind="${kind}"]`);
+  if (!root) return;
+  const selection = academicSelections[kind];
+  root.querySelector("[data-academic-stage]").onchange = (event) => {
+    selection.stage = event.target.value;
+    selection.gradeLabel = (ACADEMIC_GRADES[selection.stage] || [])[0] || "";
+    selection.classId = "";
+    normalizeAcademicSelection(kind);
+    onChange();
+  };
+  root.querySelector("[data-academic-grade]").onchange = (event) => {
+    selection.gradeLabel = event.target.value;
+    selection.classId = "";
+    normalizeAcademicSelection(kind);
+    onChange();
+  };
+  root.querySelector("[data-academic-class]").onchange = (event) => {
+    selection.classId = event.target.value;
+    normalizeAcademicSelection(kind);
+    onChange();
+  };
+}
+
+function academicQuery(kind) {
+  const selection = normalizeAcademicSelection(kind);
+  return new URLSearchParams({
+    stage: selection.stage || "",
+    gradeLabel: actualAcademicGradeLabel(kind),
+    classId: selection.classId || "",
+    academicYear: schoolSettings?.academicYear || "",
+    semester: schoolSettings?.currentSemester || "first",
+  }).toString();
+}
+
+// ---------- Helpers ----------
+async function api(path, options = {}) {
+  const isFormData = options.body instanceof FormData;
+  const method = (options.method || "GET").toUpperCase();
+  const res = await fetch(`/api/teacher${path}`, {
+    ...options,
+    headers: {
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      ...(method !== "GET" && csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (res.status === 401) {
+    window.location.href = "login.html";
+    throw new Error("unauthorized");
+  }
+  const isJson = res.headers.get("content-type")?.includes("application/json");
+  const data = isJson ? await res.json() : null;
+  if (!res.ok) throw new Error(data?.error || "حدث خطأ غير متوقع.");
+  if (data?.csrfToken) csrfToken = data.csrfToken;
+  return data;
+}
+
+function escapeHtml(str = "") {
+  return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function toast(message) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = message;
+  toastRoot.innerHTML = "";
+  toastRoot.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+function openModal(html, className = "") {
+  modalRoot.innerHTML = `<div class="modal-overlay" id="modalOverlay"><div class="modal-box ${escapeHtml(className)}" role="dialog" aria-modal="true">${html}</div></div>`;
+  document.getElementById("modalOverlay").addEventListener("click", (e) => {
+    if (e.target.id === "modalOverlay") closeModal();
+  });
+}
+function closeModal() {
+  modalRoot.innerHTML = "";
+}
+
+function confirmAction(message, onConfirm) {
+  openModal(`
+    <div class="confirm-box">
+      <div class="ic">⚠️</div>
+      <p>${escapeHtml(message)}</p>
+      <div class="modal-actions" style="justify-content:center">
+        <button class="btn btn-outline" id="cancelConfirm">إلغاء</button>
+        <button class="btn btn-danger" id="okConfirm">تأكيد</button>
+      </div>
+    </div>
+  `);
+  document.getElementById("cancelConfirm").onclick = closeModal;
+  document.getElementById("okConfirm").onclick = async () => {
+    closeModal();
+    try { await onConfirm(); } catch (error) { toast(error.message); }
+  };
+}
+
+function formatDate(d) {
+  if (!d) return "—";
+  const date = new Date(d);
+  return date.toLocaleDateString("ar-SA", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function progressColorBadge(p) {
+  if (p >= 70) return "badge-green";
+  if (p >= 45) return "badge-orange";
+  return "badge-red";
+}
+
+// ---------- Bootstrapping ----------
+async function boot() {
+  try {
+    currentTeacher = await api("/me");
+    csrfToken = currentTeacher.csrfToken || csrfToken;
+  } catch {
+    return;
+  }
+  document.getElementById("teacherNameLabel").textContent = currentTeacher.name;
+
+  try {
+    allClasses = await api("/students/classes");
+  } catch {}
+  try {
+    allSkills = await api("/data/skills");
+  } catch {}
+
+  refreshNotifBell();
+
+  document.querySelectorAll(".nav-item[data-route]").forEach((btn) => {
+    btn.addEventListener("click", () => navigate(btn.dataset.route));
+  });
+  const logoutTeacher = async () => {
+    await api("/logout", { method: "POST" });
+    window.location.href = "login.html";
+  };
+  document.getElementById("logoutBtn").addEventListener("click", logoutTeacher);
+  document.getElementById("headerLogoutBtn").addEventListener("click", logoutTeacher);
+  document.getElementById("menuToggle").addEventListener("click", () => {
+    document.getElementById("sidebar").classList.toggle("open");
+  });
+  document.getElementById("bellBtn").addEventListener("click", () => navigate("notifications"));
+
+  window.addEventListener("hashchange", () => {
+    const route = location.hash.replace("#", "");
+    if (ROUTES[route]) navigate(route);
+  });
+
+  const initialRoute = location.hash.replace("#", "");
+  navigate(ROUTES[initialRoute] ? initialRoute : "home");
+}
+
+async function refreshNotifBell() {
+  try {
+    const notifs = await api("/data/notifications");
+    document.getElementById("bellDot").hidden = !notifs.some((n) => !n.is_read);
+  } catch {}
+}
+
+function navigate(route) {
+  document.querySelectorAll(".nav-item[data-route]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.route === route);
+  });
+  document.getElementById("sidebar").classList.remove("open");
+  if (location.hash.replace("#", "") !== route) location.hash = route;
+  pageTitleEl.textContent = ROUTE_TITLES[route] || "";
+  contentEl.innerHTML = `<div class="empty-state">جارٍ التحميل...</div>`;
+  const renderer = ROUTES[route];
+  if (renderer) renderer();
+}
+
+// ==========================================================================
+// الرئيسية
+// ==========================================================================
+async function renderHome() {
+  const data = await api("/dashboard/summary");
+  const maxClassAvg = Math.max(1, ...data.classLevels.map((c) => c.avg_progress));
+  contentEl.innerHTML = `
+    <div class="stat-grid">
+      ${statCard("🎓", data.studentCount, "عدد الطالبات")}
+      ${statCard("📋", data.publishedTests, "الاختبارات المنشورة")}
+      ${statCard("✅", data.completedResults, "الاختبارات المكتملة")}
+      ${statCard("📈", data.averageProgress + "%", "متوسط الفصل")}
+      ${statCard("🆘", data.needSupportCount, "بحاجة إلى دعم")}
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3 class="section-title">مستوى الفصول</h3>
+        ${data.classLevels
+          .map(
+            (c) => `
+          <div style="margin-bottom:14px">
+            <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:6px">
+              <span>${escapeHtml(c.name)} (${c.student_count} طالبة)</span>
+              <strong>${c.avg_progress}%</strong>
+            </div>
+            <div class="progress-bar"><span style="width:${(c.avg_progress / maxClassAvg) * 100}%"></span></div>
+          </div>`
+          )
+          .join("") || `<div class="empty-state">لا توجد بيانات فصول بعد.</div>`}
+
+        <h3 class="section-title" style="margin-top:22px">اختصارات سريعة</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" id="quickTest">+ اختبار جديد</button>
+          <button class="btn btn-secondary btn-sm" id="quickStudent">+ طالبة جديدة</button>
+          <button class="btn btn-outline btn-sm" id="quickNote">+ ملاحظة</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="section-title">آخر الأنشطة</h3>
+        ${
+          data.recentActivity.length
+            ? `<ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px">
+              ${data.recentActivity
+                .map(
+                  (a) => `<li style="font-size:.85rem"><strong>${escapeHtml(a.action)}</strong><br><span style="color:var(--muted)">${escapeHtml(a.details || "")} · ${formatDate(a.created_at)}</span></li>`
+                )
+                .join("")}
+            </ul>`
+            : `<div class="empty-state">لا توجد أنشطة مسجّلة بعد.</div>`
+        }
+        <h3 class="section-title" style="margin-top:20px">تنبيهات</h3>
+        ${
+          data.notifications.length
+            ? data.notifications
+                .map((n) => `<div class="skill-pill"><span>${escapeHtml(n.title)}</span>${n.is_read ? "" : '<span class="badge badge-orange">جديد</span>'}</div>`)
+                .join("")
+            : `<div class="empty-state">لا توجد تنبيهات.</div>`
+        }
+      </div>
+    </div>
+  `;
+  document.getElementById("quickTest").onclick = () => openTestsPanel("quiz");
+  document.getElementById("quickStudent").onclick = () => openStudentPanel("manage");
+  document.getElementById("quickNote").onclick = () => openStudentPanel("list");
+}
+
+function statCard(icon, value, label) {
+  return `<div class="stat-card"><div class="stat-icon">${icon}</div><div class="stat-value">${value}</div><div class="stat-label">${label}</div></div>`;
+}
+
+// ==========================================================================
+// الأداء الوظيفي
+// ==========================================================================
+const PERFORMANCE_AREAS = [
+  "أداء الواجبات الوظيفية",
+  "التفاعل مع المجتمع المهني",
+  "التفاعل مع أولياء الأمور",
+  "التنويع في استراتيجيات التدريس",
+  "تحسين نتائج المتعلمين",
+  "إعداد وتنفيذ خطة التعلم",
+  "توظيف تقنيات ووسائل التعلم",
+  "تهيئة بيئة تعليمية",
+  "الإدارة الصفية الإيجابية",
+  "تقويم تعلم المتعلمين",
+];
+let performancePanelMode = 0;
+
+async function renderProfile() {
+  contentEl.innerHTML = `
+    <div class="student-panel-tabs performance-panel-tabs" role="tablist" aria-label="مجالات الأداء الوظيفي">
+      ${PERFORMANCE_AREAS.map((area,index) => `<button class="tab-btn ${performancePanelMode === index ? "active" : ""}" type="button" data-performance-area="${index}" aria-selected="${performancePanelMode === index ? "true" : "false"}">${escapeHtml(area)}</button>`).join("")}
+    </div>
+    <div id="performanceAreaContent"></div>
+  `;
+  document.querySelectorAll("[data-performance-area]").forEach((button) => {
+    button.onclick = () => {
+      performancePanelMode = Number(button.dataset.performanceArea);
+      renderProfile();
+    };
+  });
+}
+
+// ==========================================================================
+// لوحة الطالبة: الأسماء والإدارة في صفحة واحدة
+// ==========================================================================
+let studentPanelMode = "list";
+let studentsState = { search: "", classId: "", stage: "", page: 1 };
+
+function openStudentPanel(mode = "list") {
+  studentPanelMode = mode;
+  navigate("student-panel");
+}
+
+async function renderStudentPanel() {
+  contentEl.innerHTML = `
+    <div class="student-panel-tabs" role="tablist" aria-label="أقسام لوحة الطالبة">
+      <button class="tab-btn ${studentPanelMode === "list" ? "active" : ""}" data-student-panel="list">أسماء الطالبات</button>
+      <button class="tab-btn ${studentPanelMode === "manage" ? "active" : ""}" data-student-panel="manage">إدارة الطالبات</button>
+    </div>
+    <div id="studentPanelContent"></div>
+  `;
+  document.querySelectorAll("[data-student-panel]").forEach((button) => {
+    button.onclick = () => {
+      studentPanelMode = button.dataset.studentPanel;
+      renderStudentPanel();
+    };
+  });
+  const target = document.getElementById("studentPanelContent");
+  if (studentPanelMode === "manage") await renderStudentsManage(target);
+  else await renderStudentsList(target);
+}
+
+async function importStudentsFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const data = await api("/students/import", { method: "POST", body: formData });
+  const updated = Number(data.updated || 0);
+  toast(`تمت إضافة ${data.created} طالبة${updated ? ` وتحديث ${updated}` : ""}.`);
+  if (data.errors?.length) {
+    openModal(`
+      <h3>اكتمل الاستيراد مع ملاحظات</h3>
+      <p>تمت إضافة ${data.created} وتحديث ${updated} طالبة، وتعذرت معالجة ${data.errors.length} من الصفوف.</p>
+      <ul class="import-errors">${data.errors.slice(0, 40).map((error) => `<li>${escapeHtml(error)}</li>`).join("")}</ul>
+      <div class="modal-actions"><button class="btn btn-primary" id="closeImportResult">حسنًا</button></div>
+    `);
+    document.getElementById("closeImportResult").onclick = closeModal;
+  }
+  return data;
+}
+
+function bindStudentImport(inputId, onImported) {
+  document.getElementById(inputId).addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      await importStudentsFile(file);
+      await onImported();
+    } catch (error) {
+      toast(error.message || "تعذّر استيراد الملف.");
+    } finally {
+      event.target.value = "";
+    }
+  });
+}
+
+async function renderStudentsList(target = contentEl) {
+  target.innerHTML = `
+    <div id="studentAccountRequests"></div>
+    <div class="card">
+      <div class="toolbar">
+        <input id="stSearch" placeholder="بحث بالاسم أو البريد..." value="${escapeHtml(studentsState.search)}" />
+        <select id="stClass"><option value="">كل الفصول</option>${allClasses.map((c) => `<option value="${c.id}" ${String(c.id) === String(studentsState.classId) ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}</select>
+        <select id="stStage"><option value="">كل المراحل</option>${["ابتدائي", "متوسط", "ثانوي"].map((stage) => `<option value="${stage}" ${studentsState.stage === stage ? "selected" : ""}>${stage}</option>`).join("")}</select>
+        <div class="spacer"></div>
+        <a class="btn btn-outline btn-sm" href="/api/teacher/reports/students.xlsx">تصدير Excel</a>
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer">استيراد Excel / مدرستي<input type="file" id="studentsImportInput" accept=".xlsx,.csv,.txt" hidden /></label>
+      </div>
+      <p class="import-help">يقبل ملفات Excel بصيغة XLSX وملفات CSV العربية، ويتعرّف تلقائيًا على أعمدة الاسم والبريد والمرحلة والفصل حتى لو بدأ الجدول بعد عدة أسطر.</p>
+      <div id="studentsTableWrap"></div>
+    </div>
+  `;
+  document.getElementById("stSearch").addEventListener("input", (e) => { studentsState.search = e.target.value; studentsState.page = 1; loadStudentsTable(); });
+  document.getElementById("stClass").addEventListener("change", (e) => { studentsState.classId = e.target.value; studentsState.page = 1; loadStudentsTable(); });
+  document.getElementById("stStage").addEventListener("change", (e) => { studentsState.stage = e.target.value; studentsState.page = 1; loadStudentsTable(); });
+  bindStudentImport("studentsImportInput", loadStudentsTable);
+  await Promise.all([loadStudentAccountRequests(), loadStudentsTable()]);
+}
+
+async function loadStudentAccountRequests() {
+  const wrap = document.getElementById("studentAccountRequests");
+  if (!wrap) return;
+  const data = await api("/students/requests");
+  const requests = data.items || [];
+  wrap.innerHTML = `
+    <section class="card student-account-requests" aria-labelledby="studentRequestsTitle">
+      <div class="student-request-heading">
+        <div><span class="student-request-icon" aria-hidden="true">👩‍🎓</span><div><h3 id="studentRequestsTitle">طلبات إنشاء حساب الطالبات</h3><p>وافقي على الطلب لتستطيع الطالبة تسجيل الدخول، أو ارفضي الطلب غير الصحيح.</p></div></div>
+        <span class="badge ${requests.length ? "badge-orange" : "badge-green"}">${requests.length} بانتظار المراجعة</span>
+      </div>
+      ${requests.length ? `<div class="table-wrap"><table><thead><tr><th>اسم الطالبة</th><th>البريد الإلكتروني</th><th>المرحلة</th><th>الفصل</th><th>تاريخ الطلب</th><th>الإجراء</th></tr></thead><tbody>${requests.map((request) => `<tr><td><strong>${escapeHtml(request.name)}</strong></td><td>${escapeHtml(request.email)}</td><td>${escapeHtml(`${request.stage} · ${request.gradeLabel}`)}</td><td>${escapeHtml(request.className)}</td><td>${formatDate(request.createdAt)}</td><td><div class="student-request-actions"><button class="btn btn-primary btn-sm" type="button" data-approve-student-request="${request.id}">موافقة</button><button class="btn btn-danger btn-sm" type="button" data-reject-student-request="${request.id}">رفض</button></div></td></tr>`).join("")}</tbody></table></div>` : '<div class="student-request-empty">لا توجد طلبات حساب جديدة الآن.</div>'}
+    </section>
+  `;
+  const reviewRequest = (id, action, name) => {
+    const approval = action === "approve";
+    confirmAction(approval ? `هل تريدين الموافقة على حساب الطالبة ${name}؟` : `هل تريدين رفض طلب حساب الطالبة ${name}؟`, async () => {
+      const result = await api(`/students/requests/${id}`, { method: "PUT", body: JSON.stringify({ action }) });
+      toast(result.message);
+      await Promise.all([loadStudentAccountRequests(), loadStudentsTable()]);
+    });
+  };
+  requests.forEach((request) => {
+    wrap.querySelector(`[data-approve-student-request="${request.id}"]`).onclick = () => reviewRequest(request.id, "approve", request.name);
+    wrap.querySelector(`[data-reject-student-request="${request.id}"]`).onclick = () => reviewRequest(request.id, "reject", request.name);
+  });
+}
+
+async function loadStudentsTable() {
+  const wrap = document.getElementById("studentsTableWrap");
+  const qs = new URLSearchParams({
+    search: studentsState.search,
+    classId: studentsState.classId,
+    level: studentsState.stage,
+    page: studentsState.page,
+    pageSize: 8,
+  });
+  const data = await api(`/students?${qs}`);
+  if (!data.items.length) {
+    wrap.innerHTML = `<div class="empty-state"><div class="ic">🔍</div>لا توجد نتائج مطابقة.</div>`;
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
+  wrap.innerHTML = `<div class="table-wrap">
+    <table>
+      <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>المرحلة</th><th>الفصل</th><th>آخر نشاط</th></tr></thead>
+      <tbody>
+        ${data.items
+          .map(
+            (s) => `<tr>
+              <td><a href="#" class="student-link" data-id="${s.id}" style="color:var(--purple-700);font-weight:700">${escapeHtml(s.name)}</a></td>
+              <td>${escapeHtml(s.email)}</td>
+              <td>${escapeHtml(s.stage || s.level || "—")}</td>
+              <td>${escapeHtml(s.class_name || "—")}</td>
+              <td>${s.last_active ? formatDate(s.last_active) : "—"}</td>
+            </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table></div>
+    <div class="pagination">
+      ${Array.from({ length: totalPages }, (_, i) => i + 1)
+        .map((p) => `<button data-page="${p}" class="${p === studentsState.page ? "active" : ""}">${p}</button>`)
+        .join("")}
+    </div>
+  `;
+  wrap.querySelectorAll(".student-link").forEach((a) =>
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      openStudentProfile(a.dataset.id);
+    })
+  );
+  wrap.querySelectorAll(".pagination button").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      studentsState.page = Number(btn.dataset.page);
+      loadStudentsTable();
+    })
+  );
+}
+
+async function openStudentProfile(id) {
+  const data = await api(`/students/${id}/profile`);
+  const { student, results, skills, notes, attendance, assignments } = data;
+  const learningLabels = { visual: "بصري", auditory: "سمعي", reading_writing: "قرائي/كتابي", kinesthetic: "حركي/تطبيقي", mixed: "مختلط", unknown: "غير محدد" };
+  openModal(`
+    <h3>ملف المتابعة: ${escapeHtml(student.name)}</h3>
+    <p style="color:var(--muted);font-size:.85rem;margin-top:-8px">${escapeHtml(student.email)} · ${escapeHtml(student.class_name || "—")} · ${escapeHtml(student.level)}</p>
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">نسبة التقدم العامة</h4>
+    <div class="progress-bar" style="margin-bottom:6px"><span style="width:${student.progress_percent}%"></span></div>
+    <p style="font-size:.8rem;color:var(--muted)">${student.progress_percent}%</p>
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">نمط التعلّم الإرشادي</h4>
+    <div class="skill-pill"><span>${learningLabels[student.learning_style] || "غير محدد"}</span><select id="profileLearningStyle">
+      ${Object.entries(learningLabels).map(([value, label]) => `<option value="${value}" ${student.learning_style === value ? "selected" : ""}>${label}</option>`).join("")}
+    </select><button class="btn btn-outline btn-sm" id="saveLearningStyle">حفظ</button></div>
+    <p style="font-size:.75rem;color:var(--muted)">النتيجة إرشادية مرنة وليست تشخيصًا ثابتًا.</p>
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">الدرجات</h4>
+    ${
+      results.length
+        ? results.map((r) => `<div class="skill-pill"><span>${escapeHtml(r.title)}</span><span>${r.status === "completed" ? `${r.score}/${r.total_points}` : "لم تُنجز"}</span></div>`).join("")
+        : `<p style="font-size:.82rem;color:var(--muted)">لا توجد نتائج اختبارات بعد.</p>`
+    }
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">مستوى المهارات</h4>
+    ${
+      skills.length
+        ? skills.map((s) => `<div class="skill-pill"><span>${escapeHtml(s.name)}</span><span class="badge ${progressColorBadge(s.mastery_percent)}">${s.mastery_percent}%</span></div>`).join("")
+        : `<p style="font-size:.82rem;color:var(--muted)">لا توجد بيانات مهارات بعد.</p>`
+    }
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">الحضور (آخر 30 يوم)</h4>
+    <p style="font-size:.82rem">حاضرة: ${attendance.filter((a) => a.status === "present").length} · غائبة: ${attendance.filter((a) => a.status === "absent").length} · متأخرة: ${attendance.filter((a) => a.status === "late").length}</p>
+    <div class="form-grid"><div class="field">التاريخ<input type="date" id="attendanceDate" value="${new Date().toISOString().slice(0, 10)}"></div><div class="field">الحالة<select id="attendanceStatus"><option value="present">حاضرة</option><option value="absent">غائبة</option><option value="late">متأخرة</option><option value="excused">غياب بعذر</option></select></div></div>
+    <button class="btn btn-outline btn-sm" id="saveAttendance" style="margin-top:8px">حفظ الحضور</button>
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">الواجبات</h4>
+    ${
+      assignments.length
+        ? assignments.map((a) => `<div class="skill-pill"><span>${escapeHtml(a.title)}${a.due_date ? ` · ${escapeHtml(a.due_date)}` : ""}</span><select data-assignment-status="${a.id}"><option value="pending" ${a.status === "pending" ? "selected" : ""}>قيد الانتظار</option><option value="completed" ${a.status === "completed" ? "selected" : ""}>مكتمل</option><option value="late" ${a.status === "late" ? "selected" : ""}>متأخر</option></select><button class="btn btn-danger btn-sm" data-delete-assignment="${a.id}">حذف</button></div>`).join("")
+        : `<p style="font-size:.82rem;color:var(--muted)">لا توجد واجبات مسجّلة.</p>`
+    }
+    <div class="form-grid"><div class="field">واجب جديد<input id="assignmentTitle" placeholder="عنوان الواجب"></div><div class="field">موعد التسليم<input type="date" id="assignmentDueDate"></div></div>
+    <button class="btn btn-outline btn-sm" id="addAssignment" style="margin-top:8px">إضافة واجب</button>
+
+    <h4 style="margin:16px 0 8px;font-size:.9rem">الملاحظات</h4>
+    <div id="notesList">
+      ${
+        notes.length
+          ? notes.map((n) => `<div class="skill-pill" style="display:block"><div>${escapeHtml(n.content)}</div><div style="color:var(--muted);font-size:.75rem;margin-top:4px">${formatDate(n.created_at)}</div></div>`).join("")
+          : `<p style="font-size:.82rem;color:var(--muted)">لا توجد ملاحظات بعد.</p>`
+      }
+    </div>
+    <div class="field" style="margin-top:12px">
+      <textarea id="newNoteText" placeholder="أضيفي ملاحظة جديدة..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <a class="btn btn-outline btn-sm" href="/api/teacher/reports/student/${student.id}.pdf" target="_blank">تصدير PDF</a>
+      <button class="btn btn-outline" id="closeProfileModal">إغلاق</button>
+      <button class="btn btn-primary" id="addNoteBtn">إضافة ملاحظة</button>
+    </div>
+  `);
+  document.getElementById("closeProfileModal").onclick = closeModal;
+  document.getElementById("saveLearningStyle").onclick = async () => {
+    await api(`/students/${id}/learning-style`, { method: "PUT", body: JSON.stringify({ style: document.getElementById("profileLearningStyle").value }) });
+    toast("تم تحديث نمط التعلّم.");
+  };
+  document.getElementById("saveAttendance").onclick = async () => {
+    await api(`/students/${id}/attendance`, { method: "PUT", body: JSON.stringify({ date: document.getElementById("attendanceDate").value, status: document.getElementById("attendanceStatus").value }) });
+    toast("تم حفظ الحضور.");
+    openStudentProfile(id);
+  };
+  document.getElementById("addAssignment").onclick = async () => {
+    const title=document.getElementById("assignmentTitle").value.trim();
+    if (!title) return toast("اكتبي عنوان الواجب.");
+    await api(`/students/${id}/assignments`, { method: "POST", body: JSON.stringify({ title, dueDate: document.getElementById("assignmentDueDate").value || null }) });
+    toast("تمت إضافة الواجب.");
+    openStudentProfile(id);
+  };
+  document.querySelectorAll("[data-assignment-status]").forEach((select) => select.onchange = async () => {
+    await api(`/students/${id}/assignments/${select.dataset.assignmentStatus}`, { method: "PUT", body: JSON.stringify({ status: select.value }) });
+    toast("تم تحديث حالة الواجب.");
+  });
+  document.querySelectorAll("[data-delete-assignment]").forEach((button) => button.onclick = async () => {
+    await api(`/students/${id}/assignments/${button.dataset.deleteAssignment}`, { method: "DELETE" });
+    toast("تم حذف الواجب.");
+    openStudentProfile(id);
+  });
+  document.getElementById("addNoteBtn").onclick = async () => {
+    const text = document.getElementById("newNoteText").value.trim();
+    if (!text) return;
+    try {
+      await api(`/students/${id}/notes`, { method: "POST", body: JSON.stringify({ content: text }) });
+      toast("تمت إضافة الملاحظة.");
+      openStudentProfile(id);
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+}
+
+// ==========================================================================
+// إدارة الطالبات
+// ==========================================================================
+async function renderStudentsManage(target = contentEl) {
+  target.innerHTML = `
+    <div class="card">
+      <div class="toolbar">
+        <button class="btn btn-primary btn-sm" id="addStudentBtn">+ إضافة طالبة</button>
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+          استيراد Excel / مدرستي<input type="file" id="manageImportInput" accept=".xlsx,.csv,.txt" hidden />
+        </label>
+        <a class="btn btn-outline btn-sm" href="/api/teacher/reports/students.xlsx">تصدير Excel</a>
+      </div>
+      <p class="import-help">الأعمدة المطلوبة: اسم الطالبة، البريد الإلكتروني، والفصل. تُقرأ عناوين Excel العربية وعناوين ملفات مدرستي الشائعة تلقائيًا، وكلمة المرور المؤقتة اختيارية.</p>
+      <div id="manageTableWrap"></div>
+    </div>
+  `;
+  document.getElementById("addStudentBtn").onclick = () => openStudentForm();
+  bindStudentImport("manageImportInput", loadManageTable);
+  await loadManageTable();
+}
+
+async function loadManageTable() {
+  const wrap = document.getElementById("manageTableWrap");
+  const data = await api("/students?pageSize=100");
+  if (!data.items.length) {
+    wrap.innerHTML = `<div class="empty-state"><div class="ic">🎓</div>لا توجد طالبات مسجّلات حتى الآن. أضيفي أول طالبة.</div>`;
+    return;
+  }
+  wrap.innerHTML = `<div class="table-wrap">
+    <table>
+      <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>المرحلة</th><th>الفصل</th><th>إجراءات</th></tr></thead>
+      <tbody>
+        ${data.items
+          .map(
+            (s) => `<tr>
+              <td>${escapeHtml(s.name)}</td>
+              <td>${escapeHtml(s.email)}</td>
+              <td>${escapeHtml(s.stage || s.level || "—")}</td>
+              <td>${escapeHtml(s.class_name || "—")}</td>
+              <td>
+                <button class="btn btn-outline btn-sm" data-edit="${s.id}">تعديل</button>
+                <button class="btn btn-secondary btn-sm" data-reset-student="${s.id}" data-name="${escapeHtml(s.name)}">كلمة مرور</button>
+                <button class="btn btn-danger btn-sm" data-del="${s.id}" data-name="${escapeHtml(s.name)}">حذف</button>
+              </td>
+            </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table></div>
+  `;
+  wrap.querySelectorAll("[data-edit]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const s = data.items.find((x) => x.id == btn.dataset.edit);
+      openStudentForm(s);
+    })
+  );
+  wrap.querySelectorAll("[data-del]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      confirmAction(`هل تأكيد حذف الطالبة "${btn.dataset.name}"؟ لا يمكن التراجع عن هذا الإجراء.`, async () => {
+        await api(`/students/${btn.dataset.del}`, { method: "DELETE" });
+        toast("تم حذف الطالبة.");
+        loadManageTable();
+      });
+    })
+  );
+  wrap.querySelectorAll("[data-reset-student]").forEach((btn) =>
+    btn.addEventListener("click", () => openStudentPasswordForm(btn.dataset.resetStudent, btn.dataset.name))
+  );
+}
+
+function openStudentPasswordForm(studentId, studentName) {
+  openModal(`
+    <h3>كلمة مرور الطالبة: ${escapeHtml(studentName)}</h3>
+    <div id="studentPasswordMsg"></div>
+    <div class="field">كلمة المرور المؤقتة<input id="studentTemporaryPassword" type="password" minlength="10" placeholder="10 أحرف على الأقل، منها حرف ورقم"></div>
+    <p style="color:var(--muted);font-size:.82rem">سيُطلب من الطالبة تغييرها بعد أول دخول.</p>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelStudentPassword">إلغاء</button><button class="btn btn-primary" id="saveStudentPassword">حفظ</button></div>`);
+  document.getElementById("cancelStudentPassword").onclick = closeModal;
+  document.getElementById("saveStudentPassword").onclick = async () => {
+    try {
+      await api(`/students/${studentId}/reset-password`, { method: "PUT", body: JSON.stringify({ newPassword: document.getElementById("studentTemporaryPassword").value }) });
+      closeModal();
+      toast("تم تعيين كلمة المرور المؤقتة.");
+    } catch (error) {
+      document.getElementById("studentPasswordMsg").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+    }
+  };
+}
+
+function openStudentForm(student) {
+  const selectedClass = allClasses.find((item) => String(item.id) === String(student?.class_id || ""));
+  openModal(`
+    <h3>${student ? "تعديل بيانات الطالبة" : "إضافة طالبة جديدة"}</h3>
+    <div id="studentFormMsg"></div>
+    <div class="form-grid">
+      <div class="field">الاسم<input id="sfName" value="${escapeHtml(student?.name || "")}" /></div>
+      <div class="field">البريد الإلكتروني<input id="sfEmail" value="${escapeHtml(student?.email || "")}" /></div>
+      <div class="field">الفصل
+        <select id="sfClass">
+          <option value="">اختاري الفصل</option>
+          ${allClasses.map((c) => `<option value="${c.id}" ${student?.class_id == c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field">المرحلة<input id="sfStage" value="${escapeHtml(selectedClass?.level || student?.stage || student?.level || "")}" readonly /></div>
+      ${student ? "" : '<div class="field">كلمة المرور المؤقتة<input id="sfPassword" type="password" minlength="10" placeholder="10 أحرف على الأقل وحرف ورقم" /></div>'}
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="cancelStudentForm">إلغاء</button>
+      <button class="btn btn-primary" id="saveStudentForm">حفظ</button>
+    </div>
+  `);
+  document.getElementById("cancelStudentForm").onclick = closeModal;
+  document.getElementById("sfClass").onchange = (event) => {
+    const selected = allClasses.find((item) => String(item.id) === String(event.target.value));
+    document.getElementById("sfStage").value = selected?.level || "";
+  };
+  document.getElementById("saveStudentForm").onclick = async () => {
+    const payload = {
+      name: document.getElementById("sfName").value.trim(),
+      email: document.getElementById("sfEmail").value.trim(),
+      classId: document.getElementById("sfClass").value || null,
+      temporaryPassword: document.getElementById("sfPassword")?.value || undefined,
+    };
+    if (!payload.classId) {
+      document.getElementById("studentFormMsg").innerHTML = '<div class="form-error">اختاري فصلًا للطالبة.</div>';
+      return;
+    }
+    try {
+      if (student) {
+        await api(`/students/${student.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await api("/students", { method: "POST", body: JSON.stringify(payload) });
+      }
+      closeModal();
+      toast("تم حفظ بيانات الطالبة.");
+      loadManageTable();
+    } catch (err) {
+      document.getElementById("studentFormMsg").innerHTML = `<div class="form-error" style="margin-bottom:10px">${escapeHtml(err.message)}</div>`;
+    }
+  };
+}
+
+const PORTFOLIO_CATEGORY_META = {
+  homework: { label: "واجب", icon: "📖" },
+  worksheet: { label: "ورقة عمل", icon: "📝" },
+  task: { label: "مهمة", icon: "📌" },
+  project: { label: "مشروع", icon: "🏗️" },
+  achievement_image: { label: "صورة إنجاز", icon: "🖼️" },
+  other: { label: "ملف آخر", icon: "📎" },
+};
+
+const PORTFOLIO_REVIEW_META = {
+  pending: { label: "بانتظار المراجعة", icon: "⏳" },
+  approved: { label: "تم الاعتماد", icon: "✅" },
+  needs_revision: { label: "يحتاج تعديل", icon: "✏️" },
+};
+
+function formatFileSize(bytes) {
+  const size = Number(bytes || 0);
+  if (size < 1024) return `${size} بايت`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} كيلوبايت`;
+  return `${(size / (1024 * 1024)).toFixed(1)} ميجابايت`;
+}
+
+function portfolioReviewBadge(status) {
+  const review = PORTFOLIO_REVIEW_META[status] || PORTFOLIO_REVIEW_META.pending;
+  return `<span class="portfolio-review-badge ${escapeHtml(status || "pending")}">${review.icon} ${review.label}</span>`;
+}
+
+function openStudentFilePreview(file) {
+  const source = `/api/teacher/student-files/${file.id}/file`;
+  const preview = file.mimeType === "application/pdf"
+    ? `<iframe class="portfolio-preview-frame" src="${source}" title="معاينة ${escapeHtml(file.title)}"></iframe>`
+    : `<img class="portfolio-preview-image" src="${source}" alt="معاينة ${escapeHtml(file.title)}" />`;
+  openModal(`
+    <header class="portfolio-dialog-header">
+      <div><span>${escapeHtml(file.studentName)} · ${escapeHtml(file.className || "—")}</span><h3>${escapeHtml(file.title)}</h3></div>
+      <button class="dialog-close" id="closePortfolioPreview" type="button" aria-label="إغلاق">×</button>
+    </header>
+    <div class="portfolio-preview-stage">${preview}</div>
+    <div class="modal-actions"><a class="btn btn-primary" href="/api/teacher/student-files/${file.id}/download">تنزيل الملف</a><button class="btn btn-outline" id="dismissPortfolioPreview" type="button">إغلاق</button></div>
+  `,"portfolio-preview-dialog");
+  document.getElementById("closePortfolioPreview").onclick=closeModal;
+  document.getElementById("dismissPortfolioPreview").onclick=closeModal;
+}
+
+function openStudentFileReview(file) {
+  const alreadyAwarded=Number(file.awardedPoints||0)>0;
+  const review=PORTFOLIO_REVIEW_META[file.reviewStatus]||PORTFOLIO_REVIEW_META.pending;
+  openModal(`
+    <header class="portfolio-dialog-header">
+      <div><span>مراجعة عمل الطالبة</span><h3>${escapeHtml(file.studentName)} · ${escapeHtml(file.className||"—")}</h3></div>
+      <button class="dialog-close" id="closePortfolioReview" type="button" aria-label="إغلاق">×</button>
+    </header>
+    <div class="portfolio-review-summary">
+      <div><small>عنوان العمل</small><strong>${escapeHtml(file.title)}</strong></div>
+      <div><small>النوع</small><strong>${escapeHtml((PORTFOLIO_CATEGORY_META[file.category]||PORTFOLIO_CATEGORY_META.other).label)}</strong></div>
+      <div><small>الحالة الحالية</small><strong>${review.icon} ${review.label}</strong></div>
+    </div>
+    <label class="form-group portfolio-comment-field">تعليق للطالبة
+      <textarea id="portfolioTeacherComment" maxlength="1000" placeholder="اكتبي ملاحظتك أو التعديل المطلوب...">${escapeHtml(file.teacherComment||"")}</textarea>
+    </label>
+    ${alreadyAwarded?`<div class="portfolio-awarded-note">✨ أضيفت للطالبة <strong>${Number(file.awardedPoints)} من نقاط مدار</strong> عند اعتماد هذا العمل.</div>`:`
+      <fieldset class="portfolio-points-fieldset">
+        <legend>نقاط مدار عند الاعتماد</legend>
+        <p>اختاري عددًا سريعًا أو اكتبي عددًا آخر. لن تُضاف النقاط إلا عند الاعتماد.</p>
+        <div class="portfolio-points-row">
+          ${[1,2,5,10].map(points=>`<button class="portfolio-point-choice" type="button" data-portfolio-points="${points}">${points===1?'⭐':points===2?'⭐⭐':points===5?'🏅':'👑'}<strong>${points}</strong></button>`).join("")}
+          <label class="portfolio-manual-points">عدد آخر<input id="portfolioManualPoints" type="number" min="1" max="1000" inputmode="numeric" placeholder="مثال: 7" /></label>
+        </div>
+      </fieldset>`}
+    <div id="portfolioReviewMessage"></div>
+    <div class="modal-actions portfolio-review-actions">
+      <button class="btn btn-outline" id="savePortfolioComment" type="button">حفظ التعليق</button>
+      <button class="btn btn-warning" id="requestPortfolioRevision" type="button" ${alreadyAwarded?'disabled title="سبق اعتماد العمل وإضافة نقاطه"':''}>طلب تعديل</button>
+      <button class="btn btn-primary" id="approvePortfolioFile" type="button">${alreadyAwarded?'حفظ الاعتماد':'اعتماد وإضافة نقاط مدار ✨'}</button>
+    </div>
+  `,"portfolio-review-dialog");
+
+  document.getElementById("closePortfolioReview").onclick=closeModal;
+  let selectedPoints=0;
+  const pointButtons=[...document.querySelectorAll("[data-portfolio-points]")];
+  const manual=document.getElementById("portfolioManualPoints");
+  pointButtons.forEach(button=>{
+    button.onclick=()=>{
+      selectedPoints=Number(button.dataset.portfolioPoints);
+      pointButtons.forEach(choice=>choice.classList.toggle("selected",choice===button));
+      if(manual) manual.value="";
+    };
+  });
+  if(manual) manual.oninput=()=>{
+    selectedPoints=0;
+    pointButtons.forEach(choice=>choice.classList.remove("selected"));
+  };
+
+  async function saveReview(status) {
+    const comment=document.getElementById("portfolioTeacherComment").value.trim();
+    const message=document.getElementById("portfolioReviewMessage");
+    const points=alreadyAwarded?Number(file.awardedPoints):(Number(manual?.value||0)||selectedPoints);
+    if(status==="needs_revision"&&!comment) {
+      message.innerHTML='<div class="form-error">اكتبي للطالبة التعديل المطلوب أولًا.</div>';
+      return;
+    }
+    if(status==="approved"&&!alreadyAwarded&&points<1) {
+      message.innerHTML='<div class="form-error">حددي نقاط مدار قبل اعتماد العمل.</div>';
+      return;
+    }
+    message.innerHTML="";
+    const controls=[...document.querySelectorAll(".portfolio-review-dialog button")];
+    controls.forEach(control=>control.disabled=true);
+    try {
+      const result=await api(`/student-files/${file.id}/review`,{method:"PUT",body:JSON.stringify({status,comment,points})});
+      closeModal();
+      const success=status==="approved"
+        ? result.pointsAdded?`تم اعتماد العمل وإضافة ${result.pointsAdded} من نقاط مدار ✨`:"تم حفظ اعتماد العمل."
+        : status==="needs_revision"?"تم إرسال طلب التعديل للطالبة.":"تم حفظ تعليقكِ للطالبة.";
+      toast(success);
+      await renderStudentFiles();
+    } catch(error) {
+      controls.forEach(control=>control.disabled=false);
+      if(alreadyAwarded) document.getElementById("requestPortfolioRevision").disabled=true;
+      message.innerHTML=`<div class="form-error">${escapeHtml(error.message)}</div>`;
+    }
+  }
+  document.getElementById("savePortfolioComment").onclick=()=>saveReview(file.reviewStatus||"pending");
+  document.getElementById("requestPortfolioRevision").onclick=()=>saveReview("needs_revision");
+  document.getElementById("approvePortfolioFile").onclick=()=>saveReview("approved");
+}
+
+async function renderStudentFiles() {
+  const data = await api("/student-files");
+  contentEl.innerHTML = `
+    <section class="student-files-hero">
+      <div class="student-files-hero-icon" aria-hidden="true">📁</div>
+      <div><span>إدارة الطالبات</span><h3>ملفات الطالبات</h3><p>هنا تظهر الواجبات وأوراق العمل والمهام والمشاريع وصور الإنجاز التي ترفعها الطالبات من حساباتهن.</p></div>
+      <strong>${data.files.length} ملف</strong>
+    </section>
+    <div class="card">
+      <div class="toolbar">
+        <input id="studentFilesSearch" placeholder="بحث باسم الطالبة أو عنوان العمل..." />
+        <select id="studentFilesCategory"><option value="">كل أنواع الأعمال</option>${Object.entries(PORTFOLIO_CATEGORY_META).map(([key, item]) => `<option value="${key}">${item.label}</option>`).join("")}</select>
+      </div>
+      <div id="studentFilesWrap">
+        ${data.files.length ? `<div class="table-wrap"><table id="studentFilesTable"><thead><tr><th>الطالبة والفصل</th><th>عنوان الملف ونوعه</th><th>تاريخ الرفع</th><th>الحالة</th><th>المعاينة والتنزيل</th><th>المراجعة</th></tr></thead><tbody>${data.files.map((file) => {
+          const meta = PORTFOLIO_CATEGORY_META[file.category] || PORTFOLIO_CATEGORY_META.other;
+          const search = `${file.studentName} ${file.studentEmail} ${file.title} ${file.note} ${file.className}`.toLocaleLowerCase("ar");
+          const fileKind = file.mimeType === "application/pdf" ? "PDF" : "صورة";
+          return `<tr data-student-file data-category="${escapeHtml(file.category)}" data-search="${escapeHtml(search)}">
+            <td><strong>${escapeHtml(file.studentName)}</strong><br><small>${escapeHtml(file.className || "—")} · ${escapeHtml(file.studentEmail)}</small></td>
+            <td><strong>${escapeHtml(file.title)}</strong><br><span class="portfolio-type-badge"><i aria-hidden="true">${meta.icon}</i>${meta.label}</span><small class="portfolio-file-meta">${fileKind} · ${escapeHtml(file.originalName)} · ${formatFileSize(file.sizeBytes)}</small></td>
+            <td>${formatDate(file.createdAt)}</td>
+            <td>${portfolioReviewBadge(file.reviewStatus)}${file.awardedPoints?`<small class="portfolio-points-added">+${Number(file.awardedPoints)} نقطة</small>`:""}</td>
+            <td><div class="portfolio-table-actions"><button class="btn btn-secondary btn-sm" type="button" data-preview-file="${file.id}">معاينة</button><a class="btn btn-outline btn-sm" href="/api/teacher/student-files/${file.id}/download">تنزيل</a></div></td>
+            <td><button class="btn btn-primary btn-sm" type="button" data-review-file="${file.id}">${file.reviewStatus==="pending"?"مراجعة":"فتح المراجعة"}</button></td>
+          </tr>`;
+        }).join("")}</tbody></table></div><div class="empty-state" id="studentFilesNoResults" hidden>لا توجد ملفات مطابقة للبحث.</div>` : '<div class="empty-state"><div class="ic">📁</div><p>لم ترفع الطالبات أعمالًا بعد.</p></div>'}
+      </div>
+    </div>`;
+
+  if (!data.files.length) return;
+  const searchInput = document.getElementById("studentFilesSearch");
+  const categoryInput = document.getElementById("studentFilesCategory");
+  const rows = [...document.querySelectorAll("[data-student-file]")];
+  const noResults = document.getElementById("studentFilesNoResults");
+  function filterFiles() {
+    const search = searchInput.value.trim().toLocaleLowerCase("ar");
+    const category = categoryInput.value;
+    let visible = 0;
+    rows.forEach((row) => {
+      const matches = (!search || row.dataset.search.includes(search)) && (!category || row.dataset.category === category);
+      row.hidden = !matches;
+      if (matches) visible++;
+    });
+    noResults.hidden = visible !== 0;
+  }
+  searchInput.oninput = filterFiles;
+  categoryInput.onchange = filterFiles;
+  document.querySelectorAll("[data-preview-file]").forEach(button=>button.onclick=()=>openStudentFilePreview(data.files.find(file=>file.id===Number(button.dataset.previewFile))));
+  document.querySelectorAll("[data-review-file]").forEach(button=>button.onclick=()=>openStudentFileReview(data.files.find(file=>file.id===Number(button.dataset.reviewFile))));
+}
+
+// ========================================================================== 
+// سجل المتابعة
+// ==========================================================================
+let followUpPeriod = 1;
+let followUpMode = sessionStorage.getItem("madarFollowUpMode") === "tests" ? "tests" : "tracking";
+let followUpRowsById = new Map();
+let followUpLoadedSettings = {};
+
+function cleanScore(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const number = Number(value);
+  return Number.isInteger(number) ? String(number) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function scoreInput(studentId, field, value, max) {
+  return `<input class="score-input" type="number" min="0" max="${Number(max)}" step="0.5" data-student="${studentId}" data-score="${field}" value="${value === null || value === undefined ? "" : escapeHtml(value)}" />`;
+}
+
+function maxSetting(name, label, value) {
+  return `<label class="score-setting">${label}<input class="max-input" type="number" min="0.5" max="1000" step="0.5" data-max-setting="${name}" value="${escapeHtml(value)}" /></label>`;
+}
+
+async function renderFollowUp() {
+  const trackingMode = followUpMode === "tracking";
+  await loadSchoolSettings();
+  if (!trackingMode) await prepareAcademicSelection("followUp");
+  contentEl.innerHTML = `
+    <div class="card follow-up-card">
+      <div class="follow-up-top-row">
+        <div class="follow-up-main-tabs" role="tablist" aria-label="أقسام سجل المتابعة">
+          <button class="follow-up-main-tab ${trackingMode ? "active" : ""}" type="button" data-follow-mode="tracking" role="tab" aria-selected="${trackingMode}">
+            <span aria-hidden="true">📖</span><span class="follow-up-tab-copy"><strong>متابعة</strong><small>الحضور والمشاركة والواجبات والمهام</small></span>
+          </button>
+          <button class="follow-up-main-tab ${!trackingMode ? "active" : ""}" type="button" data-follow-mode="tests" role="tab" aria-selected="${!trackingMode}">
+            <span aria-hidden="true">📝</span><span class="follow-up-tab-copy"><strong>سجل الدرجات</strong><small>الفترات والاختبارات والمجموع</small></span>
+          </button>
+        </div>
+        <div class="follow-up-top-tools">
+          <label class="follow-up-search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="followUpSearch" placeholder="بحث باسم الطالبة أو البريد..." autocomplete="off" />
+          </label>
+          <div class="follow-up-top-action" id="followUpTopAction" aria-live="polite"></div>
+        </div>
+      </div>
+      ${trackingMode ? `
+        <div class="follow-up-categories follow-up-action-buttons" role="group" aria-label="خيارات المتابعة">
+          <button type="button"><span aria-hidden="true">🗓️</span><strong>الحضور</strong></button>
+          <button type="button"><span aria-hidden="true">🙋‍♀️</span><strong>المشاركة</strong></button>
+          <button type="button"><span aria-hidden="true">📖</span><strong>الواجبات</strong></button>
+          <button type="button"><span aria-hidden="true">📚</span><strong>المهام</strong></button>
+        </div>
+      ` : `
+        ${academicSelectorHtml("followUp")}
+        <div class="toolbar follow-up-period-toolbar">
+          <div class="tabs" style="margin:0">
+            ${[1, 2, 3].map((period) => `<button class="tab-btn ${followUpPeriod === period ? "active" : ""}" data-follow-period="${period}">${period === 1 ? "الفترة الأولى" : period === 2 ? "الفترة الثانية" : "الفترة الثالثة"}</button>`).join("")}
+          </div>
+          <div class="spacer"></div>
+          <span class="follow-up-grade-note">جدول الدرجات محفوظ لكل ترم على حدة</span>
+        </div>
+        <div id="followUpContent"><div class="empty-state">جارٍ تحميل جدول الدرجات...</div></div>
+      `}
+    </div>
+  `;
+  document.querySelectorAll("[data-follow-mode]").forEach((button) => {
+    button.onclick = () => {
+      followUpMode = button.dataset.followMode;
+      sessionStorage.setItem("madarFollowUpMode", followUpMode);
+      renderFollowUp();
+    };
+  });
+  if (trackingMode) return;
+  bindAcademicSelector("followUp", renderFollowUp);
+  document.querySelectorAll("[data-follow-period]").forEach((button) => {
+    button.onclick = () => {
+      followUpPeriod = Number(button.dataset.followPeriod);
+      renderFollowUp();
+    };
+  });
+  await loadFollowUpPeriod();
+  document.getElementById("followUpSearch").oninput = (event) => {
+    const query = event.target.value.trim().toLocaleLowerCase("ar");
+    document.querySelectorAll("#followUpTable tbody tr").forEach((row) => {
+      row.hidden = query !== "" && !row.dataset.search.includes(query);
+    });
+  };
+}
+
+async function loadFollowUpPeriod() {
+  const data = await api(`/follow-up?period=${followUpPeriod}&${academicQuery("followUp")}`);
+  const target = document.getElementById("followUpContent");
+  const settings = data.settings;
+  followUpLoadedSettings = { ...settings };
+  followUpRowsById = new Map(data.rows.map((row) => [Number(row.id), row]));
+  const settingsHtml = followUpPeriod < 3
+    ? [
+        maxSetting("periodicTestMax", "الدرجة الكاملة للاختبار الفتري", settings.periodicTestMax),
+        maxSetting("participationMax", "الدرجة الكاملة للمشاركة", settings.participationMax),
+        maxSetting("homeworkMax", "الدرجة الكاملة للواجبات", settings.homeworkMax),
+        maxSetting("tasksMax", "الدرجة الكاملة للمهام", settings.tasksMax),
+      ].join("")
+    : [
+        maxSetting("quizMax", "الدرجة الكاملة لكل اختبار فوري", settings.quizMax),
+        maxSetting("participationMax", "الدرجة الكاملة لمتوسط المشاركة", settings.participationMax),
+        maxSetting("homeworkMax", "الدرجة الكاملة لمتوسط الواجبات", settings.homeworkMax),
+        maxSetting("tasksMax", "الدرجة الكاملة لمتوسط المهام", settings.tasksMax),
+        maxSetting("finalExamMax", "الدرجة الكاملة للاختبار النهائي", settings.finalExamMax),
+      ].join("");
+
+  const rowsHtml = data.rows.map((row) => {
+    const searchText = escapeHtml(`${row.name} ${row.email}`.toLocaleLowerCase("ar"));
+    if (followUpPeriod < 3) {
+      return `<tr data-student-id="${row.id}" data-search="${searchText}">
+        <td>${escapeHtml(row.email)}</td>
+        <td>${escapeHtml(row.name)}</td>
+        <td>${scoreInput(row.id, "periodicTestScore", row.periodicTestScore, settings.periodicTestMax)}</td>
+        <td>${scoreInput(row.id, "participationScore", row.participationScore, settings.participationMax)}</td>
+        <td>${scoreInput(row.id, "homeworkScore", row.homeworkScore, settings.homeworkMax)}</td>
+        <td>${scoreInput(row.id, "tasksScore", row.tasksScore, settings.tasksMax)}</td>
+        <td class="tracking-total">${cleanScore(row.total)}</td>
+      </tr>`;
+    }
+    return `<tr data-student-id="${row.id}" data-search="${searchText}">
+      <td>${escapeHtml(row.email)}</td>
+      <td>${escapeHtml(row.name)}</td>
+      <td>${scoreInput(row.id, "quizOneScore", row.quizOneScore, settings.quizMax)}</td>
+      <td>${scoreInput(row.id, "quizTwoScore", row.quizTwoScore, settings.quizMax)}</td>
+      <td><span class="tracking-derived" data-derived="quiz">${cleanScore(row.quizAverage)}</span></td>
+      <td><span class="tracking-derived" data-derived="participation" data-ratio="${Number(row.participationRatio || 0)}">${cleanScore(row.participationAverage)}</span></td>
+      <td><span class="tracking-derived" data-derived="homework" data-ratio="${Number(row.homeworkRatio || 0)}">${cleanScore(row.homeworkAverage)}</span></td>
+      <td><span class="tracking-derived" data-derived="tasks" data-ratio="${Number(row.tasksRatio || 0)}">${cleanScore(row.tasksAverage)}</span></td>
+      <td>${scoreInput(row.id, "finalExamScore", row.finalExamScore, settings.finalExamMax)}</td>
+      <td class="tracking-total">${cleanScore(row.total)}</td>
+    </tr>`;
+  }).join("");
+
+  target.innerHTML = `
+    <p class="tracking-note">حددي الدرجة الكاملة لكل بند، ثم أدخلي درجات الطالبات واحفظي السجل.</p>
+    ${followUpPeriod === 3 ? '<p class="tracking-note">متوسطات المشاركة والواجبات والمهام تُحسب تلقائيًا من الفترتين الأولى والثانية مع مراعاة الدرجة الكاملة في كل فترة.</p>' : ""}
+    <div class="score-settings">${settingsHtml}</div>
+    ${data.rows.length ? `<div class="table-wrap"><table id="followUpTable"><thead><tr>${followUpPeriod < 3
+      ? "<th>البريد الإلكتروني</th><th>اسم الطالبة</th><th>الاختبار الفتري</th><th>المشاركة</th><th>الواجبات</th><th>المهام</th><th>المجموع</th>"
+      : "<th>البريد الإلكتروني</th><th>اسم الطالبة</th><th>اختبار فوري 1</th><th>اختبار فوري 2</th><th>متوسط الاختبارين</th><th>متوسط المشاركة</th><th>متوسط الواجبات</th><th>متوسط المهام</th><th>الاختبار النهائي</th><th>المجموع</th>"
+    }</tr></thead><tbody>${rowsHtml}</tbody></table></div>` : '<div class="empty-state">لا توجد طالبات في فصولك بعد.</div>'}
+    <div class="modal-actions"><button class="btn btn-primary" id="saveFollowUp" ${data.rows.length ? "" : "disabled"}>حفظ سجل الفترة</button></div>
+  `;
+
+  document.querySelectorAll(".score-input").forEach((input) => {
+    input.oninput = () => recalculateFollowUpRow(input.closest("tr"));
+  });
+  document.querySelectorAll(".max-input").forEach((input) => {
+    input.oninput = () => {
+      updateFollowUpMaximums();
+      document.querySelectorAll("#followUpTable tbody tr").forEach(recalculateFollowUpRow);
+    };
+  });
+  document.getElementById("saveFollowUp").onclick = saveFollowUpPeriod;
+}
+
+function currentMax(name) {
+  return Number(document.querySelector(`[data-max-setting="${name}"]`)?.value || 0);
+}
+
+function updateFollowUpMaximums() {
+  const mapping = followUpPeriod < 3
+    ? { periodicTestScore: "periodicTestMax", participationScore: "participationMax", homeworkScore: "homeworkMax", tasksScore: "tasksMax" }
+    : { quizOneScore: "quizMax", quizTwoScore: "quizMax", finalExamScore: "finalExamMax" };
+  Object.entries(mapping).forEach(([field, maxName]) => {
+    document.querySelectorAll(`[data-score="${field}"]`).forEach((input) => { input.max = currentMax(maxName); });
+  });
+}
+
+function numericInput(row, field) {
+  const value = row.querySelector(`[data-score="${field}"]`)?.value;
+  return value === "" || value === undefined ? null : Number(value);
+}
+
+function recalculateFollowUpRow(row) {
+  if (!row) return;
+  let total = 0;
+  if (followUpPeriod < 3) {
+    ["periodicTestScore", "participationScore", "homeworkScore", "tasksScore"].forEach((field) => { total += numericInput(row, field) || 0; });
+  } else {
+    const quizValues = [numericInput(row, "quizOneScore"), numericInput(row, "quizTwoScore")].filter((value) => value !== null);
+    const quizAverage = quizValues.length ? quizValues.reduce((sum, value) => sum + value, 0) / quizValues.length : 0;
+    row.querySelector('[data-derived="quiz"]').textContent = cleanScore(quizValues.length ? quizAverage : null);
+    const derivedMaxes = { participation: "participationMax", homework: "homeworkMax", tasks: "tasksMax" };
+    let derivedTotal = 0;
+    Object.entries(derivedMaxes).forEach(([key, maxName]) => {
+      const element = row.querySelector(`[data-derived="${key}"]`);
+      const value = Number(element.dataset.ratio || 0) * currentMax(maxName);
+      element.textContent = cleanScore(value);
+      derivedTotal += value;
+    });
+    total = quizAverage + derivedTotal + (numericInput(row, "finalExamScore") || 0);
+  }
+  row.querySelector(".tracking-total").textContent = cleanScore(total);
+}
+
+async function saveFollowUpPeriod() {
+  const button = document.getElementById("saveFollowUp");
+  button.disabled = true;
+  const settings = { ...followUpLoadedSettings };
+  document.querySelectorAll(".max-input").forEach((input) => { settings[input.dataset.maxSetting] = Number(input.value); });
+  const fields = followUpPeriod < 3
+    ? ["periodicTestScore", "participationScore", "homeworkScore", "tasksScore"]
+    : ["quizOneScore", "quizTwoScore", "finalExamScore"];
+  const rows = [...document.querySelectorAll("#followUpTable tbody tr")].map((row) => {
+    const original = followUpRowsById.get(Number(row.dataset.studentId)) || {};
+    const record = { studentId: Number(row.dataset.studentId) };
+    fields.forEach((field) => {
+      const input = row.querySelector(`[data-score="${field}"]`);
+      record[field] = input ? numericInput(row, field) : (original[field] ?? null);
+    });
+    return record;
+  });
+  try {
+    const selection = normalizeAcademicSelection("followUp");
+    await api("/follow-up", { method: "PUT", body: JSON.stringify({ period: followUpPeriod, settings, rows, stage: selection.stage, gradeLabel: actualAcademicGradeLabel("followUp"), classId: selection.classId, academicYear: schoolSettings?.academicYear || "", semester: schoolSettings?.currentSemester || "first" }) });
+    toast("تم حفظ سجل المتابعة.");
+    await loadFollowUpPeriod();
+  } catch (error) {
+    toast(error.message);
+    button.disabled = false;
+  }
+}
+
+// ==========================================================================
+// النقاط التحفيزية
+// ==========================================================================
+async function renderMotivation() {
+  contentEl.innerHTML = `
+    <section class="motivation-frame-shell">
+      <iframe class="motivation-app-frame" src="motivation.html?v=5" title="مشروع نقاط التحفيز" loading="eager"></iframe>
+    </section>
+  `;
+}
+
+// ==========================================================================
+// الاختبارات (قبلي / بعدي / قصيرة)
+// ==========================================================================
+const TEST_TYPE_LABELS = { pre_diagnostic: "تشخيصي قبلي", post_diagnostic: "تشخيصي بعدي", quiz: "اختبار قصير" };
+let testsPanelMode = "pre_diagnostic";
+
+function openTestsPanel(type = "pre_diagnostic") {
+  testsPanelMode = type;
+  navigate("tests-panel");
+}
+
+async function renderTestsPanel() {
+  await prepareAcademicSelection("tests");
+  contentEl.innerHTML = `
+    ${academicSelectorHtml("tests")}
+    <div class="student-panel-tabs" role="tablist" aria-label="أقسام الاختبارات">
+      <button class="tab-btn ${testsPanelMode === "pre_diagnostic" ? "active" : ""}" data-tests-panel="pre_diagnostic">الاختبار التشخيصي القبلي</button>
+      <button class="tab-btn ${testsPanelMode === "post_diagnostic" ? "active" : ""}" data-tests-panel="post_diagnostic">الاختبار التشخيصي البعدي</button>
+      <button class="tab-btn ${testsPanelMode === "quiz" ? "active" : ""}" data-tests-panel="quiz">الاختبارات القصيرة</button>
+    </div>
+    <div id="testsPanelContent"></div>
+  `;
+  document.querySelectorAll("[data-tests-panel]").forEach((button) => {
+    button.onclick = () => {
+      testsPanelMode = button.dataset.testsPanel;
+      renderTestsPanel();
+    };
+  });
+  bindAcademicSelector("tests", renderTestsPanel);
+  await renderTestsSection(testsPanelMode)(document.getElementById("testsPanelContent"));
+}
+
+function renderTestsSection(type) {
+  return async (target = contentEl) => {
+    target.innerHTML = `
+      <div class="card">
+        <div class="toolbar">
+          <button class="btn btn-primary btn-sm" id="newTestBtn">+ إنشاء اختبار</button>
+        </div>
+        <div id="testsWrap"></div>
+      </div>
+    `;
+    document.getElementById("newTestBtn").onclick = () => openTestForm(type);
+    await loadTestsList(type);
+  };
+}
+
+async function loadTestsList(type) {
+  const wrap = document.getElementById("testsWrap");
+  const query = new URLSearchParams(academicQuery("tests"));
+  query.set("type", type);
+  if (recentCreatedTestId > 0 && recentCreatedTestType === type) query.set("includeId", String(recentCreatedTestId));
+  const tests = await api(`/tests?${query.toString()}`);
+  if (!tests.length) {
+    wrap.innerHTML = `<div class="empty-state"><div class="ic">📝</div>لا توجد اختبارات من هذا النوع بعد.</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>العنوان</th><th>المرحلة والصف</th><th>الفصل</th><th>المهارة</th><th>الحالة</th><th>عدد الأسئلة</th><th>الإجابات</th><th>إجراءات</th></tr></thead>
+      <tbody>
+        ${tests
+          .map(
+            (t) => `<tr ${Number(t.id) === recentCreatedTestId ? 'class="recent-created-test-row" data-recent-created-test-row="1"' : ""}>
+              <td>${escapeHtml(t.title)}${Number(t.id) === recentCreatedTestId ? '<br><span class="badge badge-green">تم إنشاؤه الآن</span>' : ""}${Number(t.outside_filter || 0) ? '<br><span class="badge badge-orange">خارج الفلتر الحالي</span>' : ""}</td>
+              <td>${escapeHtml(`${t.stage || "—"} · ${t.grade_label || "—"}`)}</td>
+              <td>${escapeHtml(t.class_name || "—")}</td>
+              <td>${escapeHtml(t.question_source === "lesson_bank" ? "جميع مهارات المنهج" : (t.skill_name || "—"))}</td>
+              <td><span class="badge ${t.status === "published" ? "badge-green" : "badge-gray"}">${t.status === "published" ? "منشور" : "مسودة"}</span></td>
+              <td>${t.question_source === "lesson_bank" ? `${t.approved_lesson_count}/${t.question_count} مهارة معتمدة` : t.question_count}</td>
+              <td>${t.completed_count}/${t.assigned_count}</td>
+              <td style="white-space:nowrap">
+                <button class="btn btn-outline btn-sm" data-edit="${t.id}">تعديل</button>
+                <button class="btn btn-secondary btn-sm" data-dup="${t.id}">نسخ</button>
+                <button class="btn ${t.status === "published" ? "btn-outline" : "btn-primary"} btn-sm" data-toggle="${t.id}" data-status="${t.status}">${t.status === "published" ? "إلغاء النشر" : "نشر"}</button>
+                <button class="btn btn-outline btn-sm" data-results="${t.id}">النتائج</button>
+                <a class="btn btn-outline btn-sm" href="/api/teacher/reports/test/${t.id}.pdf" target="_blank">طباعة</a>
+                <a class="btn btn-outline btn-sm" href="/api/teacher/reports/test/${t.id}.pdf?answerKey=1" target="_blank">نموذج الإجابة</a>
+                <a class="btn btn-outline btn-sm" href="/api/teacher/reports/test/${t.id}.pdf?report=results" target="_blank">نتائج PDF</a>
+                <a class="btn btn-outline btn-sm" href="/api/teacher/reports/test/${t.id}.pdf?report=analysis" target="_blank">تحليل PDF</a>
+                <button class="btn btn-danger btn-sm" data-del="${t.id}" data-title="${escapeHtml(t.title)}">حذف</button>
+              </td>
+            </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+  const recentRow = wrap.querySelector("[data-recent-created-test-row]");
+  if (recentRow) {
+    requestAnimationFrame(() => recentRow.scrollIntoView({ behavior: "smooth", block: "center" }));
+    sessionStorage.removeItem("madarRecentCreatedTestId");
+    sessionStorage.removeItem("madarRecentCreatedTestType");
+    recentCreatedTestId = 0;
+    recentCreatedTestType = "";
+  }
+  wrap.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", async () => openTestForm(type, await api(`/tests/${b.dataset.edit}`))));
+  wrap.querySelectorAll("[data-dup]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api(`/tests/${b.dataset.dup}/duplicate`, { method: "POST" });
+      toast("تم نسخ الاختبار كمسودة.");
+      loadTestsList(type);
+    })
+  );
+  wrap.querySelectorAll("[data-toggle]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const action = b.dataset.status === "published" ? "unpublish" : "publish";
+      await api(`/tests/${b.dataset.toggle}/${action}`, { method: "POST" });
+      toast(action === "publish" ? "تم نشر الاختبار." : "تم إلغاء نشر الاختبار.");
+      loadTestsList(type);
+    })
+  );
+  wrap.querySelectorAll("[data-results]").forEach((b) => b.addEventListener("click", () => openTestResults(b.dataset.results)));
+  wrap.querySelectorAll("[data-del]").forEach((b) =>
+    b.addEventListener("click", () =>
+      confirmAction(`هل تأكيد حذف الاختبار "${b.dataset.title}"؟`, async () => {
+        await api(`/tests/${b.dataset.del}`, { method: "DELETE" });
+        toast("تم حذف الاختبار.");
+        loadTestsList(type);
+      })
+    )
+  );
+}
+
+let questionDraft = [];
+
+function openTestForm(type, test) {
+  const selection = normalizeAcademicSelection("tests");
+  const matchingClasses = academicClasses(selection);
+  const selectedClassId = String(test?.class_id || selection.classId || "");
+  const existingClass = test?.class_id ? allClasses.find((item) => String(item.id) === String(test.class_id)) : null;
+  const formClasses = existingClass && !matchingClasses.some((item) => String(item.id) === String(existingClass.id)) ? [existingClass, ...matchingClasses] : matchingClasses;
+  const dynamicBankTest = test?.question_source === "lesson_bank";
+  questionDraft = test?.questions?.map((q) => ({
+    type: q.type,
+    questionText: q.question_text,
+    options: q.options || ["", "", "", ""],
+    correctAnswer: q.correct_answer,
+    points: q.points,
+  })) || [];
+
+  openModal(`
+    <h3>${test ? "تعديل الاختبار" : "إنشاء اختبار — " + TEST_TYPE_LABELS[type]}</h3>
+    <div id="testFormMsg"></div>
+    <div class="test-context-note">${escapeHtml(selection.stage)} · ${escapeHtml(selection.gradeLabel)} · ${escapeHtml(schoolSettings?.semesterLabel || "الترم الأول")} · ${escapeHtml(schoolSettings?.academicYear || "العام غير محدد")}</div>
+    <div class="form-grid">
+      <div class="field">عنوان الاختبار<input id="tfTitle" value="${escapeHtml(test?.title || "")}" /></div>
+      <div class="field">المهارة
+        <select id="tfSkill"><option value="">بدون مهارة</option>${allSkills.map((s) => `<option value="${s.id}" ${test?.skill_id == s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}</select>
+      </div>
+      <div class="field">الفصل
+        <select id="tfClass"><option value="">اختاري الفصل</option>${formClasses.map((c, index) => `<option value="${c.id}" ${selectedClassId === String(c.id) ? "selected" : ""}>الفصل ${arabicClassNumber(index)} — ${escapeHtml(c.name)}</option>`).join("")}</select>
+      </div>
+      <div class="field diagnostic-duration-field"><span>مدة الاختبار (دقيقة)</span><div class="diagnostic-duration-row"><input type="number" min="1" max="240" id="tfDuration" value="${Number(test?.duration_minutes) === 0 ? 20 : (test?.duration_minutes || 20)}" ${Number(test?.duration_minutes) === 0 ? "disabled" : ""} /><label class="diagnostic-no-time-option"><input type="checkbox" id="tfNoTime" ${Number(test?.duration_minutes) === 0 ? "checked" : ""}> بدون وقت</label></div></div>
+      <div class="field">عدد المحاولات<input type="number" min="1" max="5" id="tfAttempts" value="${test?.max_attempts || 1}" /></div>
+      <div class="field">تاريخ البداية<input type="datetime-local" id="tfStart" value="${test?.start_at ? test.start_at.slice(0, 16) : ""}" /></div>
+      <div class="field">تاريخ النهاية<input type="datetime-local" id="tfEnd" value="${test?.end_at ? test.end_at.slice(0, 16) : ""}" /></div>
+      <label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="tfShuffle" style="width:auto" ${test ? (Number(test.shuffle_questions) ? "checked" : "") : "checked"}> ترتيب الأسئلة عشوائيًا</label>
+      <label class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row"><input type="checkbox" id="tfShowResult" style="width:auto" ${test ? (Number(test.show_result) ? "checked" : "") : "checked"}> إظهار النتيجة للطالبة بعد التسليم</label>
+    </div>
+
+    ${dynamicBankTest ? `<div class="diagnostic-bank-notice"><strong>اختبار مرتبط ببنك الأسئلة</strong><p>يسحب النظام سؤالًا عشوائيًا واحدًا من كل مهارة ويحفظ نسخة مختلفة لكل طالبة. المعتمد الآن ${Number(test.approved_lesson_count || 0)} من ${Number(test.expected_lesson_count || 0)} مهارة.</p></div>` : `<h4 style="margin:18px 0 10px">الأسئلة</h4><div id="questionsWrap"></div><button class="btn btn-secondary btn-sm" id="addQuestionBtn">+ إضافة سؤال</button>`}
+
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="cancelTestForm">إلغاء</button>
+      <button class="btn btn-secondary" id="saveDraftBtn">حفظ كمسودة</button>
+      <button class="btn btn-primary" id="savePublishBtn">${test?.status === "published" ? "حفظ" : "حفظ ونشر"}</button>
+    </div>
+  `);
+  if (!dynamicBankTest) {
+    renderQuestionsEditor();
+    document.getElementById("addQuestionBtn").onclick = () => {
+      questionDraft.push({ type: "mcq", questionText: "", options: ["", "", "", ""], correctAnswer: "", points: 1 });
+      renderQuestionsEditor();
+    };
+  }
+  const testNoTime = document.getElementById("tfNoTime");
+  const testDuration = document.getElementById("tfDuration");
+  if (testNoTime && testDuration) testNoTime.onchange = () => { testDuration.disabled = testNoTime.checked; };
+  document.getElementById("cancelTestForm").onclick = closeModal;
+  document.getElementById("saveDraftBtn").onclick = () => submitTestForm(type, test, false);
+  document.getElementById("savePublishBtn").onclick = () => submitTestForm(type, test, true);
+}
+
+function renderQuestionsEditor() {
+  const wrap = document.getElementById("questionsWrap");
+  if (!questionDraft.length) {
+    wrap.innerHTML = `<p style="font-size:.82rem;color:var(--muted)">لا توجد أسئلة بعد. أضيفي سؤالًا واحدًا على الأقل قبل النشر.</p>`;
+    return;
+  }
+  wrap.innerHTML = questionDraft
+    .map(
+      (q, idx) => `
+    <div class="question-card">
+      <div class="qhead">
+        <strong>سؤال ${idx + 1}</strong>
+        <button class="btn btn-danger btn-sm" data-remove-q="${idx}">حذف</button>
+      </div>
+      <div class="form-grid">
+        <div class="field">نوع السؤال
+          <select data-q="${idx}" data-field="type">
+            <option value="mcq" ${q.type === "mcq" ? "selected" : ""}>اختيار من متعدد</option>
+            <option value="true_false" ${q.type === "true_false" ? "selected" : ""}>صح أو خطأ</option>
+            <option value="short_answer" ${q.type === "short_answer" ? "selected" : ""}>إجابة قصيرة</option>
+          </select>
+        </div>
+        <div class="field">الدرجة<input type="number" min="1" data-q="${idx}" data-field="points" value="${q.points}" /></div>
+      </div>
+      <div class="field" style="margin-top:10px">نص السؤال<textarea data-q="${idx}" data-field="questionText">${escapeHtml(q.questionText)}</textarea></div>
+      ${
+        q.type === "mcq"
+          ? `<div class="field" style="margin-top:10px">الخيارات (اكتبي الإجابة الصحيحة بالضبط في حقل "الإجابة الصحيحة" أدناه)</div>
+             ${[0, 1, 2, 3]
+               .map(
+                 (i) => `<div class="option-row"><input type="text" placeholder="خيار ${i + 1}" data-q="${idx}" data-field="opt${i}" value="${escapeHtml(q.options?.[i] || "")}" /></div>`
+               )
+               .join("")}
+             <div class="field">الإجابة الصحيحة (نفس نص أحد الخيارات)<input data-q="${idx}" data-field="correctAnswer" value="${escapeHtml(q.correctAnswer || "")}" /></div>`
+          : q.type === "true_false"
+          ? `<div class="field" style="margin-top:10px">الإجابة الصحيحة
+              <select data-q="${idx}" data-field="correctAnswer">
+                <option value="صح" ${["صح", "true"].includes(q.correctAnswer) ? "selected" : ""}>صح</option>
+                <option value="خطأ" ${["خطأ", "false"].includes(q.correctAnswer) ? "selected" : ""}>خطأ</option>
+              </select>
+            </div>`
+          : `<div class="field" style="margin-top:10px">الإجابة الصحيحة النموذجية<input data-q="${idx}" data-field="correctAnswer" value="${escapeHtml(q.correctAnswer || "")}" /></div>`
+      }
+    </div>
+  `
+    )
+    .join("");
+
+  wrap.querySelectorAll("[data-remove-q]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      questionDraft.splice(Number(btn.dataset.removeQ), 1);
+      renderQuestionsEditor();
+    })
+  );
+  wrap.querySelectorAll("[data-q]").forEach((input) => {
+    input.addEventListener("change", (e) => {
+      const idx = Number(e.target.dataset.q);
+      const field = e.target.dataset.field;
+      if (field.startsWith("opt")) {
+        const optIdx = Number(field.replace("opt", ""));
+        questionDraft[idx].options[optIdx] = e.target.value;
+      } else if (field === "type") {
+        questionDraft[idx].type = e.target.value;
+        questionDraft[idx].options = questionDraft[idx].options || ["", "", "", ""];
+        renderQuestionsEditor();
+      } else {
+        questionDraft[idx][field] = e.target.value;
+      }
+    });
+  });
+}
+
+async function submitTestForm(type, existingTest, publish) {
+  const dynamicBankTest = existingTest?.question_source === "lesson_bank";
+  const title = document.getElementById("tfTitle").value.trim();
+  if (!title) {
+    document.getElementById("testFormMsg").innerHTML = `<div class="form-error" style="margin-bottom:10px">يرجى إدخال عنوان الاختبار.</div>`;
+    return;
+  }
+  if (publish && !dynamicBankTest && !questionDraft.length) {
+    document.getElementById("testFormMsg").innerHTML = `<div class="form-error" style="margin-bottom:10px">لا يمكن نشر اختبار بدون أسئلة.</div>`;
+    return;
+  }
+  if (publish && !document.getElementById("tfClass").value) {
+    document.getElementById("testFormMsg").innerHTML = `<div class="form-error" style="margin-bottom:10px">اختاري الفصل قبل نشر الاختبار.</div>`;
+    return;
+  }
+  const payload = {
+    title,
+    type,
+    skillId: document.getElementById("tfSkill").value || null,
+    classId: document.getElementById("tfClass").value || null,
+    durationMinutes: document.getElementById("tfNoTime")?.checked ? 0 : Math.max(1, Math.min(240, Number(document.getElementById("tfDuration").value) || 20)),
+    maxAttempts: Number(document.getElementById("tfAttempts").value) || 1,
+    shuffleQuestions: document.getElementById("tfShuffle").checked,
+    showResult: document.getElementById("tfShowResult").checked,
+    startAt: document.getElementById("tfStart").value || null,
+    endAt: document.getElementById("tfEnd").value || null,
+    academicYear: schoolSettings?.academicYear || "",
+    semester: schoolSettings?.currentSemester || "first",
+    questions: dynamicBankTest ? undefined : questionDraft.map((q) => ({
+      type: q.type,
+      questionText: q.questionText,
+      options: q.type === "mcq" ? q.options.filter(Boolean) : null,
+      correctAnswer: q.correctAnswer,
+      points: Number(q.points) || 1,
+    })),
+  };
+  try {
+    let saved;
+    if (existingTest) {
+      saved = await api(`/tests/${existingTest.id}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      saved = await api("/tests", { method: "POST", body: JSON.stringify(payload) });
+    }
+    if (publish) await api(`/tests/${saved.id}/publish`, { method: "POST" });
+    closeModal();
+    toast(publish ? "تم حفظ ونشر الاختبار." : "تم حفظ الاختبار كمسودة.");
+    loadTestsList(type);
+  } catch (err) {
+    document.getElementById("testFormMsg").innerHTML = `<div class="form-error" style="margin-bottom:10px">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function openTestResults(testId) {
+  const results = await api(`/tests/${testId}/results`);
+  openModal(`
+    <h3>نتائج الاختبار</h3>
+    ${
+      results.length
+        ? `<table><thead><tr><th>الطالبة</th><th>الحالة</th><th>الدرجة</th><th>المراجعة</th></tr></thead><tbody>
+        ${results
+          .map(
+            (r) => `<tr><td>${escapeHtml(r.student_name)}</td><td><span class="badge ${r.status === "completed" ? "badge-green" : "badge-gray"}">${r.status === "completed" ? "مكتمل" : r.status === "in_progress" ? "قيد التنفيذ" : "لم يبدأ"}</span></td><td>${r.status === "completed" ? `${r.score}/${r.total_points}` : "—"}</td><td>${r.status === "completed" ? `<button class="btn ${Number(r.review_required) ? "btn-secondary" : "btn-outline"} btn-sm" data-review-attempt="${r.id}">${Number(r.review_required) ? `تحتاج مراجعة (${r.review_required})` : "عرض الإجابات"}</button>` : "—"}</td></tr>`
+          )
+          .join("")}
+      </tbody></table>`
+        : `<div class="empty-state">لم تبدأ أي طالبة هذا الاختبار بعد.</div>`
+    }
+    <div class="modal-actions"><a class="btn btn-outline" href="/api/teacher/reports/test/${testId}.pdf?report=results" target="_blank">طباعة النتائج</a><a class="btn btn-outline" href="/api/teacher/reports/test/${testId}.pdf?report=analysis" target="_blank">طباعة التحليل</a><button class="btn btn-outline" id="closeResultsModal">إغلاق</button></div>
+  `);
+  document.getElementById("closeResultsModal").onclick = closeModal;
+  document.querySelectorAll("[data-review-attempt]").forEach((button) => button.onclick = () => openAttemptReview(testId,button.dataset.reviewAttempt));
+}
+
+async function openAttemptReview(testId,attemptId) {
+  const attempt=await api(`/tests/${testId}/attempts/${attemptId}`);
+  openModal(`
+    <h3>إجابات ${escapeHtml(attempt.student_name)}</h3>
+    <p style="color:var(--muted)">الدرجة الحالية: ${attempt.score}/${attempt.total_points} (${attempt.percentage}%)</p>
+    <div id="reviewMessage"></div>
+    ${attempt.answers.map((answer,index)=>`<div class="question-card"><strong>${index+1}. ${escapeHtml(answer.question_text)}</strong><p>إجابة الطالبة: <b>${escapeHtml(answer.answer_text||"بدون إجابة")}</b></p><p style="color:var(--muted)">الإجابة النموذجية: ${escapeHtml(answer.correct_answer)}${answer.explanation?` · ${escapeHtml(answer.explanation)}`:""}</p><div class="field">الدرجة المستحقة من ${answer.points}<input type="number" min="0" max="${answer.points}" step="0.5" value="${answer.points_earned}" data-answer-grade="${answer.id}"></div></div>`).join("")}
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelAttemptReview">إلغاء</button><button class="btn btn-primary" id="saveAttemptReview">حفظ التصحيح</button></div>`);
+  document.getElementById("cancelAttemptReview").onclick=closeModal;
+  document.getElementById("saveAttemptReview").onclick=async()=>{
+    const grades=[...document.querySelectorAll("[data-answer-grade]")].map((input)=>({answerId:Number(input.dataset.answerGrade),pointsEarned:Number(input.value)}));
+    try {
+      await api(`/tests/${testId}/attempts/${attemptId}`,{method:"PUT",body:JSON.stringify({grades})});
+      closeModal();toast("تم حفظ التصحيح وتحديث التحليلات.");openTestResults(testId);
+    } catch(error){document.getElementById("reviewMessage").innerHTML=`<div class="form-error">${escapeHtml(error.message)}</div>`;}
+  };
+}
+
+// ==========================================================================
+// تحليل النتائج
+// ==========================================================================
+let analysisPanelMode = "student";
+
+function openAnalysisPanel(mode = "student") {
+  analysisPanelMode = mode;
+  navigate("analysis-panel");
+}
+
+async function renderAnalysisPanel() {
+  contentEl.innerHTML = `
+    <div class="student-panel-tabs" role="tablist" aria-label="أقسام تحليل النتائج">
+      <button class="tab-btn ${analysisPanelMode === "student" ? "active" : ""}" data-analysis-panel="student">تحليل لكل طالبة</button>
+      <button class="tab-btn ${analysisPanelMode === "class" ? "active" : ""}" data-analysis-panel="class">تحليل الفصل العام</button>
+      <button class="tab-btn ${analysisPanelMode === "skill" ? "active" : ""}" data-analysis-panel="skill">تحليل كل مهارة</button>
+    </div>
+    <div id="analysisPanelContent"></div>
+  `;
+  document.querySelectorAll("[data-analysis-panel]").forEach((button) => {
+    button.onclick = () => {
+      analysisPanelMode = button.dataset.analysisPanel;
+      renderAnalysisPanel();
+    };
+  });
+  const target = document.getElementById("analysisPanelContent");
+  if (analysisPanelMode === "class") await renderAnalysisClass(target);
+  else if (analysisPanelMode === "skill") await renderAnalysisSkill(target);
+  else await renderAnalysisStudent(target);
+}
+
+async function renderAnalysisStudent(target = contentEl) {
+  const studentsData = await api("/students?pageSize=100");
+  target.innerHTML = `
+    <div class="card">
+      <div class="toolbar">
+        <select id="anStudent"><option value="">اختاري طالبة</option>${studentsData.items.map((s) => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join("")}</select>
+      </div>
+      <div id="anStudentWrap"><div class="empty-state">اختاري طالبة لعرض تحليلها.</div></div>
+    </div>
+  `;
+  document.getElementById("anStudent").addEventListener("change", async (e) => {
+    if (!e.target.value) return;
+    const data = await api(`/analysis/student/${e.target.value}`);
+    const wrap = document.getElementById("anStudentWrap");
+    wrap.innerHTML = `
+      <h4 class="section-title">الدرجات والتطور</h4>
+      ${
+        data.results.length
+          ? data.results.map((r) => `<div class="skill-pill"><span>${escapeHtml(r.title)}</span><span>${r.score}/${r.total_points} (${Math.round((r.score / r.total_points) * 100)}%)</span></div>`).join("")
+          : `<p style="font-size:.82rem;color:var(--muted)">لا توجد نتائج مكتملة بعد.</p>`
+      }
+      <div class="grid-2" style="margin-top:18px">
+        <div>
+          <h4 class="section-title">مهارات متقنة</h4>
+          ${data.mastered.length ? data.mastered.map((s) => `<div class="skill-pill"><span>${escapeHtml(s.name)}</span><span class="badge badge-green">${s.mastery_percent}%</span></div>`).join("") : `<p style="font-size:.82rem;color:var(--muted)">لا يوجد بعد.</p>`}
+        </div>
+        <div>
+          <h4 class="section-title">تحتاج دعمًا</h4>
+          ${data.needsSupport.length ? data.needsSupport.map((s) => `<div class="skill-pill"><span>${escapeHtml(s.name)}</span><span class="badge badge-red">${s.mastery_percent}%</span></div>`).join("") : `<p style="font-size:.82rem;color:var(--muted)">لا يوجد.</p>`}
+        </div>
+      </div>
+    `;
+  });
+}
+
+async function renderAnalysisClass(target = contentEl) {
+  target.innerHTML = `
+    <div class="card">
+      <div class="toolbar">
+        <select id="anClass"><option value="">كل الفصول</option>${allClasses.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select>
+      </div>
+      <div id="anClassWrap"></div>
+    </div>
+  `;
+  async function load() {
+    const classId = document.getElementById("anClass").value;
+    const data = await api(`/analysis/class?classId=${classId}`);
+    document.getElementById("anClassWrap").innerHTML = `
+      <div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">
+        ${statCard("📊", data.average + "%", "متوسط الفصل")}
+        ${statCard("⬆️", data.highest + "%", "أعلى درجة")}
+        ${statCard("⬇️", data.lowest + "%", "أقل درجة")}
+        ${statCard("✅", data.passRate + "%", "نسبة النجاح")}
+      </div>
+      <h4 class="section-title">توزيع الدرجات</h4>
+      ${data.distribution
+        .map(
+          (d) => `<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:4px"><span>${d.label}</span><strong>${d.count} طالبة</strong></div><div class="progress-bar"><span style="width:${data.studentCount ? (d.count / data.studentCount) * 100 : 0}%"></span></div></div>`
+        )
+        .join("")}
+      <h4 class="section-title" style="margin-top:18px">مقارنة التشخيص القبلي والبعدي</h4>
+      ${
+        Object.keys(data.prePost || {}).length
+          ? [["pre_diagnostic", "تشخيصي قبلي"], ["post_diagnostic", "تشخيصي بعدي"]].filter(([key]) => data.prePost[key] !== undefined).map(([key, label]) => `<div class="skill-pill"><span>${label}</span><span>${Math.round(data.prePost[key] || 0)}%</span></div>`).join("")
+          : `<p style="font-size:.82rem;color:var(--muted)">لا توجد بيانات كافية للمقارنة.</p>`
+      }
+    `;
+  }
+  document.getElementById("anClass").addEventListener("change", load);
+  await load();
+}
+
+async function renderAnalysisSkill(target = contentEl) {
+  const data = await api("/analysis/skills");
+  target.innerHTML = `
+    <div class="card">
+      ${data
+        .map(
+          (s) => `
+        <div style="margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:16px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+            <strong>${escapeHtml(s.name)}</strong>
+            <span class="badge ${progressColorBadge(s.averageMastery)}">متوسط الإتقان: ${s.averageMastery}%</span>
+          </div>
+          <p style="font-size:.82rem;color:var(--muted);margin:4px 0">متقنات: ${s.masteredCount} · بحاجة إلى تدخل علاجي: ${s.needsSupportCount}</p>
+          ${
+            s.needsSupportStudents.length
+              ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${s.needsSupportStudents.map((st) => `<span class="badge badge-red">${escapeHtml(st.name)}</span>`).join("")}</div>`
+              : ""
+          }
+        </div>`
+        )
+        .join("") || `<div class="empty-state">لا توجد مهارات مسجّلة بعد.</div>`}
+    </div>
+  `;
+}
+
+// ==========================================================================
+// التقارير
+// ==========================================================================
+async function renderReports() {
+  contentEl.innerHTML = `
+    <div class="card">
+      <h3 class="section-title">تصدير التقارير</h3>
+      <div style="display:flex;flex-direction:column;gap:14px;max-width:420px">
+        <a class="btn btn-secondary btn-block" href="/api/teacher/reports/students.xlsx">تصدير قائمة الطالبات (Excel)</a>
+        <div class="field">
+          تقرير فصل (PDF)
+          <select id="repClass">${allClasses.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select>
+        </div>
+        <a class="btn btn-secondary btn-block" id="repClassLink" href="#" target="_blank">تنزيل تقرير الفصل</a>
+      </div>
+      <p style="font-size:.8rem;color:var(--muted);margin-top:16px">لتصدير تقرير طالبة محددة (PDF)، افتحي ملف متابعتها من «لوحة الطالبة».</p>
+    </div>
+  `;
+  function updateLink() {
+    document.getElementById("repClassLink").href = `/api/teacher/reports/class.pdf?classId=${document.getElementById("repClass").value}`;
+  }
+  document.getElementById("repClass").addEventListener("change", updateLink);
+  updateLink();
+}
+
+// ==========================================================================
+// الإشعارات
+// ==========================================================================
+async function renderNotifications() {
+  const notifs = await api("/data/notifications");
+  contentEl.innerHTML = `
+    <div class="card">
+      ${
+        notifs.length
+          ? notifs
+              .map(
+                (n) => `<div class="skill-pill" style="display:flex;align-items:center">
+            <div><strong>${escapeHtml(n.title)}</strong><br><span style="color:var(--muted);font-size:.8rem">${escapeHtml(n.message || "")} · ${formatDate(n.created_at)}</span></div>
+            <div style="display:flex;gap:6px">
+              ${n.is_read ? "" : `<button class="btn btn-outline btn-sm" data-read="${n.id}">تمييز كمقروء</button>`}
+              <button class="btn btn-danger btn-sm" data-delnotif="${n.id}">حذف</button>
+            </div>
+          </div>`
+              )
+              .join("")
+          : `<div class="empty-state"><div class="ic">🔔</div>لا توجد إشعارات حاليًا.</div>`
+      }
+    </div>
+  `;
+  contentEl.querySelectorAll("[data-read]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api(`/data/notifications/${b.dataset.read}/read`, { method: "PUT" });
+      renderNotifications();
+      refreshNotifBell();
+    })
+  );
+  contentEl.querySelectorAll("[data-delnotif]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api(`/data/notifications/${b.dataset.delnotif}`, { method: "DELETE" });
+      renderNotifications();
+      refreshNotifBell();
+    })
+  );
+}
+
+// ==========================================================================
+// الفصول والمجموعات
+// ==========================================================================
+async function renderClasses() {
+  contentEl.innerHTML = `
+    <div class="card">
+      <div class="toolbar"><button class="btn btn-primary btn-sm" id="addClassBtn">+ إضافة فصل</button></div>
+      <div id="classesWrap"></div>
+    </div>
+  `;
+  document.getElementById("addClassBtn").onclick = () => openClassForm();
+  await loadClassesTable();
+}
+
+async function loadClassesTable() {
+  const classes = await api("/data/classes");
+  allClasses = classes;
+  const wrap = document.getElementById("classesWrap");
+  wrap.innerHTML = classes.length
+    ? `<table><thead><tr><th>اسم الفصل</th><th>المستوى</th><th>عدد الطالبات</th><th>إجراءات</th></tr></thead><tbody>
+      ${classes
+        .map(
+          (c) => `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.level)}</td><td>${c.student_count}</td>
+          <td><button class="btn btn-outline btn-sm" data-editc="${c.id}">تعديل</button> <button class="btn btn-danger btn-sm" data-delc="${c.id}" data-name="${escapeHtml(c.name)}">حذف</button></td></tr>`
+        )
+        .join("")}
+    </tbody></table>`
+    : `<div class="empty-state">لا توجد فصول بعد.</div>`;
+
+  wrap.querySelectorAll("[data-editc]").forEach((b) =>
+    b.addEventListener("click", () => openClassForm(classes.find((c) => c.id == b.dataset.editc)))
+  );
+  wrap.querySelectorAll("[data-delc]").forEach((b) =>
+    b.addEventListener("click", () =>
+      confirmAction(`هل تأكيد حذف الفصل "${b.dataset.name}"؟`, async () => {
+        await api(`/data/classes/${b.dataset.delc}`, { method: "DELETE" });
+        toast("تم حذف الفصل.");
+        loadClassesTable();
+      })
+    )
+  );
+}
+
+function openClassForm(cls) {
+  openModal(`
+    <h3>${cls ? "تعديل الفصل" : "إضافة فصل جديد"}</h3>
+    <div class="form-grid full">
+      <div class="field">اسم الفصل<input id="cfName" value="${escapeHtml(cls?.name || "")}" /></div>
+      <div class="field">المستوى
+        <select id="cfLevel">${["ابتدائي", "متوسط", "ثانوي"].map((l) => `<option value="${l}" ${cls?.level === l ? "selected" : ""}>${l}</option>`).join("")}</select>
+      </div>
+      <div class="field">الصف<input id="cfGrade" value="${escapeHtml(cls?.grade_label || "")}" placeholder="مثال: الصف الثاني المتوسط" /></div>
+      <div class="field">العام الدراسي<input id="cfYear" value="${escapeHtml(cls?.academic_year || "")}" placeholder="مثال: 1448" /></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="cancelClassForm">إلغاء</button>
+      <button class="btn btn-primary" id="saveClassForm">حفظ</button>
+    </div>
+  `);
+  document.getElementById("cancelClassForm").onclick = closeModal;
+  document.getElementById("saveClassForm").onclick = async () => {
+    const payload = {
+      name: document.getElementById("cfName").value.trim(),
+      level: document.getElementById("cfLevel").value,
+      gradeLabel: document.getElementById("cfGrade").value.trim(),
+      academicYear: document.getElementById("cfYear").value.trim(),
+    };
+    if (cls) await api(`/data/classes/${cls.id}`, { method: "PUT", body: JSON.stringify(payload) });
+    else await api("/data/classes", { method: "POST", body: JSON.stringify(payload) });
+    closeModal();
+    toast("تم حفظ الفصل.");
+    loadClassesTable();
+  };
+}
+
+// ==========================================================================
+// سجل الأنشطة
+// ==========================================================================
+async function renderActivity() {
+  const logs = await api("/data/activity-log");
+  contentEl.innerHTML = `
+    <div class="card">
+      ${
+        logs.length
+          ? `<table><thead><tr><th>الإجراء</th><th>التفاصيل</th><th>التاريخ</th></tr></thead><tbody>
+            ${logs.map((l) => `<tr><td>${escapeHtml(l.action)}</td><td>${escapeHtml(l.details || "—")}</td><td>${formatDate(l.created_at)}</td></tr>`).join("")}
+          </tbody></table>`
+          : `<div class="empty-state">لا توجد أنشطة مسجّلة بعد.</div>`
+      }
+    </div>
+  `;
+}
+
+// ==========================================================================
+// الإعدادات
+// ==========================================================================
+async function renderSettings() {
+  const settings = await loadSchoolSettings(true);
+  contentEl.innerHTML = `
+    <div class="settings-layout">
+      <div class="card school-settings-card">
+        <h3 class="section-title">إعدادات العام الدراسي والمدرسة</h3>
+        <p class="settings-help">تُستخدم هذه البيانات تلقائيًا في سجل المتابعة والاختبارات وجميع ملفات الطباعة.</p>
+        <div id="schoolSettingsMessage"></div>
+        <form id="schoolSettingsForm">
+          <div class="form-grid">
+            <div class="field">اسم المدرسة<input id="setSchoolName" value="${escapeHtml(settings.schoolName || "")}" required /></div>
+            <div class="field">إدارة التعليم<input id="setEducationDepartment" value="${escapeHtml(settings.educationDepartment || "")}" placeholder="مثال: إدارة تعليم مكة المكرمة" required /></div>
+            <div class="field">مكتب التعليم <small>(اختياري)</small><input id="setEducationOffice" value="${escapeHtml(settings.educationOffice || "")}" /></div>
+            <div class="field">اسم المعلمة<input id="setTeacherName" value="${escapeHtml(settings.teacherName || currentTeacher.name || "")}" required /></div>
+            <div class="field">اسم مديرة المدرسة <small>(اختياري)</small><input id="setSchoolLeaderName" value="${escapeHtml(settings.schoolLeaderName || "")}" /></div>
+            <div class="field">العام الدراسي<input id="setAcademicYear" value="${escapeHtml(settings.academicYear || "")}" placeholder="مثال: 1448هـ" required /></div>
+            <div class="field">الفصل الدراسي الحالي
+              <select id="setCurrentSemester">
+                <option value="first" ${settings.currentSemester === "first" ? "selected" : ""}>الترم الأول</option>
+                <option value="second" ${settings.currentSemester === "second" ? "selected" : ""}>الترم الثاني</option>
+              </select>
+            </div>
+            <div class="field">تاريخ بداية الترم الأول<input type="date" id="setTerm1Start" value="${escapeHtml(settings.term1StartDate || "")}" required /></div>
+            <div class="field">تاريخ بداية الترم الثاني<input type="date" id="setTerm2Start" value="${escapeHtml(settings.term2StartDate || "")}" required /></div>
+          </div>
+          <button class="btn btn-primary" id="saveSchoolSettings" type="submit">حفظ إعدادات العام الدراسي والمدرسة</button>
+        </form>
+      </div>
+
+      <div class="card account-settings-card">
+        <h3 class="section-title">إعدادات الحساب</h3>
+        <div id="settingsPasswordMessage"></div>
+        <div class="field" style="margin-bottom:22px">بريد المعلمة<input type="email" value="${escapeHtml(currentTeacher.email)}" readonly aria-label="بريد المعلمة" /></div>
+        <form id="settingsPasswordForm">
+          <h3 class="section-title">تغيير كلمة المرور</h3>
+          <div class="form-grid full">
+            <div class="field">كلمة المرور الحالية<input type="password" id="settingsCurrentPassword" autocomplete="current-password" required /></div>
+            <div class="field">كلمة المرور الجديدة<input type="password" id="settingsNewPassword" autocomplete="new-password" minlength="10" required /></div>
+            <div class="field">تأكيد كلمة المرور الجديدة<input type="password" id="settingsConfirmPassword" autocomplete="new-password" minlength="10" required /></div>
+          </div>
+          <p style="font-size:.76rem;color:var(--muted);line-height:1.7">يجب أن تتكون كلمة المرور الجديدة من 10 أحرف على الأقل، وتحتوي حرفًا ورقمًا.</p>
+          <button class="btn btn-primary" id="saveSettingsPassword" type="submit">تغيير كلمة المرور</button>
+        </form>
+      </div>
+    </div>
+  `;
+
+  document.getElementById("schoolSettingsForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const message = document.getElementById("schoolSettingsMessage");
+    const button = document.getElementById("saveSchoolSettings");
+    button.disabled = true;
+    message.innerHTML = "";
+    try {
+      schoolSettings = await api("/school-settings", { method: "PUT", body: JSON.stringify({
+        schoolName: document.getElementById("setSchoolName").value.trim(),
+        educationDepartment: document.getElementById("setEducationDepartment").value.trim(),
+        educationOffice: document.getElementById("setEducationOffice").value.trim(),
+        teacherName: document.getElementById("setTeacherName").value.trim(),
+        schoolLeaderName: document.getElementById("setSchoolLeaderName").value.trim(),
+        academicYear: document.getElementById("setAcademicYear").value.trim(),
+        currentSemester: document.getElementById("setCurrentSemester").value,
+        term1StartDate: document.getElementById("setTerm1Start").value,
+        term2StartDate: document.getElementById("setTerm2Start").value,
+      }) });
+      message.innerHTML = '<div class="form-success" style="margin-bottom:14px">تم حفظ إعدادات العام الدراسي والمدرسة بنجاح.</div>';
+      toast("تم حفظ إعدادات العام الدراسي والمدرسة بنجاح.");
+    } catch (error) {
+      message.innerHTML = `<div class="form-error" style="margin-bottom:14px">${escapeHtml(error.message)}</div>`;
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  document.getElementById("settingsPasswordForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const message = document.getElementById("settingsPasswordMessage");
+    const currentPassword = document.getElementById("settingsCurrentPassword").value;
+    const newPassword = document.getElementById("settingsNewPassword").value;
+    const confirmPassword = document.getElementById("settingsConfirmPassword").value;
+    if (newPassword !== confirmPassword) {
+      message.innerHTML = '<div class="form-error" style="margin-bottom:14px">كلمتا المرور الجديدة غير متطابقتين.</div>';
+      return;
+    }
+    const button = document.getElementById("saveSettingsPassword");
+    button.disabled = true;
+    message.innerHTML = "";
+    try {
+      await api("/me", { method: "PUT", body: JSON.stringify({ currentPassword, newPassword, confirmPassword }) });
+      message.innerHTML = '<div class="form-success" style="margin-bottom:14px">تم تغيير كلمة المرور بنجاح.</div>';
+      event.target.reset();
+    } catch (error) {
+      message.innerHTML = `<div class="form-error" style="margin-bottom:14px">${escapeHtml(error.message)}</div>`;
+    } finally {
+      button.disabled = false;
+    }
+  };
+}
+
+// ==========================================================================
+// بنك الأسئلة الذكي
+// ==========================================================================
+const BANK_STYLE = { easy: "سهل", medium: "متوسط", hard: "صعب" };
+const BANK_TYPE = { mcq: "اختيار متعدد", true_false: "صح أو خطأ", short_answer: "إجابة قصيرة" };
+const BANK_LEVEL = { unclassified: "غير مصنف", applied: "تطبيقي", logical: "منطقي", analytical: "تحليلي" };
+const BANK_COGNITIVE = ["تحليلي", "استدلال", "منطقي", "تطبيقي"];
+const BANK_CONTENT_SOURCE = ["كتاب الطالب", "الإنترنت"];
+const QUESTION_BANK_GRADES = {
+  "ابتدائي": [
+    { value: "رابع ابتدائي", label: "رابع" },
+    { value: "خامس ابتدائي", label: "خامس" },
+    { value: "سادس ابتدائي", label: "سادس" },
+  ],
+  "متوسط": [
+    { value: "أول متوسط", label: "أولى" },
+    { value: "ثاني متوسط", label: "ثانية" },
+    { value: "ثالث متوسط", label: "ثالثة" },
+  ],
+  "ثانوي": [
+    { value: "أول ثانوي", label: "أولى" },
+    { value: "ثاني ثانوي", label: "ثانية" },
+    { value: "ثالث ثانوي", label: "ثالثة" },
+  ],
+};
+const QUESTION_BANK_CLASSES = [
+  { value: "1", label: "١" },
+  { value: "2", label: "٢" },
+  { value: "3", label: "٣" },
+  { value: "4", label: "٤" },
+  { value: "all", label: "كل الفصول" },
+];
+const QUESTION_BANK_TERMS = [
+  { value: "الترم الأول", label: "الترم الأول" },
+  { value: "الترم الثاني", label: "الترم الثاني" },
+];
+const QUESTION_DESIGN_MODES = {
+  quick: { icon: "⚡", title: "توليد سريع", description: "أسئلة سريعة ومتوازنة للدرس", count: 5, difficulty: "medium", types: ["mcq", "true_false"] },
+  diagnostic: { icon: "🩺", title: "تشخيصي", description: "قياس المهارات السابقة والفجوات", count: 10, difficulty: "medium", types: ["mcq", "true_false"] },
+  periodic: { icon: "🗓️", title: "فتري", description: "أسئلة مناسبة لاختبار الفترة", count: 15, difficulty: "medium", types: ["mcq", "true_false", "short_answer"] },
+  professional: { icon: "🧩", title: "احترافي", description: "تصميم سؤال يدوي كامل التفاصيل", manual: true },
+  interactive: { icon: "🎮", title: "تفاعلي", description: "أسئلة قصيرة قابلة للتفاعل", count: 6, difficulty: "easy", types: ["mcq", "true_false"] },
+  ai: { icon: "✨", title: "ذكاء اصطناعي", description: "توليد ذكي بإعدادات متقدمة", count: 5, difficulty: "medium", types: ["mcq"] },
+};
+
+let questionBankView = sessionStorage.getItem("madarQuestionBankView") || "design";
+let questionBankRepositoryFiltered = sessionStorage.getItem("madarQuestionBankRepositoryFiltered") === "1";
+let questionBankSelectedMode = sessionStorage.getItem("madarQuestionBankMode") || "quick";
+let questionBankDesignChooserOpen = sessionStorage.getItem("madarQuestionBankChooserOpen") === "1";
+const savedQuestionBankSelection = JSON.parse(sessionStorage.getItem("madarQuestionBankSelection") || "null") || {};
+const questionBankSelection = {
+  stage: savedQuestionBankSelection.stage || "ابتدائي",
+  gradeLabel: savedQuestionBankSelection.gradeLabel || "رابع ابتدائي",
+  classValue: savedQuestionBankSelection.classValue || "all",
+  termLabel: savedQuestionBankSelection.termLabel || "الترم الأول",
+};
+
+function saveQuestionBankSelection() {
+  const grades = QUESTION_BANK_GRADES[questionBankSelection.stage] || [];
+  if (!grades.some((item) => item.value === questionBankSelection.gradeLabel)) {
+    questionBankSelection.gradeLabel = grades[0]?.value || "";
+  }
+  sessionStorage.setItem("madarQuestionBankSelection", JSON.stringify(questionBankSelection));
+}
+
+function questionBankClassLabel(classValue = questionBankSelection.classValue) {
+  if (classValue === "all" || !classValue) return "كل الفصول";
+  const arabic = { "1": "١", "2": "٢", "3": "٣", "4": "٤" }[String(classValue)] || classValue;
+  return `الفصل ${arabic}`;
+}
+
+function questionBankContext() {
+  saveQuestionBankSelection();
+  return {
+    stage: questionBankSelection.stage,
+    gradeLabel: questionBankSelection.gradeLabel,
+    classLabel: questionBankClassLabel(),
+    termLabel: questionBankSelection.termLabel,
+  };
+}
+
+function questionBankTabsHtml(activeView) {
+  return `<div class="question-bank-main-tabs" role="tablist" aria-label="أقسام بنك الأسئلة">
+    <button class="question-bank-main-tab ${activeView === "design" ? "active" : ""}" data-question-bank-view="design" type="button">
+      <span>✍️</span><strong>تصميم أسئلة</strong><small>اختيار المرحلة ونوع التصميم</small>
+    </button>
+    <button class="question-bank-main-tab ${activeView === "repository" ? "active" : ""}" data-question-bank-view="repository" type="button">
+      <span>🗂️</span><strong>المستودع</strong><small>مراجعة وحفظ واستيراد الأسئلة</small>
+    </button>
+  </div>`;
+}
+
+function bindQuestionBankTabs() {
+  contentEl.querySelectorAll("[data-question-bank-view]").forEach((button) => {
+    button.onclick = () => {
+      questionBankView = button.dataset.questionBankView;
+      sessionStorage.setItem("madarQuestionBankView", questionBankView);
+      renderQuestionBank();
+    };
+  });
+}
+
+function questionBankSegmentButtons(type, items, selectedValue) {
+  return items.map((item) => `<button type="button" class="question-bank-choice ${String(item.value) === String(selectedValue) ? "active" : ""}" data-bank-choice="${type}" data-value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</button>`).join("");
+}
+
+function questionBankSelectorHtml() {
+  const grades = QUESTION_BANK_GRADES[questionBankSelection.stage] || [];
+  return `<section class="question-bank-selector-card">
+    <div class="question-bank-selector-heading">
+      <div><span>🎯</span><div><h3>حددي نطاق الأسئلة</h3><p>المرحلة والصف والفصل والترم في سطر واحد.</p></div></div>
+      <span class="question-bank-context-badge">${escapeHtml(questionBankSelection.stage)} · ${escapeHtml(questionBankSelection.gradeLabel)} · ${escapeHtml(questionBankClassLabel())} · ${escapeHtml(questionBankSelection.termLabel)}</span>
+    </div>
+    <div class="question-bank-selector-row">
+      <div class="question-bank-selector-group"><label>المرحلة</label><div class="question-bank-choice-row">${questionBankSegmentButtons("stage", Object.keys(QUESTION_BANK_GRADES).map((value) => ({ value, label: value })), questionBankSelection.stage)}</div></div>
+      <div class="question-bank-selector-group"><label>الصف</label><div class="question-bank-choice-row">${questionBankSegmentButtons("gradeLabel", grades, questionBankSelection.gradeLabel)}</div></div>
+      <div class="question-bank-selector-group"><label>الفصل</label><div class="question-bank-choice-row compact">${questionBankSegmentButtons("classValue", QUESTION_BANK_CLASSES, questionBankSelection.classValue)}</div></div>
+      <div class="question-bank-selector-group"><label>الترم</label><div class="question-bank-choice-row">${questionBankSegmentButtons("termLabel", QUESTION_BANK_TERMS, questionBankSelection.termLabel)}</div></div>
+    </div>
+  </section>`;
+}
+
+function bindQuestionBankSelector() {
+  contentEl.querySelectorAll("[data-bank-choice]").forEach((button) => {
+    button.onclick = () => {
+      const key = button.dataset.bankChoice;
+      questionBankSelection[key] = button.dataset.value;
+      if (key === "stage") questionBankSelection.gradeLabel = QUESTION_BANK_GRADES[questionBankSelection.stage]?.[0]?.value || "";
+      saveQuestionBankSelection();
+      renderQuestionBankDesign();
+    };
+  });
+}
+
+function questionBankSkillsForSelection() {
+  const wantedGrade = normalizeGradeKey(questionBankSelection.stage, questionBankSelection.gradeLabel);
+  return allSkills.filter((skill) => {
+    if (skill.stage !== questionBankSelection.stage) return false;
+    return normalizeGradeKey(skill.stage, skill.grade_label) === wantedGrade;
+  });
+}
+
+function normalizeQuestionBankTermKey(value) {
+  return String(value || "").normalize("NFKD").replace(/[\u064B-\u065F\u0670]/g, "").replace(/[أإآ]/g, "ا").replace(/[ة]/g, "ه").replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+}
+
+function questionBankSkillHasTerm(skill, termLabel = questionBankSelection.termLabel) {
+  const wantedTerm = normalizeQuestionBankTermKey(termLabel);
+  const terms = String(skill?.question_terms || "").split("||").filter(Boolean).map(normalizeQuestionBankTermKey);
+  return !wantedTerm || terms.includes(wantedTerm);
+}
+
+function questionBankSkillUnits(skill, termLabel = questionBankSelection.termLabel) {
+  const wantedTerm = normalizeQuestionBankTermKey(termLabel);
+  return [...new Set(String(skill?.unit_contexts || "")
+    .split("||")
+    .map((item) => {
+      const separator = item.indexOf("::");
+      return separator >= 0
+        ? { term: item.slice(0, separator).trim(), unit: item.slice(separator + 2).trim() }
+        : { term: "", unit: item.trim() };
+    })
+    .filter((item) => item.unit && (!wantedTerm || !item.term || normalizeQuestionBankTermKey(item.term) === wantedTerm))
+    .map((item) => item.unit))];
+}
+
+function questionBankUnitButtonLabel(unitName) {
+  const raw = String(unitName || "").trim();
+  const western = raw.replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
+  const match = western.match(/(?:الوحدة|الفصل)?\s*(\d{1,2})/u);
+  const ordinal = { 1: "الأولى", 2: "الثانية", 3: "الثالثة", 4: "الرابعة", 5: "الخامسة", 6: "السادسة", 7: "السابعة", 8: "الثامنة", 9: "التاسعة", 10: "العاشرة" }[Number(match?.[1])];
+  if (ordinal) return `الوحدة ${ordinal}`;
+  if (/^(?:الوحدة|الفصل)\s+/u.test(raw)) return raw.replace(/^الفصل/u, "الوحدة");
+  return raw;
+}
+
+function questionBankUnitsForSkills(skills) {
+  const names = [...new Set(skills.flatMap((skill) => questionBankSkillUnits(skill)))];
+  return names.sort((a, b) => String(a).localeCompare(String(b), "ar", { numeric: true }));
+}
+
+function questionBankSkillCheckboxesHtml(skills) {
+  if (!skills.length) {
+    return `<div class="question-bank-no-skills">لا توجد مهارات محفوظة لهذا الصف حاليًا. اكتبي المهارة يدويًا في الحقل أسفل القائمة.</div>`;
+  }
+  return skills.map((skill) => {
+    const units = questionBankSkillUnits(skill).join("||");
+    return `<label class="question-bank-skill-option" data-question-bank-units="${escapeHtml(units)}">
+      <input type="checkbox" value="${skill.id}" data-question-bank-skill>
+      <span><strong>${escapeHtml(skill.name)}</strong>${skill.code ? `<small>${escapeHtml(skill.code)}</small>` : ""}</span>
+    </label>`;
+  }).join("");
+}
+
+function questionBankAutomaticWorkspaceHtml(modeKey, mode) {
+  const skills = questionBankSkillsForSelection();
+  const defaultCount = { quick: 3, diagnostic: 2, periodic: 3, interactive: 3, ai: 5 }[modeKey] || 3;
+  const selectedTypes = mode.types || ["mcq"];
+  return `<div class="question-bank-inline-workspace" id="questionDesignWorkspace" data-mode="${modeKey}">
+    <div class="question-bank-workspace-head">
+      <div><span class="question-bank-mode-icon">${mode.icon}</span><div><h3>${escapeHtml(mode.title)} حسب المهارات</h3><p>اختاري مهارة واحدة أو عدة مهارات، وسيُنشئ النظام أسئلة مستقلة لكل مهارة ويحفظها في المستودع للمراجعة.</p></div></div>
+      <span class="question-bank-context-badge">${escapeHtml(questionBankSelection.stage)} · ${escapeHtml(questionBankSelection.gradeLabel)}</span>
+    </div>
+    <div id="questionDesignInlineMsg"></div>
+    <section class="question-bank-skills-box">
+      <div class="question-bank-skills-head"><div><strong>مهارات المنهج</strong><small>يمكن تحديد أكثر من مهارة.</small></div>${skills.length ? `<div><button class="btn btn-outline btn-sm" id="selectAllQuestionSkills" type="button">تحديد الكل</button><button class="btn btn-outline btn-sm" id="clearQuestionSkills" type="button">إلغاء التحديد</button></div>` : ""}</div>
+      <div class="question-bank-skills-grid">${questionBankSkillCheckboxesHtml(skills)}</div>
+      <label class="field question-bank-custom-skill">مهارات إضافية غير موجودة في القائمة
+        <textarea id="questionBankCustomSkills" placeholder="اكتبي كل مهارة في سطر مستقل"></textarea>
+      </label>
+    </section>
+    <div class="form-grid question-bank-generation-settings">
+      <label class="field">سياق الدرس أو الوحدة<input id="questionBankTopicContext" placeholder="اختياري: مثال الوحدة الثالثة أو درس الكسور"></label>
+      <label class="field">رمز درس للمهارات المكتوبة يدويًا<input id="questionBankLessonCode" placeholder="اختياري"></label>
+      <label class="field">عدد الأسئلة لكل مهارة<input id="questionBankQuestionsPerSkill" type="number" min="1" max="10" value="${defaultCount}"></label>
+      <label class="field">الصعوبة<select id="questionBankGenerationDifficulty"><option value="easy" ${mode.difficulty === "easy" ? "selected" : ""}>سهل</option><option value="medium" ${mode.difficulty !== "easy" && mode.difficulty !== "hard" ? "selected" : ""}>متوسط</option><option value="hard" ${mode.difficulty === "hard" ? "selected" : ""}>صعب</option></select></label>
+    </div>
+    <div class="question-bank-types-box"><strong>أنواع الأسئلة</strong><div>
+      <label><input type="checkbox" value="mcq" data-question-bank-type ${selectedTypes.includes("mcq") ? "checked" : ""}> اختياري</label>
+      <label><input type="checkbox" value="true_false" data-question-bank-type ${selectedTypes.includes("true_false") ? "checked" : ""}> صح أو خطأ</label>
+      <label><input type="checkbox" value="short_answer" data-question-bank-type ${selectedTypes.includes("short_answer") ? "checked" : ""}> إجابة قصيرة</label>
+    </div></div>
+    <div class="question-bank-inline-actions">
+      <p>الحد الأقصى في العملية الواحدة ٦٠ سؤالًا لحماية جودة التوليد.</p>
+      <button class="btn btn-primary" id="runSkillQuestionDesign" type="button">${mode.icon} تصميم الأسئلة من المهارات</button>
+    </div>
+  </div>`;
+}
+
+function questionBankDiagnosticMatchingClasses() {
+  const wantedGrade = normalizeGradeKey(questionBankSelection.stage, questionBankSelection.gradeLabel);
+  const matching = allClasses.filter((item) => item.level === questionBankSelection.stage
+    && normalizeGradeKey(item.level, item.grade_label) === wantedGrade);
+  const selectedYear = normalizedAcademicYear(schoolSettings?.academicYear);
+  if (!selectedYear) return matching;
+  const sameYear = matching.filter((item) => normalizedAcademicYear(item.academic_year) === selectedYear);
+  return sameYear.length ? sameYear : matching;
+}
+
+function questionBankDiagnosticTargetClasses() {
+  const matchingClasses = questionBankDiagnosticMatchingClasses();
+  if (questionBankSelection.classValue === "all") return matchingClasses;
+  const selectedIndex = Math.max(0, Number(questionBankSelection.classValue || 1) - 1);
+  return matchingClasses[selectedIndex] ? [matchingClasses[selectedIndex]] : [];
+}
+
+function questionBankDiagnosticWorkspaceHtml(mode) {
+  const skills = questionBankSkillsForSelection().filter((skill) => questionBankSkillHasTerm(skill));
+  const units = questionBankUnitsForSkills(skills);
+  const targetClasses = questionBankDiagnosticTargetClasses();
+  const targetLabel = questionBankSelection.classValue === "all"
+    ? "كل الفصول المسجلة لهذا الصف"
+    : questionBankClassLabel();
+  return `<div class="question-bank-inline-workspace" id="questionDesignWorkspace" data-mode="diagnostic">
+    <div class="question-bank-workspace-head">
+      <div><span class="question-bank-mode-icon">${mode.icon}</span><div><h3>اختبار تشخيصي حسب المهارات</h3><p>يأخذ سؤالًا عشوائيًا واحدًا من الأسئلة المعتمدة لكل مهارة، دون استخدام الذكاء الاصطناعي. وقد يظهر لكل طالبة بديل مختلف من المهارة نفسها.</p></div></div>
+      <span class="question-bank-context-badge">${escapeHtml(questionBankSelection.stage)} · ${escapeHtml(questionBankSelection.gradeLabel)} · ${escapeHtml(questionBankClassLabel())} · ${escapeHtml(questionBankSelection.termLabel)}</span>
+    </div>
+    <div id="questionDesignInlineMsg"></div>
+    <section class="question-bank-skills-box">
+      <div class="question-bank-skills-head">
+        <div><strong>مهارات الاختبار</strong><small>اختاري الوحدة لعرض مهاراتها، ثم حددي المهارات المطلوبة.</small></div>
+        <div class="question-bank-skills-controls">
+          ${units.length ? `<div class="diagnostic-unit-buttons" role="group" aria-label="وحدات المنهج"><button class="diagnostic-unit-btn active" type="button" data-diagnostic-unit="">كل الوحدات</button>${units.map((unit) => `<button class="diagnostic-unit-btn" type="button" data-diagnostic-unit="${escapeHtml(unit)}" title="${escapeHtml(unit)}">${escapeHtml(questionBankUnitButtonLabel(unit))}</button>`).join("")}</div>` : ""}
+          ${skills.length ? `<div class="question-bank-selection-buttons"><button class="btn btn-outline btn-sm" id="selectAllQuestionSkills" type="button">تحديد الظاهر</button><button class="btn btn-outline btn-sm" id="clearQuestionSkills" type="button">إلغاء التحديد</button></div>` : ""}
+        </div>
+      </div>
+      <div class="question-bank-skills-grid">${questionBankSkillCheckboxesHtml(skills)}</div>
+    </section>
+    <div class="form-grid question-bank-generation-settings">
+      <label class="field diagnostic-test-title-field">اسم الاختبار<input id="diagnosticBankTitle" value="تشخيصي قبلي - ${escapeHtml(questionBankSelection.gradeLabel)}" data-auto-title="تشخيصي قبلي - ${escapeHtml(questionBankSelection.gradeLabel)}" placeholder="مثال: الاختبار التشخيصي للمهارات الأساسية"></label>
+      <label class="field">نوع الاختبار
+        <select id="diagnosticBankTestType">
+          <option value="pre_diagnostic">تشخيصي قبلي</option>
+          <option value="post_diagnostic">تشخيصي بعدي</option>
+          <option value="quiz">اختبار قصير</option>
+        </select>
+      </label>
+      <div class="field diagnostic-duration-field"><span>المدة بالدقائق</span><div class="diagnostic-duration-row"><input id="diagnosticBankDuration" type="number" min="1" max="240" value="20"><label class="diagnostic-no-time-option"><input id="diagnosticBankNoTime" type="checkbox"> بدون وقت</label></div></div>
+    </div>
+    ${!targetClasses.length ? `<div class="form-error">لا يوجد ${escapeHtml(targetLabel)} ضمن ${escapeHtml(questionBankSelection.stage)} · ${escapeHtml(questionBankSelection.gradeLabel)}. أضيفي الفصل أولًا من إدارة الطالبات أو اختاري فصلًا مسجلًا من أعلى الصفحة.</div>` : ""}
+    <div class="question-bank-inline-actions">
+      <p>سيُرسل الاختبار إلى ${escapeHtml(targetLabel)} كمسودة، ثم يظهر مباشرة في خانة الاختبارات لمراجعته ونشره.</p>
+      <div>
+        <button class="btn btn-outline" id="previewDiagnosticTest" type="button" ${!targetClasses.length ? "disabled" : ""}>معاينة</button>
+        <button class="btn btn-primary" id="sendDiagnosticToTests" type="button" ${!targetClasses.length ? "disabled" : ""}>إرسال الاختبار إلى خانة الاختبارات</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function questionBankProfessionalWorkspaceHtml(mode) {
+  const skills = questionBankSkillsForSelection();
+  return `<div class="question-bank-inline-workspace" id="questionDesignWorkspace" data-mode="professional">
+    <div class="question-bank-workspace-head"><div><span class="question-bank-mode-icon">${mode.icon}</span><div><h3>تصميم سؤال احترافي</h3><p>اكتبي السؤال كاملًا واربطِيه بمهارة محددة، ثم احفظيه مباشرة في المستودع.</p></div></div></div>
+    <div id="questionDesignInlineMsg"></div>
+    <div class="form-grid">
+      <label class="field">المهارة<select id="inlineProfessionalSkill"><option value="">بدون ربط بمهارة</option>${skills.map((skill) => `<option value="${skill.id}">${escapeHtml(skill.name)}</option>`).join("")}</select></label>
+      <label class="field">الموضوع أو الدرس<input id="inlineProfessionalTopic" placeholder="يُملأ تلقائيًا من المهارة عند تركه فارغًا"></label>
+      <label class="field">الفصل أو الوحدة في الكتاب<input id="inlineProfessionalChapter" placeholder="اختياري"></label>
+      <label class="field">رمز الدرس<input id="inlineProfessionalLessonCode" placeholder="اختياري"></label>
+      <label class="field">مستوى السؤال<select id="inlineProfessionalLevel"><option value="unclassified">غير مصنف</option><option value="applied">تطبيقي</option><option value="logical">منطقي</option><option value="analytical">تحليلي</option></select></label>
+      <label class="field">نوع السؤال<select id="inlineProfessionalType"><option value="mcq">اختيار متعدد</option><option value="true_false">صح أو خطأ</option><option value="short_answer">إجابة قصيرة</option></select></label>
+      <label class="field">الصعوبة<select id="inlineProfessionalDifficulty"><option value="easy">سهل</option><option value="medium" selected>متوسط</option><option value="hard">صعب</option></select></label>
+      <label class="field">النوع المعرفي<input id="inlineProfessionalCognitive" placeholder="اختياري"></label>
+      <label class="field">مستوى بلوم<input id="inlineProfessionalBloom" placeholder="اختياري"></label>
+      <label class="field">الدرجة<input id="inlineProfessionalPoints" type="number" min="0.5" step="0.5" value="1"></label>
+    </div>
+    <label class="field question-bank-wide-field">نص السؤال<textarea id="inlineProfessionalText" placeholder="اكتبي السؤال هنا"></textarea></label>
+    <label class="field question-bank-wide-field" id="inlineProfessionalOptionsField">الخيارات — خيار في كل سطر<textarea id="inlineProfessionalOptions" placeholder="الخيار الأول&#10;الخيار الثاني&#10;الخيار الثالث&#10;الخيار الرابع"></textarea></label>
+    <label class="field question-bank-wide-field">الإجابة الصحيحة<input id="inlineProfessionalAnswer" placeholder="اكتبي الإجابة كما تظهر في الخيارات"></label>
+    <label class="field question-bank-wide-field">شرح الإجابة<textarea id="inlineProfessionalExplanation" placeholder="اختياري"></textarea></label>
+    <div class="question-bank-inline-actions"><p>سيُحفظ السؤال معتمدًا، ويمكنكِ مراجعته وإرساله إلى الاختبارات من المستودع.</p><button class="btn btn-primary" id="saveInlineProfessionalQuestion" type="button">حفظ في المستودع</button></div>
+  </div>`;
+}
+
+function questionBankDesignWorkspaceHtml(modeKey) {
+  const mode = QUESTION_DESIGN_MODES[modeKey] || QUESTION_DESIGN_MODES.quick;
+  if (modeKey === "diagnostic") return questionBankDiagnosticWorkspaceHtml(mode);
+  return mode.manual ? questionBankProfessionalWorkspaceHtml(mode) : questionBankAutomaticWorkspaceHtml(modeKey, mode);
+}
+
+function renderQuestionBankDesign() {
+  saveQuestionBankSelection();
+  const chooserHidden = !questionBankDesignChooserOpen;
+  contentEl.innerHTML = `
+    ${questionBankTabsHtml("design")}
+    ${questionBankSelectorHtml()}
+    <section class="question-bank-design-section">
+      <button type="button" class="question-bank-design-toggle ${questionBankDesignChooserOpen ? "open" : ""}" id="questionBankDesignToggle" aria-expanded="${questionBankDesignChooserOpen ? "true" : "false"}">
+        <span><span class="question-bank-design-toggle-icon">🪄</span><span><strong>اختاري طريقة تصميم الأسئلة</strong><small>اضغطي هنا، ثم اختاري النوع والمهارات. سيظهر كل المحتوى أسفل الزر داخل الصفحة.</small></span></span>
+        <b aria-hidden="true">⌄</b>
+      </button>
+      <div class="question-bank-design-content" id="questionBankDesignContent" ${chooserHidden ? "hidden" : ""}>
+        <div class="question-bank-mode-grid">
+          ${Object.entries(QUESTION_DESIGN_MODES).map(([key, mode]) => `<button type="button" class="question-bank-mode-card ${questionBankSelectedMode === key ? "active" : ""}" data-question-design-mode="${key}">
+            <span class="question-bank-mode-icon">${mode.icon}</span><strong>${escapeHtml(mode.title)}</strong><small>${escapeHtml(mode.description)}</small>
+          </button>`).join("")}
+        </div>
+        ${questionBankDesignWorkspaceHtml(questionBankSelectedMode)}
+      </div>
+    </section>`;
+  bindQuestionBankTabs();
+  bindQuestionBankSelector();
+  document.getElementById("questionBankDesignToggle").onclick = () => {
+    questionBankDesignChooserOpen = !questionBankDesignChooserOpen;
+    sessionStorage.setItem("madarQuestionBankChooserOpen", questionBankDesignChooserOpen ? "1" : "0");
+    renderQuestionBankDesign();
+    if (questionBankDesignChooserOpen) document.getElementById("questionBankDesignContent")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+  contentEl.querySelectorAll("[data-question-design-mode]").forEach((button) => {
+    button.onclick = () => {
+      questionBankSelectedMode = button.dataset.questionDesignMode;
+      questionBankDesignChooserOpen = true;
+      sessionStorage.setItem("madarQuestionBankMode", questionBankSelectedMode);
+      sessionStorage.setItem("madarQuestionBankChooserOpen", "1");
+      renderQuestionBankDesign();
+      document.getElementById("questionDesignWorkspace")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+  });
+  if (questionBankDesignChooserOpen) bindQuestionBankDesignWorkspace();
+}
+
+function setQuestionBankInlineMessage(message, type = "error") {
+  const target = document.getElementById("questionDesignInlineMsg");
+  if (!target) return;
+  target.innerHTML = message ? `<div class="${type === "success" ? "form-success" : "form-error"}">${escapeHtml(message)}</div>` : "";
+}
+
+function bindQuestionBankDesignWorkspace() {
+  const workspace = document.getElementById("questionDesignWorkspace");
+  if (!workspace) return;
+  if (workspace.dataset.mode === "diagnostic") {
+    const skillBoxes = [...workspace.querySelectorAll("[data-question-bank-skill]")];
+    const skillOptions = [...workspace.querySelectorAll(".question-bank-skill-option")];
+    const unitButtons = [...workspace.querySelectorAll("[data-diagnostic-unit]")];
+    const applyUnitFilter = (unit) => {
+      skillOptions.forEach((option) => {
+        const units = String(option.dataset.questionBankUnits || "").split("||").filter(Boolean);
+        option.hidden = Boolean(unit) && !units.includes(unit);
+      });
+      unitButtons.forEach((button) => button.classList.toggle("active", button.dataset.diagnosticUnit === unit));
+    };
+    unitButtons.forEach((button) => { button.onclick = () => applyUnitFilter(button.dataset.diagnosticUnit || ""); });
+    const selectAll = document.getElementById("selectAllQuestionSkills");
+    const clearAll = document.getElementById("clearQuestionSkills");
+    if (selectAll) selectAll.onclick = () => skillBoxes.forEach((box) => { if (!box.closest(".question-bank-skill-option")?.hidden) box.checked = true; });
+    if (clearAll) clearAll.onclick = () => skillBoxes.forEach((box) => { box.checked = false; });
+    const noTime = document.getElementById("diagnosticBankNoTime");
+    const durationInput = document.getElementById("diagnosticBankDuration");
+    if (noTime && durationInput) noTime.onchange = () => { durationInput.disabled = noTime.checked; };
+    const testTypeInput = document.getElementById("diagnosticBankTestType");
+    const titleInput = document.getElementById("diagnosticBankTitle");
+    if (testTypeInput && titleInput) testTypeInput.onchange = () => {
+      const oldAutoTitle = titleInput.dataset.autoTitle || "";
+      const nextAutoTitle = `${TEST_TYPE_LABELS[testTypeInput.value] || "اختبار"} - ${questionBankSelection.gradeLabel}`;
+      if (!titleInput.value.trim() || titleInput.value.trim() === oldAutoTitle) titleInput.value = nextAutoTitle;
+      titleInput.dataset.autoTitle = nextAutoTitle;
+    };
+    const previewButton = document.getElementById("previewDiagnosticTest");
+    if (previewButton) previewButton.onclick = previewDiagnosticTestFromSkills;
+    const sendButton = document.getElementById("sendDiagnosticToTests");
+    if (sendButton) sendButton.onclick = createDiagnosticTestFromSkills;
+    return;
+  }
+  if (workspace.dataset.mode === "professional") {
+    const typeSelect = document.getElementById("inlineProfessionalType");
+    const optionsField = document.getElementById("inlineProfessionalOptionsField");
+    const optionsInput = document.getElementById("inlineProfessionalOptions");
+    const answerInput = document.getElementById("inlineProfessionalAnswer");
+    typeSelect.onchange = () => {
+      optionsField.hidden = typeSelect.value === "short_answer";
+      if (typeSelect.value === "true_false") {
+        optionsInput.value = "صح\nخطأ";
+        answerInput.placeholder = "صح أو خطأ";
+      } else if (typeSelect.value === "mcq") {
+        if (optionsInput.value === "صح\nخطأ") optionsInput.value = "";
+        answerInput.placeholder = "اكتبي الإجابة كما تظهر في الخيارات";
+      } else {
+        optionsInput.value = "";
+        answerInput.placeholder = "اكتبي الإجابة النموذجية";
+      }
+    };
+    document.getElementById("saveInlineProfessionalQuestion").onclick = saveInlineProfessionalQuestion;
+    return;
+  }
+  const skillBoxes = [...workspace.querySelectorAll("[data-question-bank-skill]")];
+  const selectAll = document.getElementById("selectAllQuestionSkills");
+  const clearAll = document.getElementById("clearQuestionSkills");
+  if (selectAll) selectAll.onclick = () => skillBoxes.forEach((box) => { box.checked = true; });
+  if (clearAll) clearAll.onclick = () => skillBoxes.forEach((box) => { box.checked = false; });
+  document.getElementById("runSkillQuestionDesign").onclick = runQuestionBankSkillGeneration;
+}
+
+function diagnosticSelectedSkillData() {
+  const workspace = document.getElementById("questionDesignWorkspace");
+  const selectedIds = [...workspace.querySelectorAll("[data-question-bank-skill]:checked")].map((box) => Number(box.value));
+  const selectedSet = new Set(selectedIds);
+  return {
+    ids: selectedIds,
+    skills: questionBankSkillsForSelection().filter((skill) => questionBankSkillHasTerm(skill) && selectedSet.has(Number(skill.id))),
+  };
+}
+
+function diagnosticBankDurationValue() {
+  if (document.getElementById("diagnosticBankNoTime")?.checked) return 0;
+  return Math.max(1, Math.min(240, Number(document.getElementById("diagnosticBankDuration")?.value) || 20));
+}
+
+function diagnosticBankTestTypeValue() {
+  const value = document.getElementById("diagnosticBankTestType")?.value || "pre_diagnostic";
+  return ["pre_diagnostic", "post_diagnostic", "quiz"].includes(value) ? value : "pre_diagnostic";
+}
+
+function previewDiagnosticTestFromSkills() {
+  const selected = diagnosticSelectedSkillData();
+  const title = document.getElementById("diagnosticBankTitle")?.value.trim() || "";
+  const testType = diagnosticBankTestTypeValue();
+  const durationMinutes = diagnosticBankDurationValue();
+  const targetClasses = questionBankDiagnosticTargetClasses();
+  if (!selected.ids.length) return setQuestionBankInlineMessage("حددي مهارة واحدة على الأقل للاختبار التشخيصي.");
+  if (!title) return setQuestionBankInlineMessage("اكتبي اسم الاختبار.");
+  if (!targetClasses.length) return setQuestionBankInlineMessage("الفصل المختار من أعلى الصفحة غير مسجل لهذا الصف.");
+  openModal(`
+    <h3>معاينة ${escapeHtml(TEST_TYPE_LABELS[testType] || "الاختبار")}</h3>
+    <div class="test-context-note">${escapeHtml(questionBankSelection.stage)} · ${escapeHtml(questionBankSelection.gradeLabel)} · ${escapeHtml(questionBankClassLabel())} · ${escapeHtml(questionBankSelection.termLabel)}</div>
+    <div class="diagnostic-bank-notice"><strong>${escapeHtml(title)}</strong><p>النوع: ${escapeHtml(TEST_TYPE_LABELS[testType] || "اختبار")} · المدة: ${durationMinutes === 0 ? "بدون وقت" : `${durationMinutes} دقيقة`} · عدد المهارات والأسئلة: ${selected.ids.length} · الفصول المستهدفة: ${targetClasses.length}</p></div>
+    <div class="question-bank-skills-box"><strong>المهارات المختارة</strong><div class="question-bank-skills-grid">${selected.skills.map((skill) => `<div class="question-bank-skill-check"><span>${escapeHtml(skill.name)}</span></div>`).join("")}</div></div>
+    <p style="margin-top:14px;color:var(--muted);line-height:1.8">عند بدء الطالبة للاختبار، يسحب النظام سؤالًا عشوائيًا معتمدًا لكل مهارة، لذلك قد تختلف صيغة السؤال بين الطالبات مع بقاء المهارة نفسها.</p>
+    <div class="modal-actions"><button class="btn btn-primary" id="closeDiagnosticPreview" type="button">إغلاق المعاينة</button></div>
+  `);
+  document.getElementById("closeDiagnosticPreview").onclick = closeModal;
+}
+
+async function createDiagnosticTestFromSkills() {
+  const selected = diagnosticSelectedSkillData();
+  const skillIds = selected.ids;
+  const title = document.getElementById("diagnosticBankTitle")?.value.trim() || "";
+  const testType = diagnosticBankTestTypeValue();
+  const targetClasses = questionBankDiagnosticTargetClasses();
+  const classIds = targetClasses.map((item) => Number(item.id)).filter(Boolean);
+  const durationMinutes = diagnosticBankDurationValue();
+  if (!skillIds.length) return setQuestionBankInlineMessage("حددي مهارة واحدة على الأقل للاختبار التشخيصي.");
+  if (!title) return setQuestionBankInlineMessage("اكتبي اسم الاختبار.");
+  if (!classIds.length) return setQuestionBankInlineMessage("الفصل المختار من أعلى الصفحة غير مسجل لهذا الصف.");
+  const button = document.getElementById("sendDiagnosticToTests");
+  button.disabled = true;
+  button.textContent = "جارٍ إنشاء الاختبار...";
+  try {
+    const result = await api("/question-bank/create-diagnostic-test", { method: "POST", body: JSON.stringify({
+      title,
+      testType,
+      classIds,
+      skillIds,
+      stage: questionBankSelection.stage,
+      gradeLabel: questionBankSelection.gradeLabel,
+      termLabel: questionBankSelection.termLabel,
+      durationMinutes,
+    }) });
+    setQuestionBankInlineMessage(result.message || "تم إرسال الاختبار إلى خانة الاختبارات كمسودة.", "success");
+    const classCount = Number(result.classCount || classIds.length);
+    const createdType = result.type || testType;
+    toast(`تم إنشاء ${TEST_TYPE_LABELS[createdType] || "الاختبار"} من ${result.skillCount || skillIds.length} مهارة${classCount > 1 ? ` في ${classCount} فصول` : ""}.`);
+    const createdClassId = Number(result.classId || classIds[0]);
+    recentCreatedTestId = Number(result.id || 0);
+    recentCreatedTestType = createdType;
+    if (recentCreatedTestId > 0) {
+      sessionStorage.setItem("madarRecentCreatedTestId", String(recentCreatedTestId));
+      sessionStorage.setItem("madarRecentCreatedTestType", createdType);
+    }
+    const createdClass = targetClasses.find((item) => Number(item.id) === createdClassId) || targetClasses[0] || null;
+    const createdStage = result.classStage || createdClass?.level || questionBankSelection.stage;
+    const createdGradeRaw = result.classGradeLabel || createdClass?.grade_label || questionBankSelection.gradeLabel;
+    academicSelections.tests = {
+      stage: createdStage,
+      gradeLabel: normalizeGradeKey(createdStage, createdGradeRaw),
+      classId: String(createdClassId || classIds[0]),
+    };
+    sessionStorage.setItem("madarAcademicTests", JSON.stringify(academicSelections.tests));
+    openTestsPanel(createdType);
+  } catch (error) {
+    setQuestionBankInlineMessage(error.message);
+    button.disabled = false;
+    button.textContent = "إرسال الاختبار إلى خانة الاختبارات";
+  }
+}
+
+async function runQuestionBankSkillGeneration() {
+  const workspace = document.getElementById("questionDesignWorkspace");
+  const modeKey = workspace?.dataset.mode || questionBankSelectedMode;
+  const mode = QUESTION_DESIGN_MODES[modeKey] || QUESTION_DESIGN_MODES.quick;
+  const selectedIds = [...workspace.querySelectorAll("[data-question-bank-skill]:checked")].map((box) => String(box.value));
+  const selectedSkills = questionBankSkillsForSelection().filter((skill) => selectedIds.includes(String(skill.id)));
+  const customSkills = document.getElementById("questionBankCustomSkills").value
+    .split(/\r?\n|،|,|;/u).map((value) => value.trim()).filter(Boolean)
+    .map((name) => ({ id: null, name, code: "" }));
+  const targets = [...selectedSkills.map((skill) => ({ id: skill.id, name: skill.name, code: skill.code || "" })), ...customSkills]
+    .filter((skill, index, list) => list.findIndex((item) => item.name === skill.name) === index);
+  if (!targets.length) return setQuestionBankInlineMessage("اختاري مهارة واحدة على الأقل أو اكتبي مهارة إضافية.");
+  const types = [...workspace.querySelectorAll("[data-question-bank-type]:checked")].map((box) => box.value);
+  if (!types.length) return setQuestionBankInlineMessage("اختاري نوعًا واحدًا على الأقل من أنواع الأسئلة.");
+  const perSkill = Math.max(1, Math.min(10, Number(document.getElementById("questionBankQuestionsPerSkill").value) || 1));
+  const totalRequested = perSkill * targets.length;
+  if (totalRequested > 60) return setQuestionBankInlineMessage(`العدد المطلوب ${totalRequested} سؤالًا. خفّضي عدد المهارات أو عدد الأسئلة لكل مهارة إلى ٦٠ سؤالًا كحد أقصى.`);
+  const context = questionBankContext();
+  const topicContext = document.getElementById("questionBankTopicContext").value.trim();
+  const manualLessonCode = document.getElementById("questionBankLessonCode").value.trim();
+  const difficulty = document.getElementById("questionBankGenerationDifficulty").value;
+  const button = document.getElementById("runSkillQuestionDesign");
+  button.disabled = true;
+  let created = 0;
+  try {
+    for (let index = 0; index < targets.length; index += 1) {
+      const skill = targets[index];
+      button.textContent = `جارٍ تصميم مهارة ${index + 1} من ${targets.length}...`;
+      const result = await api("/ai/generate-questions", { method: "POST", body: JSON.stringify({
+        stage: context.stage,
+        gradeLabel: context.gradeLabel,
+        classLabel: context.classLabel,
+        termLabel: context.termLabel,
+        topic: topicContext ? `${skill.name} — ${topicContext}` : skill.name,
+        skillId: skill.id,
+        skillName: skill.name,
+        lessonCode: skill.code || manualLessonCode,
+        difficulty,
+        count: perSkill,
+        types,
+        designMode: modeKey,
+      }) });
+      created += Number(result.created) || 0;
+    }
+    try { allSkills = await api("/data/skills"); } catch {}
+    setQuestionBankInlineMessage(`تم تصميم ${created} سؤالًا حسب المهارات وإرسالها إلى المستودع للمراجعة.`, "success");
+    toast(`تم تصميم ${created} سؤالًا وإرسالها إلى المستودع.`);
+    questionBankView = "repository";
+    questionBankRepositoryFiltered = false;
+    sessionStorage.setItem("madarQuestionBankView", "repository");
+    sessionStorage.setItem("madarQuestionBankRepositoryFiltered", "0");
+    await renderQuestionBankRepository();
+  } catch (error) {
+    setQuestionBankInlineMessage(created ? `تم حفظ ${created} سؤالًا، ثم توقف التوليد: ${error.message}` : error.message);
+    button.disabled = false;
+    button.textContent = `${mode.icon} تصميم الأسئلة من المهارات`;
+  }
+}
+
+async function saveInlineProfessionalQuestion() {
+  const button = document.getElementById("saveInlineProfessionalQuestion");
+  const skillId = document.getElementById("inlineProfessionalSkill").value || null;
+  const skill = allSkills.find((item) => String(item.id) === String(skillId));
+  const type = document.getElementById("inlineProfessionalType").value;
+  const options = document.getElementById("inlineProfessionalOptions").value.split("\n").map((value) => value.trim()).filter(Boolean);
+  button.disabled = true;
+  try {
+    await api("/question-bank", { method: "POST", body: JSON.stringify({
+      stage: questionBankSelection.stage,
+      gradeLabel: questionBankSelection.gradeLabel,
+      classLabel: questionBankClassLabel(),
+      termLabel: questionBankSelection.termLabel,
+      topic: document.getElementById("inlineProfessionalTopic").value.trim() || skill?.name || "عام",
+      chapterName: document.getElementById("inlineProfessionalChapter").value.trim(),
+      lessonCode: document.getElementById("inlineProfessionalLessonCode").value.trim() || skill?.code || "",
+      questionLevel: document.getElementById("inlineProfessionalLevel").value,
+      cognitiveType: document.getElementById("inlineProfessionalCognitive").value.trim(),
+      bloomLevel: document.getElementById("inlineProfessionalBloom").value.trim(),
+      difficulty: document.getElementById("inlineProfessionalDifficulty").value,
+      type,
+      questionText: document.getElementById("inlineProfessionalText").value.trim(),
+      options: type === "short_answer" ? [] : (type === "true_false" && !options.length ? ["صح", "خطأ"] : options),
+      correctAnswer: document.getElementById("inlineProfessionalAnswer").value.trim(),
+      explanation: document.getElementById("inlineProfessionalExplanation").value.trim(),
+      skillRepeatNumber: 1,
+      referencePage: "",
+      contentSource: "كتاب الطالب",
+      points: Number(document.getElementById("inlineProfessionalPoints").value) || 1,
+      skillId,
+      reviewStatus: "approved",
+    }) });
+    setQuestionBankInlineMessage("تم حفظ السؤال في المستودع بنجاح.", "success");
+    toast("تم حفظ السؤال في المستودع.");
+    document.getElementById("inlineProfessionalText").value = "";
+    document.getElementById("inlineProfessionalAnswer").value = "";
+    document.getElementById("inlineProfessionalExplanation").value = "";
+    if (type !== "true_false") document.getElementById("inlineProfessionalOptions").value = "";
+  } catch (error) {
+    setQuestionBankInlineMessage(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function questionBankRepositoryQuery() {
+  if (!questionBankRepositoryFiltered) return "";
+  const context = questionBankContext();
+  const params = new URLSearchParams({
+    stage: context.stage,
+    gradeLabel: context.gradeLabel,
+    termLabel: context.termLabel,
+  });
+  if (questionBankSelection.classValue !== "all") params.set("classLabel", context.classLabel);
+  return `?${params.toString()}`;
+}
+
+async function renderQuestionBankRepository() {
+  const query = questionBankRepositoryQuery();
+  const rows = await api(`/question-bank${query}`);
+  const importedPending = rows.filter((q) => q.source === "imported" && q.review_status === "pending");
+  const importedBatch = importedPending[0]?.import_batch || "";
+  const importedPendingBatch = importedBatch ? importedPending.filter((q) => q.import_batch === importedBatch) : [];
+  const exportQuery = query || "";
+  contentEl.innerHTML = `
+    ${questionBankTabsHtml("repository")}
+    <section class="question-bank-repository-head">
+      <div class="question-bank-repository-title"><span>🗂️</span><div><h3>مستودع الأسئلة</h3><p>${rows.length} سؤالًا محفوظًا وجاهزًا للمراجعة والتنظيم.</p></div></div>
+      <div class="question-bank-excel-actions" aria-label="استيراد وتصدير بنك الأسئلة">
+        <button class="btn btn-outline" type="button" id="exportQuestionBankBtn">📤 تصدير Excel</button>
+        <button class="btn btn-secondary" type="button" id="importQuestionBankBtn">📥 استيراد من Excel</button>
+      </div>
+    </section>
+    <div class="question-bank-repository-toolbar">
+      <div class="question-bank-filter-toggle">
+        <button type="button" class="tab-btn ${!questionBankRepositoryFiltered ? "active" : ""}" data-bank-repository-filter="all">كل الأسئلة</button>
+        <button type="button" class="tab-btn ${questionBankRepositoryFiltered ? "active" : ""}" data-bank-repository-filter="selection">حسب اختيارات التصميم</button>
+      </div>
+      <div class="spacer"></div>
+      <select class="question-bank-bulk-level" id="bulkCognitiveType" aria-label="التصنيف المعرفي للأسئلة المحددة">${BANK_COGNITIVE.map((value) => `<option value="${value}">${value}</option>`).join("")}</select>
+      <button class="btn btn-outline btn-sm" id="applyBulkCognitiveType" type="button">تطبيق التصنيف على المحدد</button>
+      <button class="btn btn-secondary btn-sm" id="manualQuestionBtn" type="button">+ إضافة سؤال يدوي</button>
+      <button class="btn btn-outline btn-sm" id="testFromBankBtn" type="button">إرسال الاختبار إلى خانة الاختبارات</button>
+      ${importedPendingBatch.length ? `<button class="btn btn-primary btn-sm" id="approveImportedBtn" type="button">اعتماد الدفعة المستوردة (${importedPendingBatch.length})</button>` : ""}
+    </div>
+    ${questionBankRepositoryFiltered ? `<div class="question-bank-filter-summary">يعرض الآن: ${escapeHtml(questionBankSelection.stage)} · ${escapeHtml(questionBankSelection.gradeLabel)} · ${escapeHtml(questionBankClassLabel())} · ${escapeHtml(questionBankSelection.termLabel)}</div>` : ""}
+    <div class="card question-bank-table-card">
+      <div class="table-wrap question-bank-scroll-area" id="questionBankMainScroll" tabindex="0" aria-label="جدول مستودع الأسئلة قابل للتمرير رأسيًا وأفقيًا">
+        ${rows.length ? `<table class="question-bank-table" dir="rtl"><thead><tr><th>نص السؤال</th><th>المرحلة والصف</th><th>الترم</th><th>الموضوع ورمز الدرس</th><th>اسم المهارة</th><th>مستوى الصعوبة</th><th>التصنيف المعرفي</th><th>نوع السؤال</th><th>المرجع</th><th>المصدر</th><th>المراجعة</th><th>إجراءات</th></tr></thead><tbody>
+          ${rows.map((q) => `<tr>
+            <td class="question-bank-question-cell"><label class="question-bank-select-box"><input type="checkbox" data-bank-select="${q.id}" data-bank-approved="${q.review_status === "approved" ? "1" : "0"}" aria-label="تحديد السؤال"><span></span></label><strong>${escapeHtml(q.questionText)}</strong></td>
+            <td>${escapeHtml(q.stage || "—")}<br><small>${escapeHtml(q.grade_label || "—")}</small></td>
+            <td>${escapeHtml(q.term_label || "غير محدد")}</td>
+            <td><strong>${escapeHtml(q.topic || "—")}</strong>${q.lesson_code ? `<br><small>رمز الدرس: ${escapeHtml(q.lesson_code)}</small>` : ""}</td>
+            <td><strong>${escapeHtml(q.skill_name || "غير مرتبطة بمهارة")}</strong></td>
+            <td>${escapeHtml(BANK_STYLE[q.difficulty] || q.difficulty || "—")}</td>
+            <td><span class="badge badge-gray">${escapeHtml(q.cognitive_type || BANK_LEVEL[q.question_level] || "غير مصنف")}</span></td>
+            <td>${escapeHtml(BANK_TYPE[q.type] || q.type || "—")}</td>
+            <td>${q.reference_page ? `ص ${escapeHtml(q.reference_page)}` : "—"}</td>
+            <td><span class="badge ${q.content_source === "كتاب الطالب" ? "badge-green" : q.content_source === "الإنترنت" ? "badge-purple" : "badge-gray"}">${escapeHtml(q.content_source || "غير محدد")}</span></td>
+            <td><span class="badge ${q.review_status === "approved" ? "badge-green" : q.review_status === "rejected" ? "badge-red" : "badge-orange"}">${q.review_status === "approved" ? "معتمد" : q.review_status === "rejected" ? "مرفوض" : "بانتظار المراجعة"}</span></td>
+            <td><div class="question-bank-row-actions"><button class="btn btn-outline btn-sm" data-bank-edit="${q.id}" type="button">مراجعة</button>${q.review_status !== "approved" ? `<button class="btn btn-secondary btn-sm" data-approve="${q.id}" type="button">اعتماد</button>` : ""}<button class="btn btn-danger btn-sm" data-bank-delete="${q.id}" type="button">حذف</button></div></td>
+          </tr>`).join("")}
+        </tbody></table>` : `<div class="empty-state"><div class="ic">📭</div><h3>المستودع فارغ</h3><p>تم تفريغ الأسئلة القديمة. استخدمي «إضافة سؤال يدوي» أو «استيراد من Excel» لبدء بنك جديد مرتب.</p></div>`}
+      </div>
+      ${rows.length ? `<div class="question-bank-horizontal-scroll" id="questionBankHorizontalScroll" tabindex="0" aria-label="شريط تمرير المستودع يمينًا ويسارًا"><div id="questionBankHorizontalSpacer"></div></div>` : ""}
+    </div>
+    <div class="question-bank-delete-all-row">
+      <button class="btn btn-danger" id="deleteAllQuestionBankBtn" type="button" ${rows.length ? "" : "disabled"}>🗑️ حذف جميع ما في المستودع</button>
+    </div>`;
+
+  bindQuestionBankTabs();
+  document.getElementById("exportQuestionBankBtn").onclick = () => {
+    window.location.href = `/api/teacher/question-bank/export.xlsx${exportQuery}`;
+  };
+  document.getElementById("importQuestionBankBtn").onclick = openQuestionBankImport;
+  document.getElementById("manualQuestionBtn").onclick = () => openBankQuestionForm(null, questionBankContext());
+  const repositoryMainScroll = document.getElementById("questionBankMainScroll");
+  const repositoryHorizontalScroll = document.getElementById("questionBankHorizontalScroll");
+  const repositoryHorizontalSpacer = document.getElementById("questionBankHorizontalSpacer");
+  if (repositoryMainScroll && repositoryHorizontalScroll && repositoryHorizontalSpacer) {
+    repositoryHorizontalSpacer.style.width = `${repositoryMainScroll.scrollWidth}px`;
+    let syncingRepositoryScroll = false;
+    const syncRepositoryScroll = (source, target) => {
+      if (syncingRepositoryScroll) return;
+      syncingRepositoryScroll = true;
+      target.scrollLeft = source.scrollLeft;
+      requestAnimationFrame(() => { syncingRepositoryScroll = false; });
+    };
+    repositoryMainScroll.addEventListener("scroll", () => syncRepositoryScroll(repositoryMainScroll, repositoryHorizontalScroll), { passive: true });
+    repositoryHorizontalScroll.addEventListener("scroll", () => syncRepositoryScroll(repositoryHorizontalScroll, repositoryMainScroll), { passive: true });
+    repositoryHorizontalScroll.scrollLeft = repositoryMainScroll.scrollLeft;
+  }
+  document.getElementById("testFromBankBtn").onclick = createTestFromSelectedBank;
+  document.getElementById("deleteAllQuestionBankBtn").onclick = () => confirmAction(
+    `سيتم حذف جميع أسئلة المستودع وعددها ${rows.length} سؤالًا نهائيًا. لن يمكن التراجع عن الحذف. هل أنتِ متأكدة؟`,
+    async () => {
+      const result = await api("/question-bank/delete-all", { method: "POST", body: JSON.stringify({ confirm: true }) });
+      toast(`تم حذف ${result.deleted || 0} سؤالًا من المستودع.`);
+      await renderQuestionBankRepository();
+    }
+  );
+  document.getElementById("applyBulkCognitiveType").onclick = async () => {
+    const questionIds = [...contentEl.querySelectorAll("[data-bank-select]:checked")].map((box) => Number(box.dataset.bankSelect));
+    if (!questionIds.length) return toast("حددي سؤالًا واحدًا على الأقل.");
+    const cognitiveType = document.getElementById("bulkCognitiveType").value;
+    const result = await api("/question-bank/bulk-cognitive", { method: "POST", body: JSON.stringify({ questionIds, cognitiveType }) });
+    toast(`تم تحديث التصنيف المعرفي لـ ${result.updated} سؤالًا.`);
+    renderQuestionBankRepository();
+  };
+  contentEl.querySelectorAll("[data-bank-repository-filter]").forEach((button) => {
+    button.onclick = () => {
+      questionBankRepositoryFiltered = button.dataset.bankRepositoryFilter === "selection";
+      sessionStorage.setItem("madarQuestionBankRepositoryFiltered", questionBankRepositoryFiltered ? "1" : "0");
+      renderQuestionBankRepository();
+    };
+  });
+  if (document.getElementById("approveImportedBtn")) document.getElementById("approveImportedBtn").onclick = () => confirmAction(`هل راجعتِ هذه الدفعة وتريدين اعتماد ${importedPendingBatch.length} سؤالًا؟`, async () => {
+    const result = await api("/question-bank/bulk-review", { method: "POST", body: JSON.stringify({ importBatch: importedBatch, status: "approved" }) });
+    toast(`تم اعتماد ${result.updated} سؤالًا.`);
+    renderQuestionBankRepository();
+  });
+  contentEl.querySelectorAll("[data-bank-edit]").forEach((button) => button.onclick = () => openBankQuestionForm(rows.find((item) => item.id == button.dataset.bankEdit)));
+  contentEl.querySelectorAll("[data-approve]").forEach((button) => button.onclick = async () => {
+    const question = rows.find((item) => item.id == button.dataset.approve);
+    await api(`/question-bank/${question.id}`, { method: "PUT", body: JSON.stringify(bankQuestionPayload(question, "approved")) });
+    toast("تم اعتماد السؤال.");
+    renderQuestionBankRepository();
+  });
+  contentEl.querySelectorAll("[data-bank-delete]").forEach((button) => button.onclick = () => confirmAction("هل تريدين حذف هذا السؤال؟", async () => {
+    await api(`/question-bank/${button.dataset.bankDelete}`, { method: "DELETE" });
+    toast("تم حذف السؤال.");
+    renderQuestionBankRepository();
+  }));
+}
+
+async function renderQuestionBank() {
+  try {
+    if (questionBankView === "repository") await renderQuestionBankRepository();
+    else renderQuestionBankDesign();
+  } catch (error) {
+    contentEl.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function bankQuestionPayload(question, reviewStatus = "approved") {
+  return {
+    stage: question.stage,
+    gradeLabel: question.grade_label,
+    classLabel: question.class_label || "كل الفصول",
+    termLabel: question.term_label || "",
+    topic: question.topic,
+    chapterName: question.chapter_name || "",
+    questionLevel: question.question_level || "unclassified",
+    cognitiveType: question.cognitive_type || "",
+    bloomLevel: question.bloom_level || "",
+    skillRepeatNumber: Number(question.skill_repeat_number) || 0,
+    referencePage: question.reference_page || "",
+    contentSource: question.content_source || "",
+    difficulty: question.difficulty,
+    type: question.type,
+    questionText: question.questionText,
+    options: question.options,
+    correctAnswer: question.correctAnswer,
+    explanation: question.explanation || "",
+    points: Number(question.points) || 1,
+    skillId: question.skill_id || null,
+    lessonCode: question.lesson_code || "",
+    reviewStatus,
+  };
+}
+
+function bankGradeOptionsHtml(stage, selected) {
+  return (QUESTION_BANK_GRADES[stage] || []).map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selected ? "selected" : ""}>${escapeHtml(item.value)}</option>`).join("");
+}
+
+function bankClassOptionsHtml(selected) {
+  return QUESTION_BANK_CLASSES.map((item) => {
+    const value = item.value === "all" ? "كل الفصول" : questionBankClassLabel(item.value);
+    return `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(item.label === "كل الفصول" ? item.label : `الفصل ${item.label}`)}</option>`;
+  }).join("");
+}
+
+function bankTermOptionsHtml(selected) {
+  return QUESTION_BANK_TERMS.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+}
+
+function openBankQuestionForm(question = null, defaults = {}) {
+  const initialStage = question?.stage || defaults.stage || "ابتدائي";
+  const initialGrade = question?.grade_label || defaults.gradeLabel || QUESTION_BANK_GRADES[initialStage]?.[0]?.value || "";
+  const initialClass = question?.class_label || defaults.classLabel || "كل الفصول";
+  const initialTerm = question?.term_label || defaults.termLabel || "الترم الأول";
+  openModal(`
+    <h3>${question ? "مراجعة وتعديل السؤال" : "تصميم سؤال احترافي"}</h3>${question?.source === "ai" ? '<p class="modal-note">راجعي نص السؤال وخياراته وإجابته قبل الاعتماد.</p>' : '<p class="modal-note">سيُحفظ السؤال مباشرة داخل مستودع بنك الأسئلة.</p>'}<div id="bankFormMsg"></div>
+    <div class="form-grid">
+      <div class="field">المرحلة<select id="bStage">${Object.keys(QUESTION_BANK_GRADES).map((value) => `<option value="${value}" ${initialStage === value ? "selected" : ""}>${value}</option>`).join("")}</select></div>
+      <div class="field">الصف<select id="bGrade">${bankGradeOptionsHtml(initialStage, initialGrade)}</select></div>
+      <div class="field">الفصل<select id="bClass">${bankClassOptionsHtml(initialClass)}</select></div>
+      <div class="field">الترم<select id="bTerm">${bankTermOptionsHtml(initialTerm)}</select></div>
+      <div class="field">الموضوع أو الدرس<input id="bTopic" value="${escapeHtml(question?.topic || "")}" placeholder="مثال: المعادلات الخطية"></div>
+      <div class="field">الفصل أو الوحدة في الكتاب<input id="bChapter" value="${escapeHtml(question?.chapter_name || "")}" placeholder="اختياري"></div>
+      <div class="field">رمز الدرس<input id="bLessonCode" value="${escapeHtml(question?.lesson_code || "")}" placeholder="اختياري"></div>
+      <div class="field">مستوى الصعوبة<select id="bDifficulty">${[["easy", "سهل"], ["medium", "متوسط"], ["hard", "صعب"]].map(([value, label]) => `<option value="${value}" ${question?.difficulty === value || (!question && value === "medium") ? "selected" : ""}>${label}</option>`).join("")}</select></div>
+      <div class="field">التصنيف المعرفي<select id="bCognitive"><option value="">غير مصنف</option>${BANK_COGNITIVE.map((value) => `<option value="${value}" ${question?.cognitive_type === value ? "selected" : ""}>${value}</option>`).join("")}</select></div>
+      <div class="field">نوع السؤال<select id="bType">${[["mcq", "اختيار متعدد"], ["true_false", "صح أو خطأ"], ["short_answer", "إجابة قصيرة"]].map(([value, label]) => `<option value="${value}" ${question?.type === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
+      <div class="field">رقم تكرار المهارة<input id="bSkillRepeat" type="number" min="1" step="1" value="${Number(question?.skill_repeat_number) || 1}"></div>
+      <div class="field">صفحة المرجع<input id="bReferencePage" value="${escapeHtml(question?.reference_page || "")}" placeholder="مثال: ٢٤"></div>
+      <div class="field">المصدر<select id="bContentSource"><option value="">غير محدد</option>${BANK_CONTENT_SOURCE.map((value) => `<option value="${value}" ${(question?.content_source || (!question ? "كتاب الطالب" : "")) === value ? "selected" : ""}>${value}</option>`).join("")}</select></div>
+      <div class="field">مستوى بلوم<input id="bBloom" value="${escapeHtml(question?.bloom_level || "")}" placeholder="اختياري"></div>
+      <div class="field">النقاط<input id="bPoints" type="number" min="0.5" step="0.5" value="${Number(question?.points) || 1}"></div>
+    </div>
+    <div class="field" style="margin-top:10px">نص السؤال<textarea id="bText">${escapeHtml(question?.questionText || "")}</textarea></div>
+    <div class="field" style="margin-top:10px">الخيارات — خيار في كل سطر<textarea id="bOptions">${escapeHtml((question?.options || []).join("\n"))}</textarea></div>
+    <div class="field" style="margin-top:10px">الإجابة الصحيحة<input id="bAnswer" value="${escapeHtml(question?.correctAnswer || "")}"></div>
+    <div class="field" style="margin-top:10px">شرح الإجابة<textarea id="bExplanation">${escapeHtml(question?.explanation || "")}</textarea></div>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelBankForm" type="button">إلغاء</button><button class="btn btn-primary" id="saveBankForm" type="button">${question?.review_status === "pending" ? "حفظ واعتماد" : "حفظ السؤال"}</button></div>`);
+  document.getElementById("bStage").onchange = (event) => {
+    document.getElementById("bGrade").innerHTML = bankGradeOptionsHtml(event.target.value, "");
+  };
+  document.getElementById("cancelBankForm").onclick = closeModal;
+  document.getElementById("saveBankForm").onclick = async () => {
+    const button = document.getElementById("saveBankForm");
+    button.disabled = true;
+    try {
+      await api(question ? `/question-bank/${question.id}` : "/question-bank", { method: question ? "PUT" : "POST", body: JSON.stringify({
+        stage: document.getElementById("bStage").value,
+        gradeLabel: document.getElementById("bGrade").value,
+        classLabel: document.getElementById("bClass").value,
+        termLabel: document.getElementById("bTerm").value,
+        topic: document.getElementById("bTopic").value.trim(),
+        chapterName: document.getElementById("bChapter").value.trim(),
+        lessonCode: document.getElementById("bLessonCode").value.trim(),
+        questionLevel: "unclassified",
+        cognitiveType: document.getElementById("bCognitive").value,
+        bloomLevel: document.getElementById("bBloom").value.trim(),
+        skillRepeatNumber: Number(document.getElementById("bSkillRepeat").value) || 1,
+        referencePage: document.getElementById("bReferencePage").value.trim(),
+        contentSource: document.getElementById("bContentSource").value,
+        difficulty: document.getElementById("bDifficulty").value,
+        type: document.getElementById("bType").value,
+        questionText: document.getElementById("bText").value.trim(),
+        options: document.getElementById("bOptions").value.split("\n").map((value) => value.trim()).filter(Boolean),
+        correctAnswer: document.getElementById("bAnswer").value.trim(),
+        explanation: document.getElementById("bExplanation").value.trim(),
+        points: Number(document.getElementById("bPoints").value) || 1,
+        skillId: question?.skill_id || null,
+        reviewStatus: question?.review_status === "rejected" ? "rejected" : "approved",
+      }) });
+      closeModal();
+      toast(question ? "تم حفظ ومراجعة السؤال." : "تم حفظ السؤال في المستودع.");
+      if (questionBankView === "repository") renderQuestionBankRepository();
+    } catch (error) {
+      document.getElementById("bankFormMsg").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+      button.disabled = false;
+    }
+  };
+}
+
+function openQuestionBankImport() {
+  const context = questionBankContext();
+  openModal(`
+    <h3>📥 استيراد أسئلة من Excel</h3>
+    <p class="modal-note">يمكن استيراد XLSX أو ZIP يحتوي ملف Excel. يتعرف مدار تلقائيًا على أوراق «اختيار من متعدد» و«صح وخطأ» و«صِل»، ولا يقرأ ورقة دليل الاستخدام كأنها أسئلة.</p>
+    <div class="question-bank-import-context"><strong>الاختيارات الافتراضية:</strong><span>${escapeHtml(context.stage)} · ${escapeHtml(context.gradeLabel)} · ${escapeHtml(context.classLabel)} · ${escapeHtml(context.termLabel)}</span></div>
+    <div id="questionBankImportMsg"></div>
+    <label class="field question-bank-file-field">ملف Excel<input type="file" id="questionBankImportFile" accept=".xlsx,.zip,.csv,.txt"></label>
+    <div class="question-bank-template-note"><span>يدعم الاستيراد أعمدة نموذج مدار من A إلى S. الأسئلة الجديدة تُستورد بانتظار المراجعة، والتصنيف المعرفي يكون: تحليلي أو استدلال أو منطقي أو تطبيقي.</span><button class="btn btn-outline btn-sm" id="downloadQuestionBankTemplate" type="button">⬇️ تحميل نموذج Excel</button></div>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelQuestionBankImport" type="button">إلغاء</button><button class="btn btn-primary" id="runQuestionBankImport" type="button">استيراد الملف</button></div>`);
+  document.getElementById("downloadQuestionBankTemplate").onclick = () => { window.location.href = "/api/teacher/question-bank/export.xlsx?template=1"; };
+  document.getElementById("cancelQuestionBankImport").onclick = closeModal;
+  document.getElementById("runQuestionBankImport").onclick = async () => {
+    const file = document.getElementById("questionBankImportFile").files[0];
+    if (!file) {
+      document.getElementById("questionBankImportMsg").innerHTML = '<div class="form-error">اختاري ملف Excel أولًا.</div>';
+      return;
+    }
+    const button = document.getElementById("runQuestionBankImport");
+    button.disabled = true;
+    button.textContent = "جارٍ الاستيراد...";
+    const form = new FormData();
+    form.append("file", file);
+    form.append("stage", context.stage);
+    form.append("gradeLabel", context.gradeLabel);
+    form.append("classLabel", context.classLabel);
+    form.append("termLabel", context.termLabel);
+    try {
+      const result = await api("/question-bank/import", { method: "POST", body: form });
+      try { allSkills = await api("/data/skills"); } catch {}
+      closeModal();
+      const details = result.skipped ? ` وتجاوز ${result.skipped} صفًا مكررًا أو غير مكتمل` : "";
+      toast(`تم استيراد ${result.imported} سؤالًا${details}.`);
+      questionBankView = "repository";
+      questionBankRepositoryFiltered = false;
+      sessionStorage.setItem("madarQuestionBankView", "repository");
+      sessionStorage.setItem("madarQuestionBankRepositoryFiltered", "0");
+      renderQuestionBankRepository();
+    } catch (error) {
+      document.getElementById("questionBankImportMsg").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+      button.disabled = false;
+      button.textContent = "استيراد الملف";
+    }
+  };
+}
+
+function createTestFromSelectedBank() {
+  const selected = [...contentEl.querySelectorAll("[data-bank-select]:checked")];
+  const ids = selected.filter((box) => box.dataset.bankApproved === "1").map((box) => Number(box.dataset.bankSelect));
+  if (!ids.length) return toast("اختاري سؤالًا معتمدًا واحدًا على الأقل. الأسئلة بانتظار المراجعة لا تُرسل للاختبار.");
+  if (ids.length < selected.length) toast(`سيتم إرسال ${ids.length} سؤالًا معتمدًا فقط، وتجاوز الأسئلة غير المعتمدة.`);
+  const context = questionBankContext();
+  const matchingClasses = allClasses.filter((item) => item.level === context.stage && normalizeGradeKey(item.level, item.grade_label) === normalizeGradeKey(context.stage, context.gradeLabel));
+  openModal(`<h3>إرسال الأسئلة إلى خانة الاختبارات</h3><p class="modal-note">سيُنشأ الاختبار كمسودة داخل خانة الاختبارات ويمكن نشره بعد المراجعة.</p><div class="form-grid full">
+    <div class="field">عنوان الاختبار<input id="bankTestTitle" placeholder="مثال: اختبار الفصل الأول"></div>
+    <div class="field">النوع<select id="bankTestType"><option value="quiz">اختبار فتري أو قصير</option><option value="pre_diagnostic">تشخيصي قبلي</option><option value="post_diagnostic">تشخيصي بعدي</option></select></div>
+    <div class="field">الفصل<select id="bankTestClass"><option value="">اختاري الفصل</option>${(matchingClasses.length ? matchingClasses : allClasses).map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select></div>
+  </div><div class="modal-actions"><button class="btn btn-outline" id="cancelBankTest" type="button">إلغاء</button><button class="btn btn-primary" id="saveBankTest" type="button">إنشاء وإرسال للاختبارات</button></div>`);
+  document.getElementById("cancelBankTest").onclick = closeModal;
+  document.getElementById("saveBankTest").onclick = async () => {
+    const title = document.getElementById("bankTestTitle").value.trim();
+    const classId = document.getElementById("bankTestClass").value;
+    const testType = document.getElementById("bankTestType").value;
+    if (!title || !classId) return toast("اكتبي عنوان الاختبار واختاري الفصل.");
+    const button = document.getElementById("saveBankTest");
+    button.disabled = true;
+    try {
+      const saved = await api("/tests", { method: "POST", body: JSON.stringify({ title, type: testType, classId, durationMinutes: 20, questions: [] }) });
+      await api(`/tests/${saved.id}/add-bank-questions`, { method: "POST", body: JSON.stringify({ questionIds: ids }) });
+      closeModal();
+      toast("تم إنشاء الاختبار وإرساله إلى خانة الاختبارات كمسودة.");
+      const selectedClass = allClasses.find((item) => String(item.id) === String(classId));
+      if (selectedClass) {
+        academicSelections.tests = { stage: selectedClass.level, gradeLabel: normalizeGradeKey(selectedClass.level, selectedClass.grade_label), classId: String(classId) };
+        sessionStorage.setItem("madarAcademicTests", JSON.stringify(academicSelections.tests));
+      }
+      openTestsPanel(testType);
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
+  };
+}
+
+
+async function renderAnalysisLearning() {
+  const data = await api("/analysis/learning-styles");
+  const labels = { visual: "بصري", auditory: "سمعي", reading_writing: "قرائي/كتابي", kinesthetic: "حركي/تطبيقي", mixed: "مختلط", unknown: "غير محدد" };
+  contentEl.innerHTML = `<div class="card"><h3 class="section-title">توزيع أنماط التعلّم داخل الفصول</h3><p style="color:var(--muted)">${escapeHtml(data.notice)}</p>${data.items.length ? data.items.map((item) => `<div class="skill-pill"><div><strong>${labels[item.style] || item.style}</strong><br><small>${escapeHtml(data.recommendations[item.style] || "")}</small></div><span class="badge badge-purple">${item.count} طالبة · متوسط ${item.average_progress || 0}%</span></div>`).join("") : '<div class="empty-state">لم تُسجّل الطالبات نتائج الاستبانة بعد.</div>'}</div>`;
+}
+
+const EDUCATIONAL_CONTENT = {
+  "interactive-games": {
+    icon: "🕹️",
+    group: "الألعاب",
+    title: "الألعاب التفاعلية",
+    description: "مساحة تنظيم الألعاب التعليمية التي تساعد الطالبات على التدريب بطريقة ممتعة وتفاعلية.",
+    hint: "يمكن إضافة ألعاب جديدة وربطها بالدروس والمهارات لاحقًا.",
+  },
+  competitions: {
+    icon: "🏆",
+    group: "الألعاب",
+    title: "المسابقات",
+    description: "مساحة إعداد المسابقات الصفية والتحديات التحفيزية بين الطالبات.",
+    hint: "يمكن إضافة نظام المسابقات والترتيب والجوائز في خطوة لاحقة.",
+  },
+  "flipped-classroom": {
+    icon: "🔄",
+    group: "الاستراتيجيات التعليمية",
+    title: "الصف المقلوب",
+    description: "مكان تجهيز المحتوى الذي تطّلع عليه الطالبة قبل الحصة، ثم تطبيقه ومناقشته داخل الفصل.",
+    hint: "يمكن إضافة استراتيجيات تعليمية أخرى إلى هذا القسم لاحقًا.",
+  },
+  videos: {
+    icon: "🎬",
+    group: "الموارد المكتبية",
+    title: "الفيديوهات",
+    description: "مكتبة مرتبة لدروس الفيديو والشروحات المرئية التي تشاركها المعلمة مع طالباتها.",
+    hint: "ستظهر هنا الفيديوهات التعليمية عند إضافتها.",
+  },
+  training: {
+    icon: "📒",
+    group: "الموارد المكتبية",
+    title: "التدريبات",
+    description: "مكتبة للتدريبات والتمارين التي تساعد الطالبات على ترسيخ المفاهيم وإتقانها.",
+    hint: "يمكن إضافة أوراق العمل والملفات التعليمية إلى المكتبة لاحقًا.",
+  },
+};
+
+let gamesPanelMode = "interactive-games";
+
+function openGamesPanel(mode = "interactive-games") {
+  gamesPanelMode = mode;
+  navigate("games-panel");
+}
+
+function renderGamesPanel() {
+  contentEl.innerHTML = `
+    <div class="student-panel-tabs" role="tablist" aria-label="أقسام الألعاب">
+      <button class="tab-btn ${gamesPanelMode === "interactive-games" ? "active" : ""}" data-games-panel="interactive-games">الألعاب التفاعلية</button>
+      <button class="tab-btn ${gamesPanelMode === "competitions" ? "active" : ""}" data-games-panel="competitions">المسابقات</button>
+    </div>
+    <div id="gamesPanelContent"></div>
+  `;
+  document.querySelectorAll("[data-games-panel]").forEach((button) => {
+    button.onclick = () => {
+      gamesPanelMode = button.dataset.gamesPanel;
+      renderGamesPanel();
+    };
+  });
+  renderEducationalContent(gamesPanelMode, document.getElementById("gamesPanelContent"));
+}
+
+function openStrategiesPanel() {
+  navigate("strategies-panel");
+}
+
+function renderStrategiesPanel() {
+  contentEl.innerHTML = `
+    <div class="student-panel-tabs" role="tablist" aria-label="أقسام الاستراتيجيات">
+      <button class="tab-btn active" type="button" aria-selected="true">الصف المقلوب</button>
+    </div>
+    <div id="strategiesPanelContent"></div>
+  `;
+  renderEducationalContent("flipped-classroom", document.getElementById("strategiesPanelContent"));
+}
+
+let libraryPanelMode = "videos";
+
+function openLibraryPanel(mode = "videos") {
+  libraryPanelMode = mode;
+  navigate("library-panel");
+}
+
+function renderLibraryPanel() {
+  contentEl.innerHTML = `
+    <div class="student-panel-tabs" role="tablist" aria-label="أقسام الموارد المكتبية">
+      <button class="tab-btn ${libraryPanelMode === "videos" ? "active" : ""}" data-library-panel="videos">الفيديوهات</button>
+      <button class="tab-btn ${libraryPanelMode === "training" ? "active" : ""}" data-library-panel="training">التدريبات</button>
+    </div>
+    <div id="libraryPanelContent"></div>
+  `;
+  document.querySelectorAll("[data-library-panel]").forEach((button) => {
+    button.onclick = () => {
+      libraryPanelMode = button.dataset.libraryPanel;
+      renderLibraryPanel();
+    };
+  });
+  renderEducationalContent(libraryPanelMode, document.getElementById("libraryPanelContent"));
+}
+
+let knowledgeExchangeMode = "worksheet";
+
+const KNOWLEDGE_META = {
+  worksheet: { label: "أوراق عمل", icon: "📝", hint: "ارفعي ورقة عمل بصيغة PDF أو صورة." },
+  summary: { label: "ملخصات", icon: "📄", hint: "ارفعي ملخصًا بصيغة PDF أو صورة." },
+  video: { label: "فيديوهات", icon: "🎬", hint: "أضيفي رابطًا من يوتيوب أو أي موقع فيديو آخر." },
+};
+
+async function renderKnowledgeExchange() {
+  const data = await api("/knowledge-exchange");
+  const meta = KNOWLEDGE_META[knowledgeExchangeMode];
+  const resources = data.resources.filter((item) => item.category === knowledgeExchangeMode);
+  contentEl.innerHTML = `
+    <section class="knowledge-hero">
+      <span aria-hidden="true">🤝</span>
+      <div><small>مشاركة المحتوى مع الطالبات</small><h2>تبادل المعرفة</h2><p>أضيفي أوراق العمل والملخصات وروابط الفيديو لتظهر مباشرة في حسابات طالباتكِ.</p></div>
+    </section>
+    <div class="student-panel-tabs knowledge-tabs" role="tablist" aria-label="أقسام تبادل المعرفة">
+      ${Object.entries(KNOWLEDGE_META).map(([key, item]) => `<button class="tab-btn ${knowledgeExchangeMode === key ? "active" : ""}" type="button" data-knowledge-mode="${key}"><span aria-hidden="true">${item.icon}</span> ${item.label}</button>`).join("")}
+    </div>
+    <div class="knowledge-layout">
+      <form class="card knowledge-form" id="knowledgeResourceForm" enctype="multipart/form-data">
+        <div class="knowledge-card-heading"><span aria-hidden="true">${meta.icon}</span><div><h3>إضافة ${meta.label}</h3><p>${meta.hint}</p></div></div>
+        <label class="field">العنوان<input id="knowledgeTitle" maxlength="190" required placeholder="اكتبي عنوان المورد"></label>
+        <label class="field">وصف مختصر <small>اختياري</small><textarea id="knowledgeDescription" maxlength="1000" placeholder="اكتبي وصفًا يساعد الطالبة على معرفة محتوى المورد"></textarea></label>
+        ${knowledgeExchangeMode === "video"
+          ? '<label class="field">رابط الفيديو<input id="knowledgeUrl" type="url" inputmode="url" required dir="ltr" placeholder="https://www.youtube.com/watch?v=..."></label>'
+          : '<label class="field knowledge-file-field">اختيار ملف PDF أو صورة<input id="knowledgeFile" type="file" accept="application/pdf,image/*" required><small>الحد الأقصى 15 ميجابايت.</small></label>'}
+        <div id="knowledgeFormMessage"></div>
+        <button class="btn btn-primary knowledge-submit" type="submit">${knowledgeExchangeMode === "video" ? "إضافة رابط الفيديو" : "رفع المورد"}</button>
+      </form>
+      <section class="card knowledge-list-card">
+        <div class="knowledge-card-heading"><span aria-hidden="true">📚</span><div><h3>${meta.label} المضافة</h3><p>${resources.length} مورد</p></div></div>
+        <div class="knowledge-resource-list">${resources.length ? resources.map((item) => {
+          const action = item.resourceType === "link"
+            ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">مشاهدة الفيديو</a>`
+            : `<a class="btn btn-secondary btn-sm" href="/api/teacher/knowledge-exchange/${item.id}/file" target="_blank" rel="noopener">معاينة الملف</a>`;
+          return `<article class="knowledge-resource-item"><span class="knowledge-resource-icon" aria-hidden="true">${meta.icon}</span><div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.description || "بدون وصف")}</p><small>${formatDate(item.createdAt)}${item.originalName ? ` · ${escapeHtml(item.originalName)}` : ""}</small></div><div class="knowledge-resource-actions">${action}<button class="btn btn-outline btn-sm" type="button" data-delete-knowledge="${item.id}">حذف</button></div></article>`;
+        }).join("") : `<div class="empty-state"><div class="ic">${meta.icon}</div>لم تُضف ${meta.label} بعد.</div>`}</div>
+      </section>
+    </div>`;
+
+  document.querySelectorAll("[data-knowledge-mode]").forEach((button) => {
+    button.onclick = () => {
+      knowledgeExchangeMode = button.dataset.knowledgeMode;
+      renderKnowledgeExchange().catch((error) => { contentEl.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`; });
+    };
+  });
+  document.querySelectorAll("[data-delete-knowledge]").forEach((button) => {
+    button.onclick = () => confirmAction("هل تريدين حذف هذا المورد من حسابات الطالبات؟", async () => {
+      await api(`/knowledge-exchange/${button.dataset.deleteKnowledge}`, { method: "DELETE" });
+      toast("تم حذف المورد.");
+      await renderKnowledgeExchange();
+    });
+  });
+  document.getElementById("knowledgeResourceForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const submit = event.submitter || event.currentTarget.querySelector('[type="submit"]');
+    submit.disabled = true;
+    const formData = new FormData();
+    formData.set("category", knowledgeExchangeMode);
+    formData.set("title", document.getElementById("knowledgeTitle").value.trim());
+    formData.set("description", document.getElementById("knowledgeDescription").value.trim());
+    if (knowledgeExchangeMode === "video") formData.set("url", document.getElementById("knowledgeUrl").value.trim());
+    else if (document.getElementById("knowledgeFile").files[0]) formData.set("file", document.getElementById("knowledgeFile").files[0]);
+    try {
+      await api("/knowledge-exchange", { method: "POST", body: formData });
+      toast(`تمت إضافة ${meta.label} إلى تبادل المعرفة.`);
+      await renderKnowledgeExchange();
+    } catch (error) {
+      document.getElementById("knowledgeFormMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+      submit.disabled = false;
+    }
+  };
+}
+
+function renderEducationalContent(key, target = contentEl) {
+  const section = EDUCATIONAL_CONTENT[key];
+  target.innerHTML = `
+    <div class="card educational-ready-card">
+      <div class="empty-state"><div class="ic" aria-hidden="true">${section.icon}</div><h3>قسم ${escapeHtml(section.title)} جاهز</h3><p>${escapeHtml(section.hint)}</p></div>
+    </div>`;
+}
+
+// ==========================================================================
+const ROUTES = {
+  home: renderHome,
+  profile: renderProfile,
+  "student-panel": renderStudentPanel,
+  "student-files": renderStudentFiles,
+  "follow-up": renderFollowUp,
+  motivation: renderMotivation,
+  "tests-panel": renderTestsPanel,
+  "tests-pre": () => openTestsPanel("pre_diagnostic"),
+  "tests-post": () => openTestsPanel("post_diagnostic"),
+  "tests-quiz": () => openTestsPanel("quiz"),
+  "question-bank": renderQuestionBank,
+  "analysis-panel": renderAnalysisPanel,
+  "analysis-student": () => openAnalysisPanel("student"),
+  "analysis-class": () => openAnalysisPanel("class"),
+  "analysis-skill": () => openAnalysisPanel("skill"),
+  "analysis-learning": renderAnalysisLearning,
+  "games-panel": renderGamesPanel,
+  "interactive-games": () => openGamesPanel("interactive-games"),
+  competitions: () => openGamesPanel("competitions"),
+  "strategies-panel": renderStrategiesPanel,
+  "flipped-classroom": openStrategiesPanel,
+  "library-panel": renderLibraryPanel,
+  videos: () => openLibraryPanel("videos"),
+  training: () => openLibraryPanel("training"),
+  "knowledge-exchange": () => renderKnowledgeExchange().catch((error) => { contentEl.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`; }),
+  reports: renderReports,
+  notifications: renderNotifications,
+  classes: renderClasses,
+  activity: renderActivity,
+  settings: renderSettings,
+};
+
+boot();

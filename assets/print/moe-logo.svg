@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 220" role="img" aria-labelledby="title">
+<title id="title">شعار وزارة التعليم</title>
+<g fill="#11a89b">
+  <circle cx="85" cy="38" r="13"/><circle cx="118" cy="42" r="12"/><circle cx="149" cy="50" r="11"/><circle cx="178" cy="62" r="9"/><circle cx="203" cy="78" r="7"/>
+  <circle cx="335" cy="38" r="13"/><circle cx="302" cy="42" r="12"/><circle cx="271" cy="50" r="11"/><circle cx="242" cy="62" r="9"/><circle cx="217" cy="78" r="7"/>
+  <circle cx="85" cy="72" r="13"/><circle cx="118" cy="76" r="12"/><circle cx="149" cy="84" r="11"/><circle cx="178" cy="96" r="9"/><circle cx="203" cy="112" r="7"/>
+  <circle cx="335" cy="72" r="13"/><circle cx="302" cy="76" r="12"/><circle cx="271" cy="84" r="11"/><circle cx="242" cy="96" r="9"/><circle cx="217" cy="112" r="7"/>
+</g>
+<text x="210" y="162" text-anchor="middle" font-family="Tahoma,Arial" font-size="40" font-weight="700" fill="#11a89b">وزارة التعليم</text>
+<text x="210" y="194" text-anchor="middle" font-family="Arial" font-size="20" fill="#8c9298">Ministry of Education</text>
+</svg>

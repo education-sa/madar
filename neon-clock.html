@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>الساعة المضيئة</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh; margin: 0; display: grid; place-items: center;
+      overflow: hidden; color: white; font-family: Tahoma, Arial, sans-serif;
+      background: transparent;
+    }
+    body::before {
+      content: ""; position: fixed; width: 340px; height: 340px; border-radius: 50%;
+      background: rgba(79, 183, 173, .14); filter: blur(65px); pointer-events: none;
+    }
+    .clock-app { position: relative; display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 12px; }
+    .rim {
+      width: min(76vw, 300px); aspect-ratio: 1; border-radius: 50%; padding: 10px;
+      background: linear-gradient(145deg, #e8fffb 0%, #8edbd2 38%, #4fb7ad 68%, #e8bd62 100%);
+      box-shadow: 0 0 18px rgba(79,183,173,.30), 0 0 38px rgba(79,183,173,.14), 0 18px 40px rgba(68,89,99,.16);
+    }
+    .face {
+      position: relative; width: 100%; height: 100%; overflow: hidden; border-radius: 50%;
+      border: 1px solid rgba(218,180,92,.52);
+      background: radial-gradient(circle at 38% 28%, #ffffff 0%, #effcf9 45%, #d8f4ef 100%);
+      box-shadow: inset 0 0 24px rgba(79,183,173,.13), inset 0 0 54px rgba(255,255,255,.48);
+    }
+    .ring { position: absolute; border-radius: 50%; pointer-events: none; }
+    .ring.one { inset: 5%; border: 1px solid rgba(79,183,173,.24); box-shadow: 0 0 12px rgba(79,183,173,.12); }
+    .ring.two { inset: 12%; border: 1px solid rgba(218,180,92,.28); }
+    .tick-wrap { position: absolute; top: 50%; left: 50%; width: 1px; height: 50%; transform-origin: top; }
+    .tick { position: absolute; top: 8%; left: 50%; width: 1px; height: 2.5%; border-radius: 8px; transform: translateX(-50%); background: #60bfb5; box-shadow: 0 0 4px rgba(79,183,173,.45); }
+    .tick.hour { width: 3px; height: 5%; background: #e2b95f; box-shadow: 0 0 6px rgba(226,185,95,.72), 0 0 11px rgba(226,185,95,.34); }
+    .number { position: absolute; transform: translate(-50%, -50%); font-size: clamp(17px, 5vw, 24px); font-weight: 700; color: #278f87; text-shadow: 0 0 7px rgba(79,183,173,.30); }
+    .brand { position: absolute; top: 27%; left: 50%; transform: translateX(-50%); color: #c9952f; font-size: 12px; font-weight: 700; letter-spacing: .3em; text-shadow: 0 0 7px rgba(226,185,95,.45); }
+    .hand { position: absolute; top: 50%; left: 50%; border-radius: 20px; transform-origin: 0 50%; }
+    .hour-hand { width: 23%; height: 6px; background: linear-gradient(90deg,#fff9df,#d8aa49 72%,transparent); box-shadow: 0 0 6px rgba(216,170,73,.65),0 0 13px rgba(216,170,73,.34); }
+    .minute-hand { width: 34%; height: 4px; background: linear-gradient(90deg,#effffb,#45aa9f 76%,transparent); box-shadow: 0 0 6px rgba(69,170,159,.55),0 0 13px rgba(69,170,159,.28); }
+    .second-hand { width: 40%; height: 2px; background: linear-gradient(90deg,#fff9df,#e4bb61 76%,transparent); box-shadow: 0 0 6px rgba(228,187,97,.65),0 0 13px rgba(228,187,97,.30); }
+    .center { position: absolute; top: 50%; left: 50%; width: 20px; height: 20px; transform: translate(-50%,-50%); border-radius: 50%; background: radial-gradient(circle at 35% 30%,#fff,#83d7ce 38%,#31988f 78%); box-shadow: 0 0 7px rgba(79,183,173,.65),0 0 16px rgba(79,183,173,.30); }
+    .center::after { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: #e5bc62; box-shadow: 0 0 6px rgba(226,185,95,.72); }
+    .digital { text-align: center; }
+    #time { direction: ltr; font-family: ui-monospace, Menlo, monospace; font-size: clamp(28px,8vw,39px); font-weight: 700; letter-spacing: .10em; color: #27988f; text-shadow: 0 0 7px rgba(79,183,173,.28); }
+    #date { margin-top: 8px; color: #b78932; font-size: clamp(13px,3.5vw,16px); font-weight: 700; text-shadow: 0 0 7px rgba(226,185,95,.25); }
+  </style>
+</head>
+<body>
+  <main class="clock-app">
+    <div class="rim">
+      <div class="face" id="face">
+        <div class="ring one"></div><div class="ring two"></div>
+        <div class="brand">الساعة</div>
+        <div class="hand hour-hand" id="hourHand"></div>
+        <div class="hand minute-hand" id="minuteHand"></div>
+        <div class="hand second-hand" id="secondHand"></div>
+        <div class="center"></div>
+      </div>
+    </div>
+    <section class="digital"><div id="time"></div><div id="date"></div></section>
+  </main>
+  <script>
+    const face = document.getElementById("face");
+    const numbers = ["١٢","١","٢","٣","٤","٥","٦","٧","٨","٩","١٠","١١"];
+
+    for (let i = 0; i < 60; i++) {
+      const wrap = document.createElement("span");
+      wrap.className = "tick-wrap";
+      wrap.style.transform = `rotate(${i * 6}deg)`;
+      const tick = document.createElement("span");
+      tick.className = `tick${i % 5 === 0 ? " hour" : ""}`;
+      wrap.appendChild(tick); face.appendChild(wrap);
+    }
+
+    numbers.forEach((number, i) => {
+      const angle = (i * 30 - 90) * Math.PI / 180;
+      const item = document.createElement("span");
+      item.className = "number"; item.textContent = number;
+      item.style.left = `${50 + Math.cos(angle) * 37}%`;
+      item.style.top = `${50 + Math.sin(angle) * 37}%`;
+      face.appendChild(item);
+    });
+
+    const hourHand = document.getElementById("hourHand");
+    const minuteHand = document.getElementById("minuteHand");
+    const secondHand = document.getElementById("secondHand");
+    const timeText = document.getElementById("time");
+    const dateText = document.getElementById("date");
+
+    function updateClock() {
+      const now = new Date(), ms = now.getMilliseconds();
+      const seconds = now.getSeconds() + ms / 1000;
+      const minutes = now.getMinutes() + seconds / 60;
+      const hours = (now.getHours() % 12) + minutes / 60;
+      hourHand.style.transform = `translateY(-50%) rotate(${hours * 30 - 90}deg)`;
+      minuteHand.style.transform = `translateY(-50%) rotate(${minutes * 6 - 90}deg)`;
+      secondHand.style.transform = `translateY(-50%) rotate(${seconds * 6 - 90}deg)`;
+      timeText.textContent = now.toLocaleTimeString("ar-SA", { hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false });
+      dateText.textContent = now.toLocaleDateString("ar-SA", { weekday:"long", year:"numeric", month:"long", day:"numeric" });
+      requestAnimationFrame(updateClock);
+    }
+    updateClock();
+  </script>
+</body>
+</html>

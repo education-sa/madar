@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>دخول المعلم | مدار</title>
+  <link rel="stylesheet" href="dashboard.css?v=15" />
+</head>
+<body class="login-body">
+  <main class="login-scene">
+    <a href="../index.html" class="login-home-link" id="loginHomeLink"><span aria-hidden="true">→</span> العودة للرئيسية</a>
+    <button type="button" class="login-home-link" id="showLoginBtn" hidden><span aria-hidden="true">→</span> العودة لتسجيل الدخول</button>
+    <div class="login-orbit login-orbit-one" aria-hidden="true"></div>
+    <div class="login-orbit login-orbit-three" aria-hidden="true"></div>
+
+    <svg class="login-geo-globe" viewBox="0 0 220 220" aria-hidden="true">
+      <g id="loginGlobeArtwork">
+        <g class="login-geo-lines">
+          <circle cx="110" cy="110" r="88" />
+          <ellipse cx="110" cy="110" rx="46" ry="88" />
+          <ellipse cx="110" cy="110" rx="76" ry="88" />
+          <ellipse cx="110" cy="110" rx="88" ry="38" />
+          <ellipse cx="110" cy="110" rx="88" ry="68" />
+          <path d="M22 110h176M110 22v176" />
+        </g>
+        <g class="login-geo-nodes">
+          <circle cx="110" cy="22" r="5" />
+          <circle cx="22" cy="110" r="4" />
+          <circle cx="198" cy="110" r="5" />
+          <circle cx="110" cy="198" r="5" />
+          <circle cx="45" cy="50" r="4" />
+          <circle cx="176" cy="55" r="4" />
+          <circle cx="48" cy="170" r="4" />
+          <circle cx="174" cy="170" r="4" />
+        </g>
+      </g>
+    </svg>
+    <svg class="login-geo-globe login-geo-globe-left" viewBox="0 0 220 220" aria-hidden="true">
+      <use href="#loginGlobeArtwork" />
+    </svg>
+
+    <section class="login-card" id="authCard" aria-label="دخول المعلم">
+      <div id="loginView">
+        <h1>دخول المعلم</h1>
+        <form id="loginForm" novalidate>
+          <label class="login-input-row school-login-row">
+            <span class="login-field-icon" aria-hidden="true">@</span>
+            <span class="teacher-school-email" dir="ltr"><input type="text" id="email" required inputmode="email" autocomplete="username" placeholder="اسم المستخدم" aria-label="اسم المستخدم في البريد المدرسي" /><span>@mkhg.moe.gov.sa</span></span>
+            <span aria-hidden="true"></span>
+          </label>
+          <label class="login-input-row">
+            <span class="login-field-icon" aria-hidden="true">⌁</span>
+            <input type="password" id="password" required autocomplete="current-password" placeholder="كلمة المرور" aria-label="كلمة المرور" />
+            <button class="password-toggle" id="togglePassword" type="button" aria-label="إظهار كلمة المرور">◉</button>
+          </label>
+          <div id="loginError" class="form-error" hidden></div>
+          <button type="submit" class="btn login-submit btn-block">تسجيل الدخول</button>
+          <button type="button" class="login-register-open" id="teacherForgotPassword">نسيت كلمة المرور؟</button>
+        </form>
+        <p class="login-account-question">ليس لديك حساب؟</p>
+        <button type="button" class="login-register-open" id="showRegisterBtn">إنشاء حساب</button>
+      </div>
+
+      <div id="registerView" class="register-view" hidden>
+        <h1>إنشاء حساب المعلم</h1>
+        <p class="register-subtitle">أدخل بياناتك لإرسال طلب الانضمام إلى منصة مدار.</p>
+        <form id="registerForm" novalidate>
+          <div class="register-name-grid">
+            <label>الاسم الأول
+              <input type="text" id="regFirstName" required autocomplete="given-name" placeholder="الاسم الأول" />
+            </label>
+            <label>اسم الأب (اختياري)
+              <input type="text" id="regFatherName" autocomplete="additional-name" placeholder="اسم الأب (اختياري)" />
+            </label>
+            <label>الاسم الأخير
+              <input type="text" id="regLastName" required autocomplete="family-name" placeholder="الاسم الأخير" />
+            </label>
+          </div>
+          <label>إيميل منصة مدرستي
+            <span class="teacher-register-email" dir="ltr"><input type="text" id="regEmail" required autocomplete="username" inputmode="email" placeholder="اسم المستخدم" /><span>@mkhg.moe.gov.sa</span></span>
+          </label>
+          <label>كلمة المرور
+            <span class="register-password-box">
+              <input type="password" id="regPassword" required minlength="10" autocomplete="new-password" placeholder="10 أحرف على الأقل، منها حرف ورقم" />
+              <button class="register-password-toggle" id="toggleRegisterPassword" type="button" aria-label="إظهار كلمة المرور">◉</button>
+            </span>
+          </label>
+          <p class="register-password-note">أنشئ كلمة مرور خاصة بمنصة مدار، وليست كلمة مرور حساب منصة مدرستي.</p>
+          <div id="registerError" class="form-error" hidden></div>
+          <button type="submit" class="btn login-submit btn-block">إرسال طلب إنشاء الحساب</button>
+        </form>
+        <p class="register-approval-note">يحتاج حساب المعلمة الجديدة إلى موافقة مالكة الموقع قبل الدخول.</p>
+      </div>
+    </section>
+  </main>
+  <script src="login.js?v=5" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+.env
+*.log
+uploads/*
+!uploads/.gitkeep
+storage/private/student-portfolios/*
+!storage/private/student-portfolios/.gitignore
+!storage/private/student-portfolios/.htaccess
+.DS_Store

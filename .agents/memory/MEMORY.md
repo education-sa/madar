@@ -1,0 +1,1 @@
+- [Madar teacher dashboard](madar-teacher-dashboard.md) — staged rollout process, verification trick, and constraints for the مدار teacher-dashboard feature.

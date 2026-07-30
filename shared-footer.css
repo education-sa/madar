@@ -1,0 +1,140 @@
+.site-footer.madar-shared-footer {
+  min-height: 170px;
+  display: grid;
+  grid-template-areas: "credit contact brand";
+  grid-template-columns: 1fr 1.35fr 1fr;
+  align-items: center;
+  gap: 36px;
+  direction: ltr;
+  margin: 20px clamp(14px, 2vw, 30px) 26px;
+  padding: 28px max(3.5vw, 28px);
+  border: 1px solid rgba(97, 55, 200, .09);
+  border-radius: 40px;
+  color: #32136f;
+  background: linear-gradient(135deg, rgba(255,255,255,.99), rgba(255,255,255,.93));
+  box-shadow: 0 22px 58px rgba(97,55,200,.16), 0 0 48px rgba(120,72,232,.09);
+}
+
+.site-footer.madar-shared-footer .site-footer-brand,
+.site-footer.madar-shared-footer .site-footer-contact,
+.site-footer.madar-shared-footer .site-footer-credit {
+  display: flex;
+  flex-direction: column;
+  direction: rtl;
+}
+
+.site-footer.madar-shared-footer .site-footer-brand {
+  grid-area: brand;
+  align-items: flex-start;
+  justify-self: end;
+  text-align: right;
+}
+
+.site-footer.madar-shared-footer .site-footer-brand > strong {
+  color: #32136f;
+  font-size: 42px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.site-footer.madar-shared-footer .site-footer-brand > span {
+  margin-top: 7px;
+  color: #47218c;
+  opacity: .84;
+}
+
+.site-footer.madar-shared-footer .site-footer-brand > small {
+  margin-top: 7px;
+  color: #766e88;
+  font-size: .68rem;
+}
+
+.site-footer.madar-shared-footer .site-footer-contact {
+  grid-area: contact;
+  align-items: center;
+  text-align: center;
+}
+
+.site-footer.madar-shared-footer .site-footer-contact h2 {
+  margin: 0 0 12px;
+  color: #25104f;
+  font-size: 1.55rem;
+  font-weight: 900;
+}
+
+.site-footer.madar-shared-footer .footer-contact-lines {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  direction: rtl;
+}
+
+.site-footer.madar-shared-footer .footer-contact-lines a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #32136f;
+  font-size: .8rem;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.site-footer.madar-shared-footer .footer-contact-lines a > span {
+  color: #6137c8;
+  font-size: 1rem;
+  opacity: 1;
+}
+
+.site-footer.madar-shared-footer .footer-contact-lines b { font-weight: 500; }
+
+.site-footer.madar-shared-footer .site-footer-credit {
+  grid-area: credit;
+  align-items: center;
+  justify-self: start;
+  text-align: center;
+}
+
+.site-footer.madar-shared-footer .site-footer-credit p {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  color: #47218c;
+  font-size: .95rem;
+  opacity: 1;
+}
+
+.site-footer.madar-shared-footer .site-footer-credit p b {
+  margin-top: .5cm;
+  color: #32136f;
+  font-size: 1.04rem;
+}
+
+@media (max-width: 760px) {
+  .site-footer.madar-shared-footer {
+    grid-template-areas: "brand" "contact" "credit";
+    grid-template-columns: 1fr;
+    justify-items: center;
+    min-height: 0;
+    gap: 24px;
+    margin: 12px;
+    padding: 28px 18px;
+    border-radius: 28px;
+    text-align: center;
+  }
+
+  .site-footer.madar-shared-footer .site-footer-brand,
+  .site-footer.madar-shared-footer .site-footer-credit {
+    align-items: center;
+    justify-self: center;
+    text-align: center;
+  }
+
+  .site-footer.madar-shared-footer .footer-contact-lines {
+    flex-direction: column;
+    gap: 9px;
+  }
+}

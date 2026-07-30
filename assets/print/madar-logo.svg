@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 150" role="img" aria-labelledby="title">
+<title id="title">شعار منصة مدار</title>
+<defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#5a2b82"/><stop offset="1" stop-color="#8663a5"/></linearGradient></defs>
+<ellipse cx="150" cy="70" rx="104" ry="47" fill="none" stroke="url(#g)" stroke-width="5" transform="rotate(-9 150 70)"/>
+<circle cx="51" cy="87" r="8" fill="#d8a94b"/>
+<text x="150" y="84" text-anchor="middle" font-family="Tajawal,Tahoma,Arial" font-size="54" font-weight="800" fill="#4f266f">مَدار</text>
+<text x="150" y="120" text-anchor="middle" font-family="Tajawal,Tahoma,Arial" font-size="18" fill="#666">منصة الرياضيات التفاعلية</text>
+</svg>

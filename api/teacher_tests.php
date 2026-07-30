@@ -1,0 +1,1398 @@
+<?php
+declare(strict_types=1);
+
+
+function ensure_test_context_columns(): void
+{
+    static $ready=false;
+    if ($ready) return;
+    $columns=array_fill_keys(array_map(static fn(array $column)=>(string)$column['Field'],fetch_all('SHOW COLUMNS FROM tests')),true);
+    if (!isset($columns['academic_year'])) execute_sql("ALTER TABLE tests ADD COLUMN academic_year VARCHAR(30) NOT NULL DEFAULT '' AFTER total_points");
+    if (!isset($columns['semester'])) execute_sql("ALTER TABLE tests ADD COLUMN semester ENUM('first','second') NOT NULL DEFAULT 'first' AFTER academic_year");
+    if (!isset($columns['created_at'])) execute_sql("ALTER TABLE tests ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP");
+    $ready=true;
+}
+
+function teacher_tests_routes(string $method,array $segments,int $teacherId): never
+{
+    // عرض القائمة لا يجب أن يتعطل بسبب ترحيل قديم أو عمود مفقود.
+    if (!$segments && $method==='GET') {
+        try {
+            ensure_diagnostic_bank_schema();
+            ensure_test_context_columns();
+        } catch (Throwable $error) {
+            error_log('[tests-schema-on-list] ' . $error->getMessage());
+        }
+        teacher_list_tests($teacherId);
+    }
+
+    // عمليات الإنشاء والتعديل تحتاج المخطط الكامل، لذلك نُبقي التحقق الصارم لها.
+    ensure_diagnostic_bank_schema();
+    ensure_test_context_columns();
+    if (!$segments && $method==='POST') teacher_save_test($teacherId,null);
+    $testId=route_id($segments,0);
+    if (!teacher_owns_test($teacherId,$testId)) Http::json(['error'=>'الاختبار غير موجود.'],404);
+    $action=$segments[1]??'';
+    if ($action==='duplicate'&&$method==='POST') teacher_duplicate_test($teacherId,$testId);
+    if ($action==='publish'&&$method==='POST') teacher_publish_test($teacherId,$testId,true);
+    if ($action==='unpublish'&&$method==='POST') teacher_publish_test($teacherId,$testId,false);
+    if ($action==='results'&&$method==='GET') teacher_test_results($testId);
+    if ($action==='attempts'&&isset($segments[2])&&$method==='GET') teacher_attempt_detail($testId,route_id($segments,2));
+    if ($action==='attempts'&&isset($segments[2])&&$method==='PUT') teacher_review_attempt($teacherId,$testId,route_id($segments,2));
+    if ($action==='add-bank-questions'&&$method==='POST') teacher_add_bank_to_test($teacherId,$testId);
+    if ($action===''&&$method==='GET') teacher_get_test($testId);
+    if ($action===''&&$method==='PUT') teacher_save_test($teacherId,$testId);
+    if ($action===''&&$method==='DELETE') {
+        execute_sql('DELETE FROM tests WHERE id=? AND teacher_id=?',[$testId,$teacherId]);
+        Activity::log('teacher',$teacherId,'حذف اختبار',"الاختبار رقم {$testId}");
+        Http::json(['ok'=>true]);
+    }
+    Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
+}
+
+function teacher_list_tests(int $teacherId): never
+{
+    $type=trim((string)($_GET['type']??''));
+    $validTypes=['pre_diagnostic','post_diagnostic','quiz'];
+    if ($type!==''&&!in_array($type,$validTypes,true)) Http::json(['error'=>'نوع الاختبار غير صالح.'],422);
+
+    // الإعدادات مساعدة للوسم فقط؛ تعذر قراءتها لا يمنع ظهور الاختبارات.
+    $school=['academic_year'=>'','current_semester'=>'first'];
+    try {
+        $loadedSchool=teacher_school_settings_row($teacherId);
+        if (is_array($loadedSchool)) $school=array_merge($school,$loadedSchool);
+    } catch (Throwable $error) {
+        error_log('[tests-school-context] ' . $error->getMessage());
+    }
+
+    $academicYear=trim((string)($_GET['academicYear']??$school['academic_year']??''));
+    $semester=trim((string)($_GET['semester']??$school['current_semester']??''));
+    $stage=trim((string)($_GET['stage']??''));
+    $gradeLabel=trim((string)($_GET['gradeLabel']??''));
+    $classId=max(0,(int)($_GET['classId']??0));
+    $includeId=max(0,(int)($_GET['includeId']??0));
+
+    // ندعم قواعد البيانات القديمة: أي عمود لم يُرحّل بعد يُستبدل بقيمة آمنة.
+    $testColumns=[];
+    try {
+        $testColumns=diagnostic_columns('tests');
+    } catch (Throwable $error) {
+        error_log('[tests-columns] ' . $error->getMessage());
+    }
+    $has=static fn(string $name): bool => isset($testColumns[$name]);
+    $expr=static function(string $name,string $fallback) use($has): string {
+        return $has($name) ? "t.{$name}" : "{$fallback} AS {$name}";
+    };
+
+    $where='t.teacher_id=?';
+    $params=[$teacherId];
+    if ($type!=='') {
+        $where.=' AND t.test_type=?';
+        $params[]=$type;
+    }
+
+    $questionSource=$has('question_source') ? 't.question_source' : "'static'";
+    $expectedCount=$has('expected_lesson_count') ? 't.expected_lesson_count' : '0';
+    $orderBy=$has('created_at') ? 't.created_at DESC,t.id DESC' : 't.id DESC';
+
+    $selectTests="SELECT
+                t.id,t.title,t.test_type AS type,
+                ".$expr('question_source',"'static'").",
+                t.status,t.duration_minutes,t.total_points,t.start_at,t.end_at,
+                t.class_id,
+                ".$expr('academic_year',"''").",
+                ".$expr('semester',"'first'").",
+                ".$expr('bank_stage','NULL').",
+                ".$expr('bank_grade_label','NULL').",
+                ".$expr('bank_term_label','NULL').",
+                ".$expr('bank_import_batch','NULL').",
+                ".$expr('bank_skill_ids_json','NULL').",
+                ".$expr('expected_lesson_count','0').",
+                ".$expr('created_at','NULL').",
+                sk.name AS skill_name,c.name AS class_name,c.stage,c.grade_label,
+                CASE WHEN {$questionSource}='lesson_bank' THEN {$expectedCount}
+                     ELSE (SELECT COUNT(*) FROM test_questions q WHERE q.test_id=t.id) END AS question_count,
+                (SELECT COUNT(*) FROM test_attempts a WHERE a.test_id=t.id AND a.status IN ('submitted','graded')) AS completed_count,
+                (SELECT COUNT(*) FROM students st WHERE st.class_id=t.class_id) AS assigned_count
+         FROM tests t
+         LEFT JOIN skills sk ON sk.id=t.skill_id
+         LEFT JOIN classes c ON c.id=t.class_id";
+
+    $rows=fetch_all($selectTests." WHERE {$where} ORDER BY {$orderBy}",$params);
+
+    $wantedStage=$stage!==''?teacher_diagnostic_normalized_stage($stage):'';
+    $wantedGrade=$gradeLabel!==''?teacher_diagnostic_normalized_grade($wantedStage!==''?$wantedStage:$stage,$gradeLabel):'';
+
+    foreach ($rows as &$row) {
+        $outside=false;
+        if ($classId>0&&(int)($row['class_id']??0)!==$classId) $outside=true;
+        if ($academicYear!==''&&trim((string)($row['academic_year']??''))!==$academicYear) $outside=true;
+        if (in_array($semester,['first','second'],true)&&trim((string)($row['semester']??''))!==$semester) $outside=true;
+
+        $rowStage=teacher_diagnostic_normalized_stage((string)($row['stage']??$row['bank_stage']??''));
+        $rowGrade=teacher_diagnostic_normalized_grade($rowStage,(string)($row['grade_label']??$row['bank_grade_label']??''));
+        if ($wantedStage!==''&&$rowStage!==$wantedStage) $outside=true;
+        if ($wantedGrade!==''&&$rowGrade!==$wantedGrade) $outside=true;
+
+        $row['outside_filter']=$outside?1:0;
+        $row['recent_created']=$includeId>0&&(int)($row['id']??0)===$includeId?1:0;
+        if (($row['question_source']??'static')==='lesson_bank') {
+            try {
+                $row['approved_lesson_count']=diagnostic_approved_lesson_count($row);
+            } catch (Throwable $error) {
+                error_log('[tests-list-bank-count] test='.(string)($row['id']??0).' '.$error->getMessage());
+                $row['approved_lesson_count']=0;
+                $row['bank_count_warning']=1;
+            }
+        } else {
+            $row['approved_lesson_count']=null;
+        }
+    }
+    unset($row);
+
+    Http::json($rows);
+}
+
+function teacher_get_test(int $testId): never
+{
+    $test=fetch_one('SELECT *,test_type AS type FROM tests WHERE id=?',[$testId]);
+    $questions=array_map('map_question_row',fetch_all('SELECT id,bank_question_id,skill_id,question_type AS type,question_text,options_json,correct_answer,explanation,points,order_index FROM test_questions WHERE test_id=? ORDER BY order_index',[$testId]));
+    $test['questions']=$questions;
+    $test['approved_lesson_count']=($test['question_source']??'static')==='lesson_bank'?diagnostic_approved_lesson_count($test):null;
+    Http::json($test);
+}
+
+function teacher_save_test(int $teacherId,?int $testId): never
+{
+    $data=Http::input();
+    Http::requireFields($data,['title','type']);
+    $validTypes=['pre_diagnostic','post_diagnostic','quiz'];
+    if (!in_array($data['type'],$validTypes,true)) Http::json(['error'=>'نوع الاختبار غير صالح.'],422);
+    $classId=!empty($data['classId'])?(int)$data['classId']:null;
+    if (!teacher_owns_class($teacherId,$classId)) Http::json(['error'=>'الفصل غير صالح.'],422);
+    $school=teacher_school_settings_row($teacherId);
+    $academicYear=trim((string)($data['academicYear']??$school['academic_year']??''));
+    $semester=(string)($data['semester']??$school['current_semester']??'first');
+    if (!in_array($semester,['first','second'],true)) Http::json(['error'=>'الفصل الدراسي غير صالح.'],422);
+    $maxAttempts=max(1,min(5,(int)($data['maxAttempts']??1)));
+    $durationRaw=(int)($data['durationMinutes']??20);
+    $duration=$durationRaw===0?0:max(1,min(240,$durationRaw));
+    $shuffle=!empty($data['shuffleQuestions'])?1:0;
+    $showResult=array_key_exists('showResult',$data)?(!empty($data['showResult'])?1:0):1;
+    $startAt=!empty($data['startAt'])?str_replace('T',' ',(string)$data['startAt']):null;
+    $endAt=!empty($data['endAt'])?str_replace('T',' ',(string)$data['endAt']):null;
+    if($startAt&&$endAt&&strtotime((string)$endAt)<=strtotime((string)$startAt))Http::json(['error'=>'تاريخ نهاية الاختبار يجب أن يكون بعد تاريخ البداية.'],422);
+    $questions=is_array($data['questions']??null)?$data['questions']:null;
+    if ($questions!==null) validate_test_questions($questions);
+    if ($testId&&$questions!==null) {
+        $attemptCount=(int)(fetch_one('SELECT COUNT(*) AS n FROM test_attempts WHERE test_id=?',[$testId])['n']??0);
+        if ($attemptCount>0) Http::json(['error'=>'لا يمكن تعديل أسئلة اختبار بدأت محاولاته. انسخي الاختبار وعدّلي النسخة.'],409);
+    }
+    $total=$questions===null?null:array_reduce($questions,static fn($sum,$q)=>$sum+max(.5,(float)($q['points']??1)),0.0);
+
+    $savedId=Database::transaction(function(PDO $pdo) use($teacherId,$testId,$data,$classId,$questions,$total,$maxAttempts,$duration,$shuffle,$showResult,$startAt,$endAt,$academicYear,$semester): int {
+        if ($testId) {
+            $stmt=$pdo->prepare('UPDATE tests SET title=?,test_type=?,skill_id=?,class_id=?,duration_minutes=?,max_attempts=?,shuffle_questions=?,show_result=?,start_at=?,end_at=?,total_points=COALESCE(?,total_points),academic_year=?,semester=? WHERE id=? AND teacher_id=?');
+            $stmt->execute([trim((string)$data['title']),$data['type'],$data['skillId']??null,$classId,$duration,$maxAttempts,$shuffle,$showResult,$startAt,$endAt,$total,$academicYear,$semester,$testId,$teacherId]);
+            $id=$testId;
+        } else {
+            $stmt=$pdo->prepare("INSERT INTO tests (teacher_id,title,test_type,status,skill_id,class_id,duration_minutes,max_attempts,shuffle_questions,show_result,total_points,academic_year,semester,start_at,end_at) VALUES (?,?,?,'draft',?,?,?,?,?,?,?,?,?,?,?)");
+            $stmt->execute([$teacherId,trim((string)$data['title']),$data['type'],$data['skillId']??null,$classId,$duration,$maxAttempts,$shuffle,$showResult,$total??0,$academicYear,$semester,$startAt,$endAt]);
+            $id=(int)$pdo->lastInsertId();
+        }
+        if ($questions!==null) {
+            $pdo->prepare('DELETE FROM test_questions WHERE test_id=?')->execute([$id]);
+            $insert=$pdo->prepare('INSERT INTO test_questions (test_id,bank_question_id,skill_id,question_type,question_text,options_json,correct_answer,explanation,points,order_index) VALUES (?,?,?,?,?,?,?,?,?,?)');
+            foreach ($questions as $index=>$q) {
+                $type=(string)($q['type']??'mcq');$text=trim((string)($q['questionText']??''));$answer=trim((string)($q['correctAnswer']??''));
+                if (!$text||!$answer||!in_array($type,['mcq','true_false','short_answer'],true)) continue;
+                $options=json_options($q['options']??null);
+                $insert->execute([$id,$q['bankQuestionId']??null,$q['skillId']??($data['skillId']??null),$type,$text,$options?json_encode($options,JSON_UNESCAPED_UNICODE):null,$answer,$q['explanation']??null,max(.5,(float)($q['points']??1)),$index+1]);
+            }
+        }
+        return $id;
+    });
+    Activity::log('teacher',$teacherId,$testId?'تعديل اختبار':'إنشاء اختبار',trim((string)$data['title']));
+    $test=fetch_one('SELECT *,test_type AS type FROM tests WHERE id=?',[$savedId]);
+    Http::json($test,$testId?200:201);
+}
+
+function validate_test_questions(array $questions): void
+{
+    foreach ($questions as $index=>$question) {
+        $number=$index+1;
+        $type=(string)($question['type']??'');
+        $text=trim((string)($question['questionText']??''));
+        $answer=trim((string)($question['correctAnswer']??''));
+        if (!in_array($type,['mcq','true_false','short_answer'],true) || $text==='' || $answer==='') {
+            Http::json(['error'=>"أكملي نص وإجابة السؤال رقم {$number}."],422);
+        }
+        if ($type==='mcq') {
+            $options=json_options($question['options']??null)??[];
+            if (count($options)<2 || !in_array($answer,$options,true)) Http::json(['error'=>"إجابة السؤال رقم {$number} يجب أن تطابق أحد خياراته."],422);
+        }
+        if ($type==='true_false' && !in_array(normalize_answer($answer),[normalize_answer('صح'),normalize_answer('خطأ')],true)) {
+            Http::json(['error'=>"إجابة السؤال رقم {$number} يجب أن تكون صح أو خطأ."],422);
+        }
+    }
+}
+
+function teacher_publish_test(int $teacherId,int $testId,bool $publish): never
+{
+    if ($publish) {
+        $test=fetch_one('SELECT * FROM tests WHERE id=? AND teacher_id=?',[$testId,$teacherId]);
+        if (($test['question_source']??'static')==='lesson_bank') {
+            $count=diagnostic_approved_lesson_count($test);
+            $expected=(int)($test['expected_lesson_count']??0);
+            if (!$count || ($expected>0&&$count<$expected)) Http::json(['error'=>"اعتمدي سؤالًا واحدًا على الأقل لكل مهارة قبل النشر. المعتمد {$count} من {$expected} مهارة."],422);
+            execute_sql('UPDATE tests SET total_points=? WHERE id=?',[$expected>0?$expected:$count,$testId]);
+        } else {
+            $count=(int)(fetch_one('SELECT COUNT(*) AS n FROM test_questions WHERE test_id=?',[$testId])['n']??0);
+            if (!$count) Http::json(['error'=>'لا يمكن نشر اختبار دون أسئلة.'],422);
+        }
+        $classId=(int)($test['class_id']??0);
+        if (!$classId) Http::json(['error'=>'اختاري فصلًا قبل نشر الاختبار.'],422);
+        execute_sql("UPDATE tests SET status='published' WHERE id=? AND teacher_id=?",[$testId,$teacherId]);
+    } else execute_sql("UPDATE tests SET status='draft' WHERE id=? AND teacher_id=?",[$testId,$teacherId]);
+    Activity::log('teacher',$teacherId,$publish?'نشر اختبار':'إلغاء نشر اختبار',"الاختبار رقم {$testId}");
+    Http::json(['ok'=>true,'status'=>$publish?'published':'draft']);
+}
+
+function teacher_duplicate_test(int $teacherId,int $testId): never
+{
+    $newId=Database::transaction(function(PDO $pdo) use($teacherId,$testId): int {
+        $test=fetch_one('SELECT * FROM tests WHERE id=? AND teacher_id=?',[$testId,$teacherId]);
+        $stmt=$pdo->prepare("INSERT INTO tests (teacher_id,class_id,skill_id,title,test_type,question_source,bank_stage,bank_grade_label,bank_term_label,bank_import_batch,bank_skill_ids_json,expected_lesson_count,status,duration_minutes,max_attempts,shuffle_questions,show_result,total_points,academic_year,semester) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'draft',?,?,?,?,?,?,?)");
+        $stmt->execute([$teacherId,$test['class_id'],$test['skill_id'],$test['title'].' (نسخة)',$test['test_type'],$test['question_source'],$test['bank_stage'],$test['bank_grade_label'],$test['bank_term_label'],$test['bank_import_batch'],$test['bank_skill_ids_json'],$test['expected_lesson_count'],$test['duration_minutes'],$test['max_attempts'],$test['shuffle_questions'],$test['show_result'],$test['total_points'],$test['academic_year'],$test['semester']]);
+        $id=(int)$pdo->lastInsertId();
+        $pdo->prepare('INSERT INTO test_questions (test_id,bank_question_id,skill_id,question_type,question_text,options_json,correct_answer,explanation,points,order_index) SELECT ?,bank_question_id,skill_id,question_type,question_text,options_json,correct_answer,explanation,points,order_index FROM test_questions WHERE test_id=?')->execute([$id,$testId]);
+        return $id;
+    });
+    Http::json(['id'=>$newId],201);
+}
+
+function teacher_test_results(int $testId): never
+{
+    $rows=fetch_all(
+        "SELECT a.id,s.name AS student_name,s.email,IF(a.status IN ('submitted','graded'),'completed',a.status) AS status,a.score,a.total_points,a.percentage,a.submitted_at,
+                (SELECT COUNT(*) FROM answers x WHERE x.attempt_id=a.id AND x.review_required=1) AS review_required
+         FROM test_attempts a JOIN students s ON s.id=a.student_id WHERE a.test_id=? ORDER BY a.submitted_at DESC",[$testId]
+    );
+    Http::json($rows);
+}
+
+function teacher_attempt_detail(int $testId,int $attemptId): never
+{
+    $attempt=fetch_one("SELECT a.id,a.student_id,s.name AS student_name,a.score,a.total_points,a.percentage,a.submitted_at FROM test_attempts a JOIN students s ON s.id=a.student_id WHERE a.id=? AND a.test_id=? AND a.status='graded'",[$attemptId,$testId]);
+    if (!$attempt) Http::json(['error'=>'المحاولة غير موجودة.'],404);
+    $attempt['answers']=fetch_all(
+        'SELECT an.id,an.answer_text,an.is_correct,an.review_required,an.points_earned,
+                COALESCE(aq.question_text,q.question_text) AS question_text,COALESCE(aq.correct_answer,q.correct_answer) AS correct_answer,
+                COALESCE(aq.explanation,q.explanation) AS explanation,COALESCE(aq.points,q.points) AS points,
+                COALESCE(aq.question_type,q.question_type) AS question_type
+         FROM answers an LEFT JOIN test_attempt_questions aq ON aq.id=an.attempt_question_id
+         LEFT JOIN test_questions q ON q.id=an.question_id WHERE an.attempt_id=? ORDER BY COALESCE(aq.order_index,q.order_index)',[$attemptId]
+    );
+    Http::json($attempt);
+}
+
+function teacher_review_attempt(int $teacherId,int $testId,int $attemptId): never
+{
+    $attempt=fetch_one("SELECT a.id,a.student_id FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE a.id=? AND a.test_id=? AND t.teacher_id=? AND a.status='graded'",[$attemptId,$testId,$teacherId]);
+    if (!$attempt) Http::json(['error'=>'المحاولة غير موجودة.'],404);
+    $data=Http::input();
+    $grades=is_array($data['grades']??null)?$data['grades']:[];
+    Database::transaction(function(PDO $pdo) use($attemptId,$attempt,$grades): void {
+        $lookup=$pdo->prepare('SELECT an.id,COALESCE(aq.points,q.points) AS points FROM answers an LEFT JOIN test_attempt_questions aq ON aq.id=an.attempt_question_id LEFT JOIN test_questions q ON q.id=an.question_id WHERE an.id=? AND an.attempt_id=?');
+        $update=$pdo->prepare('UPDATE answers SET points_earned=?,is_correct=?,review_required=0 WHERE id=? AND attempt_id=?');
+        foreach($grades as $grade) {
+            $answerId=(int)($grade['answerId']??0);
+            $lookup->execute([$answerId,$attemptId]);
+            $answer=$lookup->fetch();
+            if (!$answer) continue;
+            $points=max(0,min((float)$answer['points'],(float)($grade['pointsEarned']??0)));
+            $update->execute([$points,$points>=(float)$answer['points']?1:0,$answerId,$attemptId]);
+        }
+        $totals=$pdo->prepare('SELECT COALESCE(SUM(an.points_earned),0) AS score,COALESCE(SUM(COALESCE(aq.points,q.points)),0) AS total FROM answers an LEFT JOIN test_attempt_questions aq ON aq.id=an.attempt_question_id LEFT JOIN test_questions q ON q.id=an.question_id WHERE an.attempt_id=?');
+        $totals->execute([$attemptId]);
+        $row=$totals->fetch();
+        $percentage=(float)$row['total']>0?round(100*(float)$row['score']/(float)$row['total'],2):0;
+        $pdo->prepare('UPDATE test_attempts SET score=?,total_points=?,percentage=?,graded_at=NOW() WHERE id=?')->execute([$row['score'],$row['total'],$percentage,$attemptId]);
+        $skillRows=$pdo->prepare("SELECT COALESCE(aq.skill_id,q.skill_id) AS skill_id,ROUND(100*SUM(an.points_earned)/NULLIF(SUM(COALESCE(aq.points,q.points)),0),2) AS mastery,COUNT(*) AS evidence
+            FROM answers an LEFT JOIN test_attempt_questions aq ON aq.id=an.attempt_question_id LEFT JOIN test_questions q ON q.id=an.question_id JOIN test_attempts a ON a.id=an.attempt_id
+            WHERE a.student_id=? AND a.status='graded' AND COALESCE(aq.skill_id,q.skill_id) IS NOT NULL GROUP BY COALESCE(aq.skill_id,q.skill_id)");
+        $skillRows->execute([$attempt['student_id']]);
+        $upsert=$pdo->prepare('INSERT INTO student_skills (student_id,skill_id,mastery_percent,evidence_count) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE mastery_percent=VALUES(mastery_percent),evidence_count=VALUES(evidence_count)');
+        foreach($skillRows->fetchAll() as $skill)$upsert->execute([$attempt['student_id'],$skill['skill_id'],$skill['mastery'],$skill['evidence']]);
+        $pdo->prepare("UPDATE students SET progress_percent=(SELECT COALESCE(AVG(percentage),0) FROM test_attempts WHERE student_id=? AND status='graded') WHERE id=?")->execute([$attempt['student_id'],$attempt['student_id']]);
+    });
+    Activity::log('teacher',$teacherId,'مراجعة تصحيح إجابة',"المحاولة رقم {$attemptId}");
+    Http::json(['ok'=>true]);
+}
+
+function teacher_question_bank_routes(string $method,array $segments,int $teacherId): never
+{
+    ensure_diagnostic_bank_schema();
+    reset_question_bank_repository_once($teacherId);
+    $action=(string)($segments[0]??'');
+    if ($action==='bulk-review'&&$method==='POST') teacher_bulk_review_questions($teacherId);
+    if ($action==='bulk-level'&&$method==='POST') teacher_bulk_question_level($teacherId);
+    if ($action==='bulk-cognitive'&&$method==='POST') teacher_bulk_cognitive_type($teacherId);
+    if ($action==='delete-all'&&$method==='POST') teacher_delete_all_questions($teacherId);
+    if ($action==='create-diagnostic-test'&&$method==='POST') teacher_create_diagnostic_test_from_bank($teacherId);
+    if ($action==='export.xlsx'&&$method==='GET') teacher_question_bank_export($teacherId);
+    if ($action==='import'&&$method==='POST') teacher_question_bank_import($teacherId);
+    if (!$segments&&$method==='GET') {
+        [$where,$params]=teacher_question_bank_filter($teacherId);
+        $rows=array_map('map_question_row',fetch_all(
+            'SELECT q.*,q.question_type AS type,q.question_text AS questionText,q.correct_answer AS correctAnswer,sk.name AS skill_name FROM question_bank q LEFT JOIN skills sk ON sk.id=q.skill_id WHERE '.$where.' ORDER BY q.created_at DESC',$params));
+        Http::json($rows);
+    }
+    if (!$segments&&$method==='POST') teacher_save_bank_question($teacherId,null);
+    $id=route_id($segments,0);
+    if (!fetch_one('SELECT id FROM question_bank WHERE id=? AND teacher_id=?',[$id,$teacherId])) Http::json(['error'=>'السؤال غير موجود.'],404);
+    if ($method==='PUT') teacher_save_bank_question($teacherId,$id);
+    if ($method==='DELETE') {execute_sql('DELETE FROM question_bank WHERE id=? AND teacher_id=?',[$id,$teacherId]);Http::json(['ok'=>true]);}
+    Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
+}
+
+function teacher_delete_all_questions(int $teacherId): never
+{
+    $data=Http::input();
+    if (($data['confirm']??false)!==true) Http::json(['error'=>'يجب تأكيد حذف جميع أسئلة المستودع.'],422);
+    $deleted=Database::transaction(function(PDO $pdo) use($teacherId): int {
+        $statement=$pdo->prepare('DELETE FROM question_bank WHERE teacher_id=?');
+        $statement->execute([$teacherId]);
+        return $statement->rowCount();
+    });
+    Activity::log('teacher',$teacherId,'حذف جميع أسئلة المستودع','تم حذف '.$deleted.' سؤالًا');
+    Http::json(['ok'=>true,'deleted'=>$deleted]);
+}
+
+function teacher_question_bank_filter(int $teacherId): array
+{
+    $where=['q.teacher_id=?','q.is_active=1'];
+    $params=[$teacherId];
+    foreach ([
+        'stage'=>'q.stage',
+        'gradeLabel'=>'q.grade_label',
+        'classLabel'=>'q.class_label',
+        'termLabel'=>'q.term_label',
+        'difficulty'=>'q.difficulty',
+        'type'=>'q.question_type',
+        'questionLevel'=>'q.question_level',
+        'reviewStatus'=>'q.review_status',
+        'importBatch'=>'q.import_batch',
+    ] as $key=>$column) {
+        if (isset($_GET[$key])&&trim((string)$_GET[$key])!=='') {
+            $where[]="{$column}=?";
+            $params[]=trim((string)$_GET[$key]);
+        }
+    }
+    return [implode(' AND ',$where),$params];
+}
+
+function teacher_diagnostic_normalized_stage(string $value): string
+{
+    $key=teacher_question_bank_normalize_header($value);
+    foreach(['ابتدائي','متوسط','ثانوي'] as $stage) {
+        if (str_contains($key,teacher_question_bank_normalize_header($stage))) return $stage;
+    }
+    return trim($value);
+}
+
+function teacher_diagnostic_normalized_grade(string $stage,string $value): string
+{
+    $key=teacher_question_bank_normalize_header(str_replace('الصف','',$value));
+    $ordinal='';
+    foreach([
+        'رابع'=>['الرابع','رابع','fourth','grade4','4th'],
+        'خامس'=>['الخامس','خامس','fifth','grade5','5th'],
+        'سادس'=>['السادس','سادس','sixth','grade6','6th'],
+        'أول'=>['الأول','الاول','اول','أول','الأولى','الاولى','اولى','أولى','first','grade1','1st'],
+        'ثاني'=>['الثاني','ثاني','الثانية','الثانيه','ثانيه','ثانية','second','grade2','2nd'],
+        'ثالث'=>['الثالث','ثالث','الثالثة','الثالثه','ثالثه','ثالثة','third','grade3','3rd'],
+    ] as $label=>$aliases) {
+        foreach($aliases as $alias) {
+            if (str_contains($key,teacher_question_bank_normalize_header($alias))) {$ordinal=$label;break 2;}
+        }
+    }
+    $normalizedStage=teacher_diagnostic_normalized_stage($stage);
+    if ($normalizedStage==='ابتدائي'&&in_array($ordinal,['رابع','خامس','سادس'],true)) return $ordinal.' ابتدائي';
+    if ($normalizedStage==='متوسط'&&in_array($ordinal,['أول','ثاني','ثالث'],true)) return $ordinal.' متوسط';
+    if ($normalizedStage==='ثانوي'&&in_array($ordinal,['أول','ثاني','ثالث'],true)) return $ordinal.' ثانوي';
+    if ($normalizedStage==='ابتدائي'&&preg_match('/(?:^|\D)(4|5|6)(?:\D|$)/u',$value,$numberMatch)) {
+        return ['4'=>'رابع ابتدائي','5'=>'خامس ابتدائي','6'=>'سادس ابتدائي'][$numberMatch[1]];
+    }
+    if (in_array($normalizedStage,['متوسط','ثانوي'],true)&&preg_match('/(?:^|\D)(1|2|3)(?:\D|$)/u',$value,$numberMatch)) {
+        $label=['1'=>'أول','2'=>'ثاني','3'=>'ثالث'][$numberMatch[1]];
+        return $label.' '.$normalizedStage;
+    }
+    return trim(str_replace('الصف','',$value));
+}
+
+function teacher_diagnostic_term_aliases(string $value): array
+{
+    $key=teacher_question_bank_normalize_header($value);
+    if (str_contains($key,'الاول')||str_contains($key,'first')) {
+        return ['الترم الأول','الترم الاول','الفصل الدراسي الأول','الفصل الدراسي الاول','الأول','الاول','first'];
+    }
+    if (str_contains($key,'الثاني')||str_contains($key,'second')) {
+        return ['الترم الثاني','الفصل الدراسي الثاني','الثاني','second'];
+    }
+    return [trim($value)];
+}
+
+function teacher_create_diagnostic_test_from_bank(int $teacherId): never
+{
+    $data=Http::input();
+    $title=trim((string)($data['title']??''));
+    $testType=trim((string)($data['testType']??'pre_diagnostic'));
+    $validTestTypes=['pre_diagnostic','post_diagnostic','quiz'];
+    if (!in_array($testType,$validTestTypes,true)) Http::json(['error'=>'نوع الاختبار غير صالح.'],422);
+    $rawClassIds=is_array($data['classIds']??null)?$data['classIds']:[($data['classId']??0)];
+    $classIds=array_values(array_unique(array_filter(array_map('intval',$rawClassIds),static fn(int $id): bool=>$id>0)));
+    $stage=trim((string)($data['stage']??''));
+    $gradeLabel=trim((string)($data['gradeLabel']??''));
+    $termLabel=trim((string)($data['termLabel']??''));
+    $durationRaw=(int)($data['durationMinutes']??20);
+    $duration=$durationRaw===0?0:max(1,min(240,$durationRaw));
+    $skillIds=array_values(array_unique(array_filter(array_map('intval',$data['skillIds']??[]),static fn(int $id): bool=>$id>0)));
+
+    if ($title==='') Http::json(['error'=>'اكتبي اسم الاختبار.'],422);
+    if (!$classIds) Http::json(['error'=>'الفصل المختار من أعلى الصفحة غير مسجل لهذا الصف.'],422);
+    if (!in_array($stage,['ابتدائي','متوسط','ثانوي'],true)||$gradeLabel===''||$termLabel==='') Http::json(['error'=>'حددي المرحلة والصف والترم.'],422);
+    if (!$skillIds) Http::json(['error'=>'حددي مهارة واحدة على الأقل للاختبار التشخيصي.'],422);
+
+    $classPlaceholders=implode(',',array_fill(0,count($classIds),'?'));
+    $classes=fetch_all("SELECT id,name,stage,grade_label,academic_year FROM classes WHERE teacher_id=? AND id IN ({$classPlaceholders}) ORDER BY name",[$teacherId,...$classIds]);
+    if (count($classes)!==count($classIds)) Http::json(['error'=>'أحد الفصول المختارة غير موجود أو لا يتبع حسابك.'],422);
+
+    $wantedStage=teacher_diagnostic_normalized_stage($stage);
+    $wantedGrade=teacher_diagnostic_normalized_grade($stage,$gradeLabel);
+    foreach($classes as $class) {
+        $classStage=teacher_diagnostic_normalized_stage((string)$class['stage']);
+        $classGrade=teacher_diagnostic_normalized_grade($classStage,(string)$class['grade_label']);
+        if ($classStage!==$wantedStage||$classGrade!==$wantedGrade) {
+            Http::json(['error'=>'أحد الفصول المختارة لا ينتمي إلى المرحلة والصف المحددين أعلى الصفحة.'],422);
+        }
+    }
+
+    $placeholders=implode(',',array_fill(0,count($skillIds),'?'));
+    $termAliases=teacher_diagnostic_term_aliases($termLabel);
+    $termPlaceholders=implode(',',array_fill(0,count($termAliases),'?'));
+    $skills=fetch_all("SELECT s.id,s.name,s.code,s.stage,s.grade_label,
+            COUNT(q.id) AS approved_questions
+        FROM skills s
+        LEFT JOIN question_bank q ON q.skill_id=s.id AND q.teacher_id=? AND q.review_status='approved' AND q.is_active=1
+            AND q.term_label IN ({$termPlaceholders}) AND q.lesson_code IS NOT NULL AND q.lesson_code<>''
+        WHERE s.id IN ({$placeholders})
+        GROUP BY s.id,s.name,s.code,s.stage,s.grade_label",[$teacherId,...$termAliases,...$skillIds]);
+    $skillMap=[];
+    foreach($skills as $skill) $skillMap[(int)$skill['id']]=$skill;
+    $unknown=[];$missing=[];
+    foreach($skillIds as $skillId) {
+        if (!isset($skillMap[$skillId])) {$unknown[]=$skillId;continue;}
+        $skillStage=teacher_diagnostic_normalized_stage((string)$skillMap[$skillId]['stage']);
+        $skillGrade=teacher_diagnostic_normalized_grade($skillStage,(string)$skillMap[$skillId]['grade_label']);
+        if ($skillStage!==$wantedStage||$skillGrade!==$wantedGrade) {$unknown[]=$skillId;continue;}
+        if ((int)$skillMap[$skillId]['approved_questions']<1) $missing[]=(string)$skillMap[$skillId]['name'];
+    }
+    if ($unknown) Http::json(['error'=>'بعض المهارات المحددة لا تنتمي إلى المرحلة والصف المختارين.'],422);
+    if ($missing) Http::json(['error'=>'لا توجد أسئلة معتمدة لهذه المهارات: '.implode('، ',$missing).'. اعتمدي سؤالًا واحدًا على الأقل لكل مهارة أولًا.','missingSkills'=>$missing],422);
+
+    $school=teacher_school_settings_row($teacherId);
+    $semester=(string)($school['current_semester']??'first');
+    if (!in_array($semester,['first','second'],true)) $semester='first';
+    $skillJson=json_encode($skillIds,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);
+
+    $createdIds=Database::transaction(function(PDO $pdo) use($classes,$teacherId,$title,$testType,$stage,$gradeLabel,$termLabel,$skillJson,$skillIds,$duration,$school,$semester): array {
+        $statement=$pdo->prepare("INSERT INTO tests
+            (teacher_id,class_id,title,test_type,question_source,bank_stage,bank_grade_label,bank_term_label,bank_import_batch,bank_skill_ids_json,expected_lesson_count,status,duration_minutes,max_attempts,shuffle_questions,show_result,total_points,academic_year,semester)
+            VALUES (?,?,?,?,'lesson_bank',?,?,?,?,?,?,'draft',?,1,1,1,?,?,?)");
+        $ids=[];
+        foreach($classes as $class) {
+            $academicYear=trim((string)($school['academic_year']??''))?:trim((string)($class['academic_year']??''));
+            $statement->execute([
+                $teacherId,(int)$class['id'],$title,$testType,$stage,$gradeLabel,$termLabel,null,$skillJson,count($skillIds),$duration,count($skillIds),$academicYear,$semester
+            ]);
+            $ids[]=(int)$pdo->lastInsertId();
+        }
+        return $ids;
+    });
+
+    $typeLabels=['pre_diagnostic'=>'تشخيصي قبلي','post_diagnostic'=>'تشخيصي بعدي','quiz'=>'اختبار قصير'];
+    $typeLabel=$typeLabels[$testType]??'اختبار';
+    Activity::log('teacher',$teacherId,'إنشاء اختبار من بنك المهارات',$typeLabel.' · '.$title.' · '.count($skillIds).' مهارة · '.count($classes).' فصل');
+    $classCount=count($classes);
+    $firstClass=$classes[0]??[];
+    $responseAcademicYear=trim((string)($school['academic_year']??''))?:trim((string)($firstClass['academic_year']??''));
+    Http::json([
+        'ok'=>true,
+        'id'=>$createdIds[0]??null,
+        'ids'=>$createdIds,
+        'title'=>$title,
+        'status'=>'draft',
+        'type'=>$testType,
+        'questionSource'=>'lesson_bank',
+        'skillCount'=>count($skillIds),
+        'classCount'=>$classCount,
+        'classId'=>(int)($firstClass['id']??0),
+        'classStage'=>(string)($firstClass['stage']??$stage),
+        'classGradeLabel'=>(string)($firstClass['grade_label']??$gradeLabel),
+        'academicYear'=>$responseAcademicYear,
+        'semester'=>$semester,
+        'message'=>$classCount>1
+            ?'تم إرسال '.$typeLabel.' إلى '.(string)$classCount.' فصول في خانة الاختبارات كمسودات مستقلة.'
+            :'تم إرسال '.$typeLabel.' إلى خانة الاختبارات كمسودة.'
+    ],201);
+}
+
+function teacher_bulk_question_level(int $teacherId): never
+{
+    $data=Http::input();
+    $ids=array_values(array_unique(array_filter(array_map('intval',$data['questionIds']??[]),static fn(int $id): bool=>$id>0)));
+    $level=teacher_question_bank_level((string)($data['questionLevel']??''));
+    if (!$ids) Http::json(['error'=>'حددي سؤالًا واحدًا على الأقل لتغيير مستواه.'],422);
+    $placeholders=implode(',',array_fill(0,count($ids),'?'));
+    $statement=execute_sql("UPDATE question_bank SET question_level=? WHERE teacher_id=? AND id IN ({$placeholders})",[$level,$teacherId,...$ids]);
+    Http::json(['ok'=>true,'updated'=>$statement->rowCount(),'questionLevel'=>$level]);
+}
+
+
+function teacher_bulk_cognitive_type(int $teacherId): never
+{
+    $data=Http::input();
+    $ids=array_values(array_unique(array_filter(array_map('intval',$data['questionIds']??[]),static fn(int $id): bool=>$id>0)));
+    $classification=teacher_question_bank_cognitive_type((string)($data['cognitiveType']??''));
+    if (!$ids) Http::json(['error'=>'حددي سؤالًا واحدًا على الأقل لتغيير تصنيفه المعرفي.'],422);
+    if ($classification==='') Http::json(['error'=>'اختاري تصنيفًا معرفيًا صالحًا.'],422);
+    $placeholders=implode(',',array_fill(0,count($ids),'?'));
+    $level=teacher_question_bank_level($classification);
+    $statement=execute_sql("UPDATE question_bank SET cognitive_type=?,question_level=? WHERE teacher_id=? AND id IN ({$placeholders})",[$classification,$level,$teacherId,...$ids]);
+    Http::json(['ok'=>true,'updated'=>$statement->rowCount(),'cognitiveType'=>$classification]);
+}
+
+function teacher_bulk_review_questions(int $teacherId): never
+{
+    $data=Http::input();
+    $status=(string)($data['status']??'');
+    $importBatch=trim((string)($data['importBatch']??''));
+    if (!in_array($status,['approved','rejected'],true)||$importBatch==='') Http::json(['error'=>'حددي دفعة الاستيراد وحالة المراجعة.'],422);
+    $statement=execute_sql('UPDATE question_bank SET review_status=?,status=? WHERE teacher_id=? AND import_batch=? AND source=\'imported\' AND is_active=1',[$status,$status,$teacherId,$importBatch]);
+    $count=$statement->rowCount();
+    Activity::log('teacher',$teacherId,$status==='approved'?'اعتماد بنك أسئلة مستورد':'رفض بنك أسئلة مستورد',$importBatch.' · '.$count.' سؤال');
+    Http::json(['ok'=>true,'updated'=>$count,'status'=>$status]);
+}
+
+function teacher_question_bank_export(int $teacherId): never
+{
+    [$where,$params]=teacher_question_bank_filter($teacherId);
+    $templateOnly=!empty($_GET['template']);
+    $structuredSchema=(string)($_GET['schema']??'')==='structured';
+    $questions=$templateOnly?[]:fetch_all(
+        'SELECT q.*,sk.name AS skill_name,sk.code AS skill_code FROM question_bank q LEFT JOIN skills sk ON sk.id=q.skill_id WHERE '.$where.' ORDER BY q.stage,q.grade_label,COALESCE(q.question_order,2147483647),q.chapter_name,q.topic,sk.name,q.created_at,q.id',
+        $params
+    );
+    if ($structuredSchema) {
+        $headers=['subject_id','subject_name','grade','unit_id','unit_name','lesson_id','lesson_name','skill_id','skill_name','questions_to_display','question_id','question_order','question_text','option_a','option_b','option_c','option_d','correct_answer','question_category','difficulty','question_type','explanation','status','question_source','source_reference'];
+        $rows=[];
+        foreach($questions as $rowIndex=>$question) {
+            $options=json_options($question['options_json']??null)??[];
+            $answer=(string)($question['correct_answer']??'');
+            if (($question['question_type']??'')==='mcq') {
+                $arabicLetter=teacher_question_bank_answer_letter($options,$answer);
+                $answer=['أ'=>'A','ب'=>'B','ج'=>'C','د'=>'D'][$arabicLetter]??$answer;
+            }
+            $rows[]=[
+                $question['subject_id']??'',
+                $question['subject_name']??'',
+                $question['grade_label']??'',
+                $question['unit_id']??'',
+                $question['unit_name']??($question['chapter_name']??''),
+                $question['lesson_id']??($question['lesson_code']??''),
+                $question['lesson_name']??($question['topic']??''),
+                $question['external_skill_id']??($question['skill_code']??''),
+                $question['skill_name']??'',
+                max(1,(int)($question['questions_to_display']??1)),
+                $question['source_question_id']??($question['external_question_id']??''),
+                (int)($question['question_order']??($rowIndex+1)),
+                $question['question_text']??'',
+                $options[0]??'',
+                $options[1]??'',
+                $options[2]??'',
+                $options[3]??'',
+                $answer,
+                $question['question_category']??($question['cognitive_type']??''),
+                $question['difficulty']??'',
+                $question['question_type']??'',
+                $question['explanation']??'',
+                $question['status']??($question['review_status']??''),
+                $question['question_source']??($question['content_source']??''),
+                $question['source_reference']??($question['reference_page']??''),
+            ];
+        }
+        teacher_question_bank_send_spreadsheet($headers,$rows);
+    }
+    $headers=['رقم السؤال','المرحلة','الصف','الوحدة','الدرس','المهارة','رقم تكرار المهارة','مستوى الصعوبة','التصنيف المعرفي','نص السؤال','البديل أ','البديل ب','البديل ج','البديل د','حرف الإجابة','الإجابة الصحيحة','تفسير مختصر','صفحة المرجع','المصدر'];
+    $difficulty=['easy'=>'سهل','medium'=>'متوسط','hard'=>'صعب'];
+    $levels=['unclassified'=>'','applied'=>'تطبيقي','logical'=>'منطقي','analytical'=>'تحليلي'];
+    $rows=[];$skillCounters=[];
+    foreach($questions as $rowIndex=>$question) {
+        $options=json_options($question['options_json']??null)??[];
+        $skillName=trim((string)($question['skill_name']??''));
+        $counterKey=implode('|',[(string)($question['stage']??''),(string)($question['grade_label']??''),(string)($question['chapter_name']??''),(string)($question['topic']??''),$skillName]);
+        $skillCounters[$counterKey]=($skillCounters[$counterKey]??0)+1;
+        $repeat=(int)($question['skill_repeat_number']??0);
+        if($repeat<1) $repeat=$skillCounters[$counterKey];
+        $lesson=trim((string)($question['topic']??''));
+        $lessonCode=trim((string)($question['lesson_code']??''));
+        if($lessonCode!=='') $lesson=$lessonCode.' - '.$lesson;
+        $classification=teacher_question_bank_cognitive_type((string)($question['cognitive_type']??''));
+        if($classification==='') $classification=$levels[$question['question_level']??'unclassified']??'';
+        $contentSource=teacher_question_bank_content_source((string)($question['content_source']??''));
+        $rows[]=[
+            $rowIndex+1,
+            $question['stage']??'',
+            $question['grade_label']??'',
+            $question['chapter_name']??'',
+            $lesson,
+            $skillName,
+            $repeat,
+            $difficulty[$question['difficulty']??'']??($question['difficulty']??''),
+            $classification,
+            $question['question_text']??'',
+            $options[0]??'',
+            $options[1]??'',
+            $options[2]??'',
+            $options[3]??'',
+            teacher_question_bank_answer_letter($options,(string)($question['correct_answer']??'')),
+            $question['correct_answer']??'',
+            $question['explanation']??'',
+            $question['reference_page']??'',
+            $contentSource,
+        ];
+    }
+    teacher_question_bank_send_spreadsheet($headers,$rows);
+}
+
+function teacher_question_bank_column_letter(int $index): string
+{
+    $letter='';
+    for($number=$index+1;$number>0;$number=intdiv($number-1,26)) $letter=chr(65+(($number-1)%26)).$letter;
+    return $letter;
+}
+
+function teacher_question_bank_send_spreadsheet(array $headers,array $rows): never
+{
+    if (!class_exists('ZipArchive')) {
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="madar-question-bank.csv"');
+        echo "\xEF\xBB\xBF";
+        $stream=fopen('php://output','wb');
+        fputcsv($stream,$headers,';');
+        foreach($rows as $row) fputcsv($stream,array_map('csv_safe',$row),';');
+        fclose($stream);
+        exit;
+    }
+    $path=tempnam(sys_get_temp_dir(),'madar-question-bank-');
+    if ($path===false) Http::json(['error'=>'تعذّر تجهيز ملف Excel.'],500);
+    $zip=new ZipArchive();
+    if ($zip->open($path,ZipArchive::CREATE|ZipArchive::OVERWRITE)!==true) {
+        @unlink($path);Http::json(['error'=>'تعذّر إنشاء ملف Excel.'],500);
+    }
+    $contentTypes='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>';
+    $rootRelationships='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+    $workbook='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="بنك الأسئلة" sheetId="1" r:id="rId1"/></sheets></workbook>';
+    $workbookRelationships='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>';
+    $styles='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Arial"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Arial"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF32136F"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFE7E1F7"/></left><right style="thin"><color rgb="FFE7E1F7"/></right><top style="thin"><color rgb="FFE7E1F7"/></top><bottom style="thin"><color rgb="FFE7E1F7"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" readingOrder="2" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center" readingOrder="2" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+    $sheetRows='<row r="1" ht="30" customHeight="1">';
+    foreach($headers as $column=>$header) $sheetRows.=teacher_xlsx_text_cell(teacher_question_bank_column_letter($column).'1',$header,1);
+    $sheetRows.='</row>';
+    foreach($rows as $rowIndex=>$row) {
+        $number=$rowIndex+2;$sheetRows.='<row r="'.$number.'" ht="34" customHeight="1">';
+        foreach(array_values($row) as $column=>$value) $sheetRows.=teacher_xlsx_text_cell(teacher_question_bank_column_letter($column).$number,$value,2);
+        $sheetRows.='</row>';
+    }
+    $lastColumn=teacher_question_bank_column_letter(max(0,count($headers)-1));
+    $lastRow=max(1,count($rows)+1);
+    $columnsXml=count($headers)>=25
+        ? '<col min="1" max="12" width="18" customWidth="1"/><col min="13" max="13" width="52" customWidth="1"/><col min="14" max="17" width="24" customWidth="1"/><col min="18" max="18" width="18" customWidth="1"/><col min="19" max="25" width="22" customWidth="1"/>'
+        : '<col min="1" max="1" width="12" customWidth="1"/><col min="2" max="9" width="20" customWidth="1"/><col min="10" max="10" width="52" customWidth="1"/><col min="11" max="14" width="25" customWidth="1"/><col min="15" max="15" width="13" customWidth="1"/><col min="16" max="17" width="31" customWidth="1"/><col min="18" max="19" width="19" customWidth="1"/>';
+    $worksheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:'.$lastColumn.$lastRow.'"/><sheetViews><sheetView rightToLeft="1" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="24"/><cols>'.$columnsXml.'</cols><sheetData>'.$sheetRows.'</sheetData><autoFilter ref="A1:'.$lastColumn.$lastRow.'"/><pageMargins left="0.4" right="0.4" top="0.6" bottom="0.6" header="0.2" footer="0.2"/></worksheet>';
+    $zip->addFromString('[Content_Types].xml',$contentTypes);
+    $zip->addFromString('_rels/.rels',$rootRelationships);
+    $zip->addFromString('xl/workbook.xml',$workbook);
+    $zip->addFromString('xl/_rels/workbook.xml.rels',$workbookRelationships);
+    $zip->addFromString('xl/styles.xml',$styles);
+    $zip->addFromString('xl/worksheets/sheet1.xml',$worksheet);
+    if (!$zip->close()) {@unlink($path);Http::json(['error'=>'تعذّر إكمال ملف Excel.'],500);}
+    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    header('Content-Disposition: attachment; filename="madar-question-bank.xlsx"');
+    header('Content-Length: '.filesize($path));
+    header('Cache-Control: no-store');
+    readfile($path);@unlink($path);exit;
+}
+
+function teacher_question_bank_normalize_header(string $value): string
+{
+    $value=mb_strtolower(trim($value));
+    $value=str_replace(['أ','إ','آ','ة','ى','ؤ','ئ'],['ا','ا','ا','ه','ي','و','ي'],$value);
+    return preg_replace('/[^\p{L}\p{N}]+/u','',$value)??$value;
+}
+
+function teacher_question_bank_header_map(array $headers): array
+{
+    $map=[];
+    foreach($headers as $index=>$header) {
+        $key=teacher_question_bank_normalize_header((string)$header);
+        if ($key!==''&&!isset($map[$key])) $map[$key]=$index;
+    }
+    return $map;
+}
+
+function teacher_question_bank_cell(array $row,array $map,array $aliases,string $default=''): string
+{
+    foreach($aliases as $alias) {
+        $key=teacher_question_bank_normalize_header($alias);
+        if (array_key_exists($key,$map)) {
+            $value=trim((string)($row[$map[$key]]??''));
+            if ($value!=='') return $value;
+        }
+    }
+    return $default;
+}
+
+function teacher_question_bank_stage(string $value,string $default): string
+{
+    $text=teacher_question_bank_normalize_header($value?:$default);
+    if (str_contains($text,'ابتدا')||str_contains($text,'primary')||str_contains($text,'elementary')) return 'ابتدائي';
+    if (str_contains($text,'متوسط')||str_contains($text,'middle')||str_contains($text,'intermediate')) return 'متوسط';
+    if (str_contains($text,'ثانو')||str_contains($text,'secondary')||str_contains($text,'highschool')) return 'ثانوي';
+    return in_array($default,['ابتدائي','متوسط','ثانوي'],true)?$default:'';
+}
+
+function teacher_question_bank_stage_from_grade(string $value): string
+{
+    $text=teacher_question_bank_normalize_header($value);
+    if (str_contains($text,'ابتدا')||str_contains($text,'primary')||str_contains($text,'elementary')) return 'ابتدائي';
+    if (str_contains($text,'متوسط')||str_contains($text,'middle')||str_contains($text,'intermediate')) return 'متوسط';
+    if (str_contains($text,'ثانو')||str_contains($text,'secondary')||str_contains($text,'highschool')) return 'ثانوي';
+    return '';
+}
+
+function teacher_question_bank_difficulty(string $value): string
+{
+    $text=teacher_question_bank_normalize_header($value);
+    if (in_array($text,['easy','سهل'],true)||str_contains($text,'سهل')) return 'easy';
+    if (in_array($text,['hard','متقدم','صعب'],true)||str_contains($text,'صعب')||str_contains($text,'متقدم')) return 'hard';
+    return 'medium';
+}
+
+function teacher_question_bank_type(string $value): string
+{
+    $text=teacher_question_bank_normalize_header($value);
+    if (in_array($text,['mcq','multiplechoice','singlechoice','choice'],true)||str_contains($text,'اختيار')) return 'mcq';
+    if (in_array($text,['truefalse','boolean','bool'],true)||str_contains($text,'صح')||str_contains($text,'خطا')) return 'true_false';
+    if (in_array($text,['shortanswer','essay','numeric','number','text','openended'],true)||str_contains($text,'قصيره')||str_contains($text,'مقالي')||str_contains($text,'اجابه')) return 'short_answer';
+    return 'mcq';
+}
+
+function teacher_question_bank_level(string $value): string
+{
+    $text=teacher_question_bank_normalize_header($value);
+    if ($text===''||str_contains($text,'غيرمصنف')||$text==='unclassified') return 'unclassified';
+    if ($text==='applied'||str_contains($text,'تطبيق')) return 'applied';
+    if ($text==='logical'||str_contains($text,'منطق')||str_contains($text,'استدلال')) return 'logical';
+    if ($text==='analytical'||str_contains($text,'تحليل')) return 'analytical';
+    return 'unclassified';
+}
+
+function teacher_question_bank_cognitive_type(string $value): string
+{
+    $text=teacher_question_bank_normalize_header($value);
+    if($text==='') return '';
+    if(str_contains($text,'تحليل')||$text==='analytical') return 'تحليلي';
+    if(str_contains($text,'استدلال')||$text==='inference'||$text==='inferential') return 'استدلال';
+    if(str_contains($text,'منطق')||$text==='logical') return 'منطقي';
+    if(str_contains($text,'تطبيق')||$text==='applied') return 'تطبيقي';
+    return '';
+}
+
+function teacher_question_bank_content_source(string $value): string
+{
+    $text=teacher_question_bank_normalize_header($value);
+    if($text==='') return '';
+    if(str_contains($text,'كتاب')||str_contains($text,'طالب')||$text==='studentbook') return 'كتاب الطالب';
+    if(str_contains($text,'انترنت')||str_contains($text,'ويب')||$text==='internet'||$text==='web') return 'الإنترنت';
+    return trim($value);
+}
+
+function teacher_question_bank_import_status(string $value): array
+{
+    $raw=trim($value);
+    $text=teacher_question_bank_normalize_header($raw);
+    if ($text==='') return ['status'=>'pending','reviewStatus'=>'pending','isActive'=>1];
+    if (in_array($text,['approved','published','active','ready','معتمد','منشور','نشط','جاهز'],true)) {
+        return ['status'=>$raw,'reviewStatus'=>'approved','isActive'=>1];
+    }
+    if (in_array($text,['rejected','invalid','مرفوض','غيرصالح'],true)) {
+        return ['status'=>$raw,'reviewStatus'=>'rejected','isActive'=>1];
+    }
+    if (in_array($text,['inactive','disabled','archived','deleted','موقوف','غيرنشط','مؤرشف','محذوف'],true)) {
+        return ['status'=>$raw,'reviewStatus'=>'approved','isActive'=>0];
+    }
+    return ['status'=>$raw,'reviewStatus'=>'pending','isActive'=>1];
+}
+
+function teacher_question_bank_external_id(string $rawId,array $parts): string
+{
+    $rawId=trim($rawId);
+    $seed=implode('|',array_map(static fn($value): string=>trim((string)$value),$parts));
+    if ($rawId!=='') $seed.='|'.$rawId;
+    return 'QB-'.strtoupper(substr(sha1($seed),0,32));
+}
+
+function teacher_question_bank_answer_letter(array $options,string $answer): string
+{
+    $letters=['أ','ب','ج','د'];
+    $normalized=teacher_question_bank_normalize_header(str_replace('ـ','',$answer));
+    $letterMap=['ا'=>0,'أ'=>0,'1'=>0,'a'=>0,'ب'=>1,'2'=>1,'b'=>1,'ج'=>2,'3'=>2,'c'=>2,'د'=>3,'4'=>3,'d'=>3];
+    if(isset($letterMap[$normalized])) return $letters[$letterMap[$normalized]]??'';
+    foreach(array_slice($options,0,4) as $index=>$option) {
+        if(trim((string)$option)===trim($answer)) return $letters[$index]??'';
+    }
+    return '';
+}
+
+function teacher_question_bank_lesson_parts(string $value): array
+{
+    $value=trim($value);
+    if($value==='') return ['code'=>'','lesson'=>''];
+    if(preg_match('/^([0-9٠-٩]+\s*[-–]\s*[0-9٠-٩]+|استكشاف\s+[0-9٠-٩]+\s*[-–]\s*[0-9٠-٩]+)\s*(?:[|:–—-]\s*)?(.+)?$/u',$value,$match)) {
+        return ['code'=>trim((string)$match[1]),'lesson'=>trim((string)($match[2]??''))?:$value];
+    }
+    return ['code'=>'','lesson'=>$value];
+}
+
+function teacher_question_bank_sheet_kind(string $sheetName,array $headers=[]): string
+{
+    $name=teacher_question_bank_normalize_header($sheetName);
+    if (str_contains($name,'اختيارمنمتعدد')) return 'curriculum_mcq';
+    if (str_contains($name,'صحوخطا')) return 'curriculum_true_false';
+    if ($name==='صل'||str_contains($name,'اسيلهصل')) return 'curriculum_matching';
+    if (str_contains($name,'بنكالاسيله')||str_contains($name,'مستودعمدار')||str_contains($name,'مستودعالاسيله')) return 'generic';
+    $map=teacher_question_bank_header_map($headers);
+    if (isset($map[teacher_question_bank_normalize_header('نص السؤال')])||isset($map[teacher_question_bank_normalize_header('question_text')])) return 'generic';
+    if (isset($map[teacher_question_bank_normalize_header('العبارة')])&&isset($map[teacher_question_bank_normalize_header('الإجابة')])) return 'curriculum_true_false';
+    return '';
+}
+
+function teacher_question_bank_header_row(array $table,string $kind): ?array
+{
+    $required=match($kind) {
+        'curriculum_true_false'=>['العبارة'],
+        'curriculum_matching'=>['العمود (أ): العبارة/المثال'],
+        default=>['نص السؤال','السؤال','صيغة السؤال','question','questiontext'],
+    };
+    foreach(array_slice($table,0,30,true) as $index=>$headers) {
+        $map=teacher_question_bank_header_map($headers);
+        foreach($required as $alias) {
+            if(isset($map[teacher_question_bank_normalize_header($alias)])) return ['index'=>(int)$index,'headers'=>$headers,'map'=>$map];
+        }
+    }
+    return null;
+}
+
+function teacher_question_bank_unpack_upload(string $path,string $extension): array
+{
+    if ($extension!=='zip') return ['path'=>$path,'extension'=>$extension,'cleanup'=>null];
+    if (!class_exists('ZipArchive')) Http::json(['error'=>'الخادم يحتاج إضافة PHP Zip لفتح الملف المضغوط.'],500);
+    $zip=new ZipArchive();
+    if ($zip->open($path)!==true) Http::json(['error'=>'الملف المضغوط غير صالح.'],422);
+    $entry='';
+    for($index=0;$index<$zip->numFiles;$index++) {
+        $name=(string)($zip->statIndex($index)['name']??'');
+        if (str_starts_with($name,'__MACOSX/')||str_starts_with(basename($name),'._')) continue;
+        if (mb_strtolower(pathinfo($name,PATHINFO_EXTENSION))==='xlsx') {$entry=$name;break;}
+    }
+    if ($entry==='') {$zip->close();Http::json(['error'=>'لم أجد ملف XLSX داخل الملف المضغوط.'],422);}
+    $contents=$zip->getFromName($entry);$zip->close();
+    if ($contents===false) Http::json(['error'=>'تعذّر استخراج ملف Excel من الملف المضغوط.'],422);
+    $temp=tempnam(sys_get_temp_dir(),'madar-qb-xlsx-');
+    if ($temp===false||file_put_contents($temp,$contents)===false) Http::json(['error'=>'تعذّر تجهيز ملف Excel للاستيراد.'],500);
+    return ['path'=>$temp,'extension'=>'xlsx','cleanup'=>$temp];
+}
+
+function teacher_question_bank_matching_options(string $value): array
+{
+    $map=[];
+    foreach(preg_split('/\s*\|\s*/u',trim($value))?:[] as $part) {
+        if (!preg_match('/^\s*([أاإآبجدهوA-Fa-f1-6])\s*ـ?\s*[-–—:]\s*(.+?)\s*$/u',$part,$match)) continue;
+        $key=teacher_question_bank_normalize_header(str_replace('ـ','',(string)$match[1]));
+        $aliases=['1'=>'ا','a'=>'ا','2'=>'ب','b'=>'ب','3'=>'ج','c'=>'ج','4'=>'د','d'=>'د','5'=>'ه','e'=>'ه','6'=>'و','f'=>'و'];
+        $key=$aliases[$key]??$key;
+        $map[$key]=trim((string)$match[2]);
+    }
+    return $map;
+}
+
+function teacher_question_bank_find_skill_id(string $stage,string $grade,string $skillName,string $lessonCode='',string $externalSkillId=''): ?int
+{
+    $skillName=trim($skillName);$lessonCode=trim($lessonCode);$externalSkillId=trim($externalSkillId);
+    if ($skillName===''&&$lessonCode===''&&$externalSkillId==='') return null;
+    $params=[$stage,$grade];$conditions=[];
+    if ($skillName!=='') {$conditions[]='name=?';$params[]=$skillName;}
+    if ($externalSkillId!=='') {$conditions[]='code=?';$params[]=$externalSkillId;}
+    elseif ($lessonCode!=='') {$conditions[]='code=?';$params[]=$lessonCode;}
+    $existing=fetch_one('SELECT id FROM skills WHERE stage=? AND grade_label=? AND ('.implode(' OR ',$conditions).') LIMIT 1',$params);
+    if ($existing) return (int)$existing['id'];
+    if ($skillName===''&&$externalSkillId!=='') $skillName=$externalSkillId;
+    if ($skillName==='') return null;
+
+    // Merge visually equivalent Arabic skill names (spaces, diacritics and Alef forms)
+    // so all question variants remain under one skill ID.
+    $normalizedSkillName=diagnostic_normalize_text($skillName);
+    foreach(fetch_all('SELECT id,name FROM skills WHERE stage=? AND grade_label=?',[$stage,$grade]) as $candidate) {
+        if ($normalizedSkillName!==''&&diagnostic_normalize_text((string)$candidate['name'])===$normalizedSkillName) {
+            return (int)$candidate['id'];
+        }
+    }
+
+    $fallbackCode='QB-'.strtoupper(substr(sha1($stage.'|'.$grade.'|'.$normalizedSkillName),0,18));
+    $code=mb_substr($externalSkillId!==''?$externalSkillId:($lessonCode!==''?$lessonCode:$fallbackCode),0,50);
+    $codeOwner=fetch_one('SELECT id,stage,grade_label FROM skills WHERE code=? LIMIT 1',[$code]);
+    if ($codeOwner) {
+        if ((string)$codeOwner['stage']===$stage&&(string)$codeOwner['grade_label']===$grade) return (int)$codeOwner['id'];
+        $code=$fallbackCode;
+    }
+    try {
+        execute_sql('INSERT INTO skills (stage,grade_label,code,name,description) VALUES (?,?,?,?,?)',[$stage,$grade,$code,$skillName,'أضيفت تلقائيًا من بنك الأسئلة.']);
+        return (int)Database::connection()->lastInsertId();
+    } catch (PDOException) {
+        $row=fetch_one('SELECT id FROM skills WHERE stage=? AND grade_label=? AND (name=? OR code=?) LIMIT 1',[$stage,$grade,$skillName,$code]);
+        return $row?(int)$row['id']:null;
+    }
+}
+
+function teacher_question_bank_context_from_filename(string $filename): array
+{
+    $text=teacher_question_bank_normalize_header($filename);
+    $context=[];
+    foreach(['ابتدائي','متوسط','ثانوي'] as $stage) {
+        if (str_contains($text,teacher_question_bank_normalize_header($stage))) {$context['stage']=$stage;break;}
+    }
+    $gradeWords=[
+        'اول'=>'أول',
+        'ثاني'=>'ثاني',
+        'ثالث'=>'ثالث',
+        'رابع'=>'رابع',
+        'خامس'=>'خامس',
+        'سادس'=>'سادس',
+    ];
+    if (!empty($context['stage'])) {
+        foreach($gradeWords as $needle=>$label) {
+            if (str_contains($text,$needle.teacher_question_bank_normalize_header((string)$context['stage']))) {
+                $context['gradeLabel']=$label.' '.$context['stage'];
+                break;
+            }
+        }
+    }
+    if (str_contains($text,'الترمالاول')||str_contains($text,'الفصلالدراسيالاول')) $context['termLabel']='الترم الأول';
+    elseif (str_contains($text,'الترمالثاني')||str_contains($text,'الفصلالدراسيالثاني')) $context['termLabel']='الترم الثاني';
+    return $context;
+}
+
+function teacher_question_bank_import(int $teacherId): never
+{
+    if (!isset($_FILES['file'])||!is_uploaded_file((string)($_FILES['file']['tmp_name']??''))) Http::json(['error'=>'اختاري ملف Excel صالحًا.'],422);
+    $originalName=(string)($_FILES['file']['name']??'question-bank.xlsx');
+    $extension=mb_strtolower(pathinfo($originalName,PATHINFO_EXTENSION));
+    if (!in_array($extension,['xlsx','csv','txt','zip'],true)) Http::json(['error'=>'الصيغ المدعومة هي XLSX وCSV وملف ZIP يحتوي XLSX.'],422);
+
+    $prepared=teacher_question_bank_unpack_upload((string)$_FILES['file']['tmp_name'],$extension);
+    $importPath=(string)$prepared['path'];
+    $importExtension=(string)$prepared['extension'];
+    $cleanup=$prepared['cleanup']??null;
+
+    try {
+        if ($importExtension==='xlsx') {
+            $sheetTables=teacher_read_xlsx_sheets($importPath,['مستودع مدار','بنك الأسئلة','اختيار من متعدد','صح وخطأ','صِل']);
+            $genericName='';
+            foreach(array_keys($sheetTables) as $sheetName) {
+                $normalizedSheetName=teacher_question_bank_normalize_header((string)$sheetName);
+                if (str_contains($normalizedSheetName,'بنكالاسيله')||str_contains($normalizedSheetName,'مستودعمدار')) {$genericName=(string)$sheetName;break;}
+            }
+            if ($genericName!=='') $sheetTables=[$genericName=>$sheetTables[$genericName]];
+        } else {
+            $sheetTables=['بنك الأسئلة'=>teacher_read_delimited_table($importPath)];
+        }
+
+        $inferred=teacher_question_bank_context_from_filename($originalName);
+        $defaults=[
+            'stage'=>(string)($inferred['stage']??trim((string)($_POST['stage']??'ابتدائي'))),
+            'gradeLabel'=>(string)($inferred['gradeLabel']??trim((string)($_POST['gradeLabel']??''))),
+            'classLabel'=>trim((string)($_POST['classLabel']??'كل الفصول')),
+            'termLabel'=>(string)($inferred['termLabel']??trim((string)($_POST['termLabel']??'الترم الأول'))),
+        ];
+        $batch='QB-'.date('Ymd-His').'-'.bin2hex(random_bytes(3));
+        $inserted=0;$skipped=0;$errors=[];$sheetResults=[];
+        $pdo=Database::connection();
+        $duplicateExternal=$pdo->prepare('SELECT id FROM question_bank WHERE teacher_id=? AND external_question_id=? LIMIT 1');
+        $duplicateText=$pdo->prepare('SELECT id FROM question_bank WHERE teacher_id=? AND stage=? AND grade_label=? AND COALESCE(term_label,\'\')=? AND COALESCE(lesson_code,\'\')=? AND question_text=? LIMIT 1');
+        $insert=$pdo->prepare("INSERT INTO question_bank
+            (teacher_id,external_question_id,source_question_id,subject_id,subject_name,skill_id,external_skill_id,lesson_code,import_batch,
+             stage,grade_label,class_label,term_label,topic,chapter_name,unit_id,unit_name,lesson_id,lesson_name,
+             difficulty,question_level,cognitive_type,question_category,bloom_level,skill_repeat_number,questions_to_display,question_order,
+             question_type,question_text,options_json,correct_answer,explanation,reference_page,content_source,question_source,source_reference,status,
+             points,source,review_status,is_active)
+            VALUES
+            (:teacher_id,:external_question_id,:source_question_id,:subject_id,:subject_name,:skill_id,:external_skill_id,:lesson_code,:import_batch,
+             :stage,:grade_label,:class_label,:term_label,:topic,:chapter_name,:unit_id,:unit_name,:lesson_id,:lesson_name,
+             :difficulty,:question_level,:cognitive_type,:question_category,:bloom_level,:skill_repeat_number,:questions_to_display,:question_order,
+             :question_type,:question_text,:options_json,:correct_answer,:explanation,:reference_page,:content_source,:question_source,:source_reference,:status,
+             :points,'imported',:review_status,:is_active)");
+
+        foreach($sheetTables as $sheetName=>$rawTable) {
+            $table=teacher_expand_single_column_table($rawTable);
+            while($table&&count(array_filter($table[0],static fn($value)=>trim((string)$value)!==''))===0) array_shift($table);
+            if (!$table) continue;
+            $kind=teacher_question_bank_sheet_kind((string)$sheetName,$table[0]??[]);
+            // بعض قوالب مدار تضع عنوانًا زخرفيًا في الصف الأول والعناوين الفعلية في الصف الثاني.
+            // لذلك نفحص أول 30 صفًا قبل استبعاد الورقة اعتمادًا على اسمها أو صفها الأول فقط.
+            if ($kind==='') {
+                $genericHeader=teacher_question_bank_header_row($table,'generic');
+                if ($genericHeader) $kind='generic';
+            }
+            if ($kind==='') {
+                $normalizedSheetName=teacher_question_bank_normalize_header((string)$sheetName);
+                if (!str_contains($normalizedSheetName,'تعليمات')&&!str_contains($normalizedSheetName,'دليلالاستخدام')&&!str_contains($normalizedSheetName,'مفتاحالاجابه')&&!str_contains($normalizedSheetName,'خريطهالمهارات')) {
+                    $errors[]="الورقة «{$sheetName}»: لم أتعرف على عناوين الأسئلة. استخدمي أعمدة نموذج مدار أو إحدى أوراق اختيار من متعدد/صح وخطأ/صِل.";
+                }
+                continue;
+            }
+            $headerInfo=teacher_question_bank_header_row($table,$kind);
+            if (!$headerInfo) {
+                $errors[]="الورقة «{$sheetName}»: لم أجد عناوين الأسئلة المعروفة.";
+                continue;
+            }
+            $map=$headerInfo['map'];
+            $rows=array_values(array_slice($table,(int)$headerInfo['index']+1));
+            $sheetInserted=0;$sheetSkipped=0;$matchingBanks=[];
+
+            foreach($rows as $rowIndex=>$row) {
+                if (!array_filter($row,static fn($value)=>trim((string)$value)!=='')) continue;
+                $line=(int)$headerInfo['index']+$rowIndex+2;
+                $subjectId=teacher_question_bank_cell($row,$map,['subject_id','subjectid','رقم المادة','معرف المادة']);
+                $subjectName=teacher_question_bank_cell($row,$map,['subject_name','subjectname','اسم المادة','المادة']);
+                $rawGrade=teacher_question_bank_cell($row,$map,['الصف','grade','gradelabel'],$defaults['gradeLabel']);
+                $rawStage=teacher_question_bank_cell($row,$map,['المرحلة','stage']);
+                $gradeStage=teacher_question_bank_stage_from_grade($rawGrade);
+                $stage=teacher_question_bank_stage($rawStage,$gradeStage!==''?$gradeStage:$defaults['stage']);
+                $grade=teacher_diagnostic_normalized_grade($stage,$rawGrade);
+                $term=teacher_question_bank_cell($row,$map,['الترم','الفصل الدراسي','term','termlabel'],$defaults['termLabel']);
+                $class=$defaults['classLabel'];
+                $chapter='';$type='mcq';$questionText='';$answer='';$options=[];$cognitiveType='';$bloomLevel='';
+                $skillName=teacher_question_bank_cell($row,$map,['المهارة','اسم المهارة','المهارات','skill','skillname']);
+                $externalSkillId=teacher_question_bank_cell($row,$map,['skill_id','skillid','معرف المهارة','رقم المهارة']);
+                $skillRepeat=max(0,(int)teacher_question_bank_cell($row,$map,['رقم تكرار المهارة','أرقام تكرار المهارة','تكرار المهارة','skillrepeatnumber','repeatnumber'],'0'));
+                $questionsToDisplay=max(1,min(50,(int)(teacher_question_bank_cell($row,$map,['questions_to_display','questionstodisplay','عدد الأسئلة للعرض','عدد الاسئلة للعرض'],'1')?:1)));
+                $questionOrder=max(1,(int)(teacher_question_bank_cell($row,$map,['question_order','questionorder','ترتيب السؤال'],'0')?:($rowIndex+1)));
+                $unitId=teacher_question_bank_cell($row,$map,['unit_id','unitid','معرف الوحدة','رقم الوحدة','رمز الوحدة']);
+                $unitName=teacher_question_bank_cell($row,$map,['unit_name','unitname','اسم الوحدة','الوحدة','الفصل/الوحدة في الكتاب','فصل الكتاب','chapter']);
+                $lessonId=teacher_question_bank_cell($row,$map,['lesson_id','lessonid','معرف الدرس','رقم الدرس']);
+                $lessonName=teacher_question_bank_cell($row,$map,['lesson_name','lessonname','اسم الدرس','الموضوع أو الدرس','الموضوع','الدرس','lesson','topic'],$skillName!==''?$skillName:'عام');
+                $lessonCode=teacher_question_bank_cell($row,$map,['رمز الدرس','رمز المهارة','lessoncode','skillcode']);
+                if($lessonCode===''&&$lessonId!=='') $lessonCode=mb_substr($lessonId,0,50);
+                $lessonCell=$lessonName;
+                if($lessonCode==='') {
+                    $lessonParts=teacher_question_bank_lesson_parts($lessonCell);
+                    $lessonCode=$lessonParts['code'];
+                    $lessonCell=$lessonParts['lesson'];
+                }
+                $topic=$lessonCell!==''?$lessonCell:($skillName!==''?$skillName:'عام');
+                $chapter=$unitName;
+                // نموذج A:S لا يحتوي عمودًا مستقلًا لرمز الدرس. عند غيابه ننشئ رمزًا ثابتًا
+                // من المرحلة والصف والوحدة والمهارة، حتى تعمل مجموعات المهارات والاختبارات التشخيصية.
+                if($lessonCode===''&&($skillName!==''||$topic!=='')) {
+                    $lessonCode='MDR-'.strtoupper(substr(sha1($stage.'|'.$grade.'|'.$chapter.'|'.($skillName!==''?$skillName:$topic)),0,14));
+                }
+                $explanation=teacher_question_bank_cell($row,$map,['شرح الإجابة','شرح الاجابة','الشرح','التغذية الراجعة','تفسير مختصر','التصحيح/التفسير','explanation']);
+                $referencePage=teacher_question_bank_cell($row,$map,['صفحة المرجع','المرجع','صفحة','referencepage','page']);
+                $questionSource=teacher_question_bank_cell($row,$map,['question_source','questionsource','مصدر السؤال','المصدر','contentsource','source']);
+                $sourceReference=teacher_question_bank_cell($row,$map,['source_reference','sourcereference','مرجع المصدر','رابط المصدر','المرجع'],$referencePage);
+                $contentSource=teacher_question_bank_content_source($questionSource);
+                $rawStatus=teacher_question_bank_cell($row,$map,['status','الحالة','حالة السؤال']);
+                $statusInfo=teacher_question_bank_import_status($rawStatus);
+                $rawId=teacher_question_bank_cell($row,$map,['معرّف السؤال','معرف السؤال','question_id','questionid','رقم السؤال','رقم']);
+                $questionCategory=teacher_question_bank_cell($row,$map,['question_category','questioncategory','التصنيف المعرفي','النوع المعرفي','نوع السؤال المعرفي','cognitivetype']);
+                $cognitiveType=$questionCategory;
+
+                if ($kind==='curriculum_mcq') {
+                    $questionText=teacher_question_bank_cell($row,$map,['نص السؤال','السؤال']);
+                    $answer=teacher_question_bank_cell($row,$map,['الإجابة الصحيحة','الاجابة الصحيحة','حرف الإجابة','حرف الاجابة']);
+                    $optionAliases=[
+                        ['البديل أ','البديل ا','الخيار أ','الخيار ا','الخيار 1'],
+                        ['البديل ب','الخيار ب','الخيار 2'],
+                        ['البديل ج','الخيار ج','الخيار 3'],
+                        ['البديل د','الخيار د','الخيار 4'],
+                    ];
+                    foreach($optionAliases as $aliases) {
+                        $option=teacher_question_bank_cell($row,$map,$aliases);
+                        if ($option!=='') $options[]=$option;
+                    }
+                    $chapter=teacher_question_bank_cell($row,$map,['الفصل','الفصل/الوحدة في الكتاب','chapter'],$chapter);
+                    $cognitiveType=teacher_question_bank_cell($row,$map,['question_category','questioncategory','التصنيف المعرفي','نوع السؤال المعرفي','النوع المعرفي','نوع السؤال'],$cognitiveType);
+                    $bloomLevel=teacher_question_bank_cell($row,$map,['مستوى بلوم','bloom']);
+                } elseif ($kind==='curriculum_true_false') {
+                    $type='true_false';
+                    $questionText=teacher_question_bank_cell($row,$map,['العبارة','نص السؤال']);
+                    $answer=teacher_question_bank_cell($row,$map,['الإجابة','الاجابة','الإجابة الصحيحة']);
+                    $options=['صح','خطأ'];
+                    $chapter=teacher_question_bank_cell($row,$map,['الفصل','الفصل/الوحدة في الكتاب','chapter'],$chapter);
+                    $cognitiveType=teacher_question_bank_cell($row,$map,['question_category','questioncategory','التصنيف المعرفي','نوع السؤال المعرفي','النوع المعرفي','نوع السؤال'],$cognitiveType);
+                    $bloomLevel=teacher_question_bank_cell($row,$map,['مستوى بلوم','bloom']);
+                } elseif ($kind==='curriculum_matching') {
+                    $type='mcq';
+                    $groupNo=teacher_question_bank_cell($row,$map,['رقم المجموعة','group']);
+                    $statement=teacher_question_bank_cell($row,$map,['العمود (أ): العبارة/المثال','العبارة/المثال','العبارة']);
+                    $bankRaw=teacher_question_bank_cell($row,$map,['العمود (ب): بنك الإجابات للمجموعة','بنك الإجابات','الخيارات']);
+                    if ($bankRaw!=='') $matchingBanks[$groupNo]=teacher_question_bank_matching_options($bankRaw);
+                    $bank=$matchingBanks[$groupNo]??[];
+                    $letter=teacher_question_bank_normalize_header(str_replace('ـ','',teacher_question_bank_cell($row,$map,['الحرف الصحيح','الإجابة','الاجابة'])));
+                    $letterAliases=['1'=>'ا','a'=>'ا','2'=>'ب','b'=>'ب','3'=>'ج','c'=>'ج','4'=>'د','d'=>'د','5'=>'ه','e'=>'ه','6'=>'و','f'=>'و'];
+                    $letter=$letterAliases[$letter]??$letter;
+                    $questionText=$statement!==''?'صِل العبارة التالية بالإجابة المناسبة: '.$statement:'';
+                    $options=array_values($bank);
+                    $answer=(string)($bank[$letter]??'');
+                    $chapter=teacher_question_bank_cell($row,$map,['الفصل','الفصل/الوحدة في الكتاب','chapter'],$chapter);
+                    $rawId=$rawId!==''?$rawId:($groupNo.'-'.teacher_question_bank_cell($row,$map,['رقم البند','البند']));
+                } else {
+                    $questionText=teacher_question_bank_cell($row,$map,['نص السؤال','السؤال','صيغة السؤال','question','questiontext']);
+                    $answer=teacher_question_bank_cell($row,$map,['الإجابة الصحيحة','الاجابة الصحيحة','الإجابة النموذجية','الاجابة النموذجية','حرف الإجابة','حرف الاجابة','الإجابة','الاجابة','correctanswer','answer']);
+                    $class=teacher_question_bank_cell($row,$map,['الفصل','الشعبة','class','classlabel'],$defaults['classLabel']);
+                    $chapter=teacher_question_bank_cell($row,$map,['الفصل/الوحدة في الكتاب','فصل الكتاب','الوحدة','chapter'],$chapter);
+                    $type=teacher_question_bank_type(teacher_question_bank_cell($row,$map,['question_type','questiontype','نوع السؤال','النوع','type'],'اختيار متعدد'));
+                    $optionAliases=[
+                        ['الخيار 1','خيار 1','الخيار أ','الخيار ا','البديل أ','البديل ا','أ','ا','option1','optiona'],
+                        ['الخيار 2','خيار 2','الخيار ب','البديل ب','ب','option2','optionb'],
+                        ['الخيار 3','خيار 3','الخيار ج','البديل ج','ج','option3','optionc'],
+                        ['الخيار 4','خيار 4','الخيار د','البديل د','د','option4','optiond'],
+                        ['الخيار 5','خيار 5','option5'],
+                        ['الخيار 6','خيار 6','option6'],
+                    ];
+                    foreach($optionAliases as $aliases) {
+                        $option=teacher_question_bank_cell($row,$map,$aliases);
+                        if($option!=='') $options[]=$option;
+                    }
+                    if(!$options) {
+                        $combined=teacher_question_bank_cell($row,$map,['الخيارات','options']);
+                        if($combined!=='') $options=array_values(array_filter(array_map('trim',preg_split('/\r\n|\r|\n|\||؛|;/u',$combined)?:[])));
+                    }
+                    $cognitiveType=teacher_question_bank_cell($row,$map,['question_category','questioncategory','التصنيف المعرفي','النوع المعرفي','نوع السؤال المعرفي','cognitivetype'],$cognitiveType);
+                    $bloomLevel=teacher_question_bank_cell($row,$map,['مستوى بلوم','bloom']);
+                    $explicitType=teacher_question_bank_cell($row,$map,['question_type','questiontype','نوع السؤال','النوع','type']);
+                    if($explicitType==='') {
+                        $answerKey=teacher_question_bank_normalize_header($answer);
+                        $normalizedOptions=array_map('teacher_question_bank_normalize_header',$options);
+                        $hasTrue=in_array('صح',$normalizedOptions,true)||in_array('صحيح',$normalizedOptions,true)||in_array('true',$normalizedOptions,true);
+                        $hasFalse=in_array('خطا',$normalizedOptions,true)||in_array('خاطي',$normalizedOptions,true)||in_array('false',$normalizedOptions,true);
+                        if (($hasTrue&&$hasFalse)||in_array($answerKey,['صح','صحيح','خطا','خاطي','true','false'],true)&&count($options)<=2) {
+                            $type='true_false';
+                            $options=['صح','خطأ'];
+                        } elseif(count($options)>=2) {
+                            $type='mcq';
+                        } else {
+                            $type='short_answer';
+                        }
+                    }
+                }
+
+                $cognitiveType=teacher_question_bank_cognitive_type($cognitiveType);
+                if($cognitiveType==='') {
+                    $cognitiveType=teacher_question_bank_cognitive_type(teacher_question_bank_cell($row,$map,['مستوى السؤال','question_level','questionlevel']));
+                }
+
+                if($questionText===''||$answer==='') {$skipped++;$sheetSkipped++;$errors[]="الورقة «{$sheetName}» الصف {$line}: نص السؤال أو الإجابة الصحيحة مفقود.";continue;}
+                if($stage===''||$grade==='') {$skipped++;$sheetSkipped++;$errors[]="الورقة «{$sheetName}» الصف {$line}: المرحلة أو الصف غير صالح.";continue;}
+
+                if($type==='true_false') {
+                    $normalizedAnswer=teacher_question_bank_normalize_header($answer);
+                    if(in_array($normalizedAnswer,['true','صحيح','صح'],true)) $answer='صح';
+                    if(in_array($normalizedAnswer,['false','خاطي','خطا'],true)) $answer='خطأ';
+                }
+                if($type==='mcq') {
+                    if(count($options)<2) {$skipped++;$sheetSkipped++;$errors[]="الورقة «{$sheetName}» الصف {$line}: سؤال الاختيار المتعدد يحتاج خيارين على الأقل.";continue;}
+                    $answerKey=teacher_question_bank_normalize_header(str_replace('ـ','',$answer));
+                    $answerIndexes=['1'=>0,'ا'=>0,'a'=>0,'2'=>1,'ب'=>1,'b'=>1,'3'=>2,'ج'=>2,'c'=>2,'4'=>3,'د'=>3,'d'=>3,'5'=>4,'ه'=>4,'e'=>4,'6'=>5,'و'=>5,'f'=>5];
+                    if(!in_array($answer,$options,true)&&isset($answerIndexes[$answerKey])) $answer=$options[$answerIndexes[$answerKey]]??$answer;
+                    if(!in_array($answer,$options,true)) {$skipped++;$sheetSkipped++;$errors[]="الورقة «{$sheetName}» الصف {$line}: الإجابة الصحيحة لا تطابق أحد الخيارات.";continue;}
+                }
+
+                $skillId=teacher_question_bank_find_skill_id($stage,$grade,$skillName,$lessonCode,$externalSkillId);
+                $difficulty=teacher_question_bank_difficulty(teacher_question_bank_cell($row,$map,['مستوى الصعوبة','الصعوبة','difficulty'],'متوسط'));
+                $questionLevel=teacher_question_bank_level($cognitiveType!==''?$cognitiveType:teacher_question_bank_cell($row,$map,['مستوى السؤال','question_level','questionlevel'],'غير مصنف'));
+                $points=max(.5,(float)(teacher_question_bank_cell($row,$map,['الدرجة','النقاط','points'],'1')?:1));
+                $externalId=teacher_question_bank_external_id($rawId,[
+                    $subjectId,$subjectName,$stage,$grade,$term,$unitId,$unitName,$lessonId,$lessonCode,$externalSkillId,$skillName,$sheetName,$questionText,
+                ]);
+
+                $duplicateExternal->execute([$teacherId,$externalId]);
+                if($duplicateExternal->fetch()) {$skipped++;$sheetSkipped++;continue;}
+                $duplicateText->execute([$teacherId,$stage,$grade,$term,$lessonCode,$questionText]);
+                if($duplicateText->fetch()) {$skipped++;$sheetSkipped++;continue;}
+
+                $insert->execute([
+                    'teacher_id'=>$teacherId,
+                    'external_question_id'=>$externalId,
+                    'source_question_id'=>$rawId!==''?mb_substr($rawId,0,120):null,
+                    'subject_id'=>$subjectId!==''?mb_substr($subjectId,0,120):null,
+                    'subject_name'=>$subjectName!==''?mb_substr($subjectName,0,180):null,
+                    'skill_id'=>$skillId,
+                    'external_skill_id'=>$externalSkillId!==''?mb_substr($externalSkillId,0,120):null,
+                    'lesson_code'=>$lessonCode!==''?mb_substr($lessonCode,0,50):null,
+                    'import_batch'=>$batch,
+                    'stage'=>$stage,
+                    'grade_label'=>$grade,
+                    'class_label'=>$class?:'كل الفصول',
+                    'term_label'=>$term?:null,
+                    'topic'=>$topic,
+                    'chapter_name'=>$chapter?:null,
+                    'unit_id'=>$unitId!==''?mb_substr($unitId,0,120):null,
+                    'unit_name'=>$unitName!==''?mb_substr($unitName,0,180):null,
+                    'lesson_id'=>$lessonId!==''?mb_substr($lessonId,0,120):null,
+                    'lesson_name'=>$lessonName!==''?mb_substr($lessonName,0,180):null,
+                    'difficulty'=>$difficulty,
+                    'question_level'=>$questionLevel,
+                    'cognitive_type'=>$cognitiveType?:null,
+                    'question_category'=>$questionCategory!==''?mb_substr($questionCategory,0,120):($cognitiveType?:null),
+                    'bloom_level'=>$bloomLevel?:null,
+                    'skill_repeat_number'=>$skillRepeat?:null,
+                    'questions_to_display'=>$questionsToDisplay,
+                    'question_order'=>$questionOrder,
+                    'question_type'=>$type,
+                    'question_text'=>$questionText,
+                    'options_json'=>$options?json_encode($options,JSON_UNESCAPED_UNICODE):null,
+                    'correct_answer'=>$answer,
+                    'explanation'=>$explanation?:null,
+                    'reference_page'=>$referencePage!==''?mb_substr($referencePage,0,80):null,
+                    'content_source'=>$contentSource!==''?mb_substr($contentSource,0,80):null,
+                    'question_source'=>$questionSource!==''?mb_substr($questionSource,0,180):null,
+                    'source_reference'=>$sourceReference!==''?mb_substr($sourceReference,0,500):null,
+                    'status'=>$statusInfo['status']!==''?mb_substr((string)$statusInfo['status'],0,80):'pending',
+                    'points'=>$points,
+                    'review_status'=>$statusInfo['reviewStatus'],
+                    'is_active'=>$statusInfo['isActive'],
+                ]);
+                $inserted++;$sheetInserted++;
+            }
+            $sheetResults[]=['sheet'=>(string)$sheetName,'imported'=>$sheetInserted,'skipped'=>$sheetSkipped];
+        }
+
+        if($inserted===0) {
+            $reason=$errors[0]??'لم أجد صفوف أسئلة صالحة داخل الملف.';
+            $sheetNames=implode('، ',array_map('strval',array_keys($sheetTables)));
+            Http::json(['error'=>'لم يتم استيراد أي سؤال. '.$reason.($sheetNames!==''?' الأوراق المقروءة: '.$sheetNames.'.':'')],422);
+        }
+        Activity::log('teacher',$teacherId,'استيراد بنك أسئلة',$inserted.' سؤال · '.$batch);
+        Http::json(['ok'=>true,'imported'=>$inserted,'skipped'=>$skipped,'errors'=>array_slice($errors,0,30),'importBatch'=>$batch,'sheets'=>$sheetResults],201);
+    } finally {
+        if (is_string($cleanup)&&$cleanup!==''&&is_file($cleanup)) @unlink($cleanup);
+    }
+}
+
+function teacher_save_bank_question(int $teacherId,?int $id): never
+{
+    $data=Http::input();Http::requireFields($data,['stage','gradeLabel','topic','difficulty','type','questionText','correctAnswer']);
+    if(!in_array($data['stage'],['ابتدائي','متوسط','ثانوي'],true)||!in_array($data['difficulty'],['easy','medium','hard'],true)) Http::json(['error'=>'مرحلة السؤال أو صعوبته غير صالحة.'],422);
+    $reviewStatus=(string)($data['reviewStatus']??'approved');
+    if(!in_array($reviewStatus,['pending','approved','rejected'],true)) Http::json(['error'=>'حالة مراجعة السؤال غير صالحة.'],422);
+    validate_test_questions([$data]);
+    $options=json_options($data['options']??null);
+    $cognitiveType=teacher_question_bank_cognitive_type((string)($data['cognitiveType']??''));
+    $questionLevel=teacher_question_bank_level($cognitiveType!==''?$cognitiveType:(string)($data['questionLevel']??'unclassified'));
+    $contentSource=teacher_question_bank_content_source((string)($data['contentSource']??''));
+    $skillRepeat=max(0,(int)($data['skillRepeatNumber']??0));
+    $params=[
+        $data['skillId']??null,
+        trim((string)($data['lessonCode']??''))?:null,
+        $data['stage'],
+        trim((string)$data['gradeLabel']),
+        trim((string)($data['classLabel']??'كل الفصول'))?:'كل الفصول',
+        trim((string)($data['termLabel']??''))?:null,
+        trim((string)$data['topic']),
+        trim((string)($data['chapterName']??''))?:null,
+        $data['difficulty'],
+        $questionLevel,
+        $cognitiveType?:null,
+        trim((string)($data['bloomLevel']??''))?:null,
+        $skillRepeat?:null,
+        $data['type'],
+        trim((string)$data['questionText']),
+        $options?json_encode($options,JSON_UNESCAPED_UNICODE):null,
+        trim((string)$data['correctAnswer']),
+        trim((string)($data['explanation']??''))?:null,
+        trim((string)($data['referencePage']??''))?:null,
+        $contentSource?:null,
+        max(.5,(float)($data['points']??1)),
+        $reviewStatus,
+    ];
+    if ($id) {
+        execute_sql('UPDATE question_bank SET skill_id=?,lesson_code=?,stage=?,grade_label=?,class_label=?,term_label=?,topic=?,chapter_name=?,difficulty=?,question_level=?,cognitive_type=?,bloom_level=?,skill_repeat_number=?,question_type=?,question_text=?,options_json=?,correct_answer=?,explanation=?,reference_page=?,content_source=?,points=?,review_status=? WHERE id=? AND teacher_id=?',[...$params,$id,$teacherId]);
+        execute_sql('UPDATE question_bank SET status=? WHERE id=? AND teacher_id=?',[$reviewStatus,$id,$teacherId]);
+        Http::json(['id'=>$id]);
+    }
+    execute_sql("INSERT INTO question_bank (teacher_id,skill_id,lesson_code,stage,grade_label,class_label,term_label,topic,chapter_name,difficulty,question_level,cognitive_type,bloom_level,skill_repeat_number,question_type,question_text,options_json,correct_answer,explanation,reference_page,content_source,points,source,review_status,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'manual',?,?)",[$teacherId,...$params,$reviewStatus]);
+    Http::json(['id'=>(int)Database::connection()->lastInsertId()],201);
+}
+
+
+function teacher_ai_generate(int $teacherId): never
+{
+    if (!function_exists('curl_init')) Http::json(['error'=>'إضافة cURL غير مفعّلة على الخادم، وهي مطلوبة لتوليد الأسئلة.'],503);
+    $d=Http::input();Http::requireFields($d,['stage','gradeLabel','topic','difficulty']);
+    $skillId=!empty($d['skillId'])?(int)$d['skillId']:null;
+    $skillName=trim((string)($d['skillName']??''));
+    if ($skillId) $skillName=(string)(fetch_one('SELECT name FROM skills WHERE id=?',[$skillId])['name']??$skillName);
+    if (!$skillId&&$skillName!=='') {
+        $skillId=teacher_question_bank_find_skill_id((string)$d['stage'],trim((string)$d['gradeLabel']),$skillName,trim((string)($d['lessonCode']??'')));
+    }
+    $d['skillId']=$skillId;
+    $generated=AiQuestionGenerator::generate([...$d,'skillName'=>$skillName]);
+    $ids=Database::transaction(function(PDO $pdo) use($teacherId,$d,$generated): array {
+        $stmt=$pdo->prepare("INSERT INTO question_bank (teacher_id,skill_id,lesson_code,stage,grade_label,class_label,term_label,topic,difficulty,question_type,question_text,options_json,correct_answer,explanation,points,source,review_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ai','pending')");
+        $ids=[];
+        foreach($generated as $q){
+            $stmt->execute([
+                $teacherId,$d['skillId']??null,trim((string)($d['lessonCode']??''))?:null,$d['stage'],$d['gradeLabel'],
+                trim((string)($d['classLabel']??'كل الفصول'))?:'كل الفصول',
+                trim((string)($d['termLabel']??''))?:null,
+                trim((string)$d['topic']),$d['difficulty'],$q['type'],$q['questionText'],
+                $q['options']?json_encode($q['options'],JSON_UNESCAPED_UNICODE):null,
+                $q['correctAnswer'],$q['explanation'],$q['points']
+            ]);
+            $ids[]=(int)$pdo->lastInsertId();
+        }
+        return $ids;
+    });
+    Activity::log('teacher',$teacherId,'توليد أسئلة بالذكاء الاصطناعي','تم إنشاء '.count($ids).' أسئلة بانتظار المراجعة');
+    Http::json(['ok'=>true,'created'=>count($ids),'ids'=>$ids,'questions'=>$generated],201);
+}
+
+function teacher_add_bank_to_test(int $teacherId,int $testId): never
+{
+    $attemptCount=(int)(fetch_one('SELECT COUNT(*) AS n FROM test_attempts WHERE test_id=?',[$testId])['n']??0);
+    if ($attemptCount>0) Http::json(['error'=>'لا يمكن إضافة أسئلة بعد بدء محاولات الاختبار. انسخي الاختبار أولًا.'],409);
+    $d=Http::input();$ids=array_values(array_unique(array_map('intval',$d['questionIds']??[])));
+    if (!$ids) Http::json(['error'=>'اختاري سؤالًا واحدًا على الأقل.'],422);
+    $placeholders=implode(',',array_fill(0,count($ids),'?'));
+    $questions=fetch_all("SELECT * FROM question_bank WHERE teacher_id=? AND review_status='approved' AND id IN ({$placeholders})",[$teacherId,...$ids]);
+    if (!$questions) Http::json(['error'=>'لا توجد أسئلة معتمدة صالحة للإضافة.'],422);
+    Database::transaction(function(PDO $pdo) use($testId,$questions): void {
+        $order=(int)(fetch_one('SELECT COALESCE(MAX(order_index),0) AS n FROM test_questions WHERE test_id=?',[$testId])['n']??0);
+        $stmt=$pdo->prepare('INSERT INTO test_questions (test_id,bank_question_id,skill_id,question_type,question_text,options_json,correct_answer,explanation,points,order_index) VALUES (?,?,?,?,?,?,?,?,?,?)');
+        foreach($questions as $q){$stmt->execute([$testId,$q['id'],$q['skill_id'],$q['question_type'],$q['question_text'],$q['options_json'],$q['correct_answer'],$q['explanation'],$q['points'],++$order]);}
+        $pdo->prepare('UPDATE tests SET total_points=(SELECT COALESCE(SUM(points),0) FROM test_questions WHERE test_id=?) WHERE id=?')->execute([$testId,$testId]);
+    });
+    Http::json(['ok'=>true,'added'=>count($questions)]);
+}
