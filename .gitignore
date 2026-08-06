@@ -6,3 +6,12 @@ storage/private/student-portfolios/*
 !storage/private/student-portfolios/.gitignore
 !storage/private/student-portfolios/.htaccess
 .DS_Store
+
+# Local secrets and temporary files
+.env
+.env.*
+!.env.example
+.env.save
+.DS_Store
+.continue/
+_
