@@ -19,6 +19,7 @@ const TITLES = {
   users: "إدارة جميع المستخدمين",
   teachers: "حسابات المعلمات",
   students: "حسابات الطالبات",
+  parents: "حسابات أولياء الأمور",
   tests: "الاختبارات والنتائج",
   preview: "معاينة صفحات المستخدمين",
   permissions: "الأدوار والصلاحيات",
@@ -231,6 +232,10 @@ async function renderStudents() {
   content.innerHTML = `<div class="empty-state">جارٍ التحميل...</div>`;
   const students = await api("/students");
   content.innerHTML = `
+    <div class="toolbar">
+      <div class="spacer"></div>
+      <button class="btn btn-primary btn-sm" id="createStudentBtn">+ إنشاء حساب طالبة</button>
+    </div>
     <div class="card">
       <table>
         <thead><tr><th>الاسم</th><th>البريد الإلكتروني</th><th>الفصل</th><th>الحالة</th><th>إجراءات</th></tr></thead>
@@ -255,6 +260,8 @@ async function renderStudents() {
       </table>
     </div>
   `;
+
+  content.querySelector("#createStudentBtn").onclick = () => openCreateStudentOwnerModal();
 
   content.querySelectorAll("[data-toggle]").forEach((btn) =>
     btn.addEventListener("click", async () => {
@@ -416,6 +423,9 @@ const RESET_COUNT_LABELS = {
   learningStyleCampaigns: "استبانات أنماط التعلم المنشورة",
   learningStyleResults: "نتائج أنماط التعلم",
   physicalFiles: "الملفات الفعلية في التخزين",
+  motivationPoints: "نقاط التحفيز",
+  notifications: "الإشعارات",
+  remedialPlans: "الخطط العلاجية",
 };
 
 function resetCountsHtml(counts = {}) {
@@ -424,12 +434,14 @@ function resetCountsHtml(counts = {}) {
 
 function openAcademicResetConfirmation(preview) {
   const deleteItems = [
-    "الاختبارات ونماذجها وتوزيعات أسئلتها",
-    "محاولات الطالبات وإجاباتهن ودرجاتهن ونتائجهن",
-    "تحليلات الطالبات والأسئلة والمهارات وتقارير الأداء والإتقان",
-    "سجلات المتابعة الدراسية التابعة للعام السابق",
-    "المستندات وملفات الطالبات المرتبطة بالعام السابق فقط",
-    "نشر ونتائج استبانات أنماط التعلم التابعة للعام السابق",
+    { key: "tests", label: "الاختبارات ونماذجها وتوزيعات أسئلتها" },
+    { key: "followUp", label: "سجلات المتابعة الدراسية التابعة للعام السابق" },
+    { key: "weekly", label: "السجلات الأسبوعية والواجبات والمتابعة" },
+    { key: "documents", label: "المستندات وملفات الطالبات المرتبطة بالعام السابق فقط" },
+    { key: "learningStyle", label: "نشر ونتائج استبانات أنماط التعلم التابعة للعام السابق" },
+    { key: "motivation", label: "نقاط التحفيز" },
+    { key: "notifications", label: "الإشعارات" },
+    { key: "remedial", label: "الخطط العلاجية" },
   ];
   openModal(`
     <div class="reset-final-modal">
@@ -437,7 +449,7 @@ function openAcademicResetConfirmation(preview) {
       <h3>تأكيد نهائي: بدء عام دراسي جديد</h3>
       <p class="danger-lead">هذه العملية نهائية ولا يمكن التراجع عنها بعد تنفيذها. سيُحذف فقط العام <strong>${esc(preview.targetAcademicYear)}</strong>، وسيبقى العام الحالي <strong>${esc(preview.currentAcademicYear)}</strong>.</p>
       <div class="reset-modal-columns">
-        <section><h4>البيانات التي ستُحذف</h4><ul>${deleteItems.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></section>
+        <section><h4>البيانات التي ستُحذف</h4><div class="reset-select-grid">${deleteItems.map((item) => `<label class="reset-select-item"><input type="checkbox" data-reset-delete-item="${item.key}" checked> <span>${esc(item.label)}</span></label>`).join("")}</div></section>
         <section class="preserved-list"><h4>البيانات التي ستبقى</h4><ul>${(preview.preserved || []).map((item) => `<li>${esc(item)}</li>`).join("")}</ul></section>
       </div>
       <div class="reset-count-grid modal-count-grid">${resetCountsHtml(preview.counts)}</div>
@@ -453,16 +465,19 @@ function openAcademicResetConfirmation(preview) {
   cancel.onclick = closeModal;
   confirm.onclick = async () => {
     if (confirm.disabled) return;
+    const selectedItems = [...modalRoot.querySelectorAll("[data-reset-delete-item]")]
+      .filter((checkbox) => checkbox.checked)
+      .map((checkbox) => checkbox.dataset.resetDeleteItem);
     confirm.disabled = true;
     cancel.disabled = true;
     phrase.disabled = true;
     confirm.innerHTML = '<span class="button-spinner"></span> جارٍ تنفيذ الحذف الآمن...';
     modalRoot.querySelector("#resetExecutionStatus").innerHTML = '<div class="reset-loading-message">تُحذف البيانات داخل معاملة آمنة. لا تغلقي الصفحة ولا تعيدي الضغط.</div>';
     try {
-      const result = await api("/academic-year/reset", { method: "POST", body: JSON.stringify({ targetAcademicYear: preview.targetAcademicYear, confirmationPhrase: phrase.value.trim(), previewHash: preview.previewHash }) });
+      const result = await api("/academic-year/reset", { method: "POST", body: JSON.stringify({ targetAcademicYear: preview.targetAcademicYear, confirmationPhrase: phrase.value.trim(), previewHash: preview.previewHash, selectedItems }) });
       modalRoot.querySelector("#resetExecutionStatus").innerHTML = `<div class="reset-success-message">${esc(result.message)}</div>`;
       confirm.textContent = "تمت العملية بنجاح";
-      toast("تم حذف بيانات العام السابق مع بقاء الحسابات وبنوك الأسئلة.");
+      toast("تم تنفيذ بدء العام الجديد وفق الاختيارات المحددة.");
       setTimeout(() => { closeModal(); renderSettings(); }, 1700);
     } catch (error) {
       modalRoot.querySelector("#resetExecutionStatus").innerHTML = `<div class="reset-error-message">${esc(error.message)}</div>`;
@@ -480,7 +495,8 @@ async function renderSettings() {
   const registrationEnabled = platformSettings.teacher_registration_enabled !== "false";
   const years = (settings.availableArchiveYears || []).filter((year) => year !== settings.academicYear);
   const targetYear = years.includes(settings.defaultArchiveYear) ? settings.defaultArchiveYear : (years[0] || "");
-  const additionalLogo = settings.hasAdditionalLogo ? `<div class="logo-preview-card optional-logo-card"><img src="${esc(settings.additionalLogoUrl)}" alt="الشعار الإضافي"><span>${esc(settings.additionalLogoName || "الشعار الإضافي")}</span><button class="btn btn-danger btn-sm" type="button" id="deleteOwnerAdditionalLogo">حذف الشعار</button></div>` : "";
+  const hasArchiveYears = years.length > 0;
+  const archiveUnavailableMessage = hasArchiveYears ? "" : '<div class="reset-error-message">لا يوجد عام دراسي سابق في النظام حاليًا. النظام يمنع حذف العام الحالي فقط، لذلك يلزم وجود عام سابق لتفعيل زر بدء العام الجديد.</div>';
 
   content.innerHTML = `
     <div class="settings-page-head"><div><h3>إعدادات المدرسة والمدة الدراسية</h3><p>هذه الصفحة مخصصة لمالكة الموقع، ومنها تُدار عملية بدء عام دراسي جديد بأمان.</p></div><button class="btn btn-outline" id="openOwnerAccountSettings">إعدادات حساب المالكة</button></div>
@@ -501,8 +517,8 @@ async function renderSettings() {
           <div class="danger-zone-title"><span>⚠️</span><div><h4>بدء عام دراسي جديد</h4><p>الحذف نهائي ويقتصر على بيانات العام السابق المحدد فقط.</p></div></div>
           <label class="field"><span>العام الدراسي السابق المراد أرشفته وحذفه</span><select id="archiveYearSelect">${years.length ? years.map((year) => `<option value="${esc(year)}" ${year === targetYear ? "selected" : ""}>${esc(year)}</option>`).join("") : '<option value="">لا توجد بيانات لعام سابق</option>'}</select></label>
           <div class="reset-count-grid" id="resetCountGrid"><div class="reset-count-placeholder">اختاري عامًا سابقًا لعرض البيانات التي ستُحذف.</div></div>
-          <div id="resetPreviewMessage"></div>
-          <div class="danger-actions"><button class="btn btn-outline" id="refreshResetPreview" ${targetYear ? "" : "disabled"}>تحديث أعداد البيانات</button><a class="btn btn-outline" id="downloadFullBackup" href="/api/owner/academic-year/backup?year=${encodeURIComponent(targetYear)}" ${targetYear ? "" : 'aria-disabled="true"'}>تحميل نسخة احتياطية كاملة</a><button class="btn btn-danger destructive-button" id="startNewAcademicYear" ${targetYear ? "" : "disabled"}>حذف الاختبارات والدرجات والتحليلات وبدء عام جديد</button></div>
+          <div id="resetPreviewMessage">${archiveUnavailableMessage}</div>
+          <div class="danger-actions"><button class="btn btn-outline" id="refreshResetPreview" ${hasArchiveYears ? "" : "disabled"}>تحديث أعداد البيانات</button><a class="btn btn-outline" id="downloadFullBackup" href="/api/owner/academic-year/backup?year=${encodeURIComponent(targetYear)}" ${hasArchiveYears ? "" : 'aria-disabled="true"'}>تحميل نسخة احتياطية كاملة</a><button class="btn btn-danger destructive-button" id="startNewAcademicYear" ${hasArchiveYears ? "" : "disabled"}>حذف الاختبارات والدرجات والتحليلات وبدء عام جديد</button></div>
           <p class="irreversible-warning">لا يمكن التراجع عن عملية الحذف بعد نجاحها. حمّلي النسخة الاحتياطية قبل التنفيذ.</p>
         </section>
       </section>
@@ -516,12 +532,9 @@ async function renderSettings() {
             <div class="field"><label>مكتب التعليم</label><input id="ownerEducationOffice" value="${esc(settings.educationOffice || "")}"></div>
             <div class="field"><label>اسم المدرسة</label><input id="ownerSchoolName" value="${esc(settings.schoolName || "")}" required></div>
             <div class="field"><label>اسم مديرة المدرسة</label><input id="ownerLeaderName" value="${esc(settings.schoolLeaderName || "")}"></div>
-            <div class="field"><label>اسم المعلمة</label><input id="ownerTeacherName" value="${esc(settings.teacherName || "")}" required></div>
-            <div class="field"><label>اسم المادة</label><input id="ownerSubjectName" value="${esc(settings.subjectName || "الرياضيات")}" required></div>
-            
             <div class="field"><label>العام الدراسي الحالي/الجديد</label><input id="ownerAcademicYear" value="${esc(settings.academicYear || "")}" placeholder="مثال: ١٤٤٨هـ" required></div>
           </div>
-          <div class="school-logo-settings"><h4>شعارات التقارير والطباعة</h4><div class="logo-preview-grid"><div class="logo-preview-card"><img src="${esc(settings.madarLogoUrl)}" alt="شعار مدار"><span>شعار مدار الأصلي</span></div><div class="logo-preview-card"><img src="${esc(settings.visionLogoUrl)}" alt="شعار رؤية السعودية 2030"><span>شعار رؤية السعودية ٢٠٣٠</span></div>${additionalLogo}</div><div class="optional-logo-upload"><label class="field"><span>شعار إضافي اختياري</span><input type="file" id="ownerAdditionalLogo" accept="image/png,image/jpeg,image/webp"></label><button class="btn btn-outline" type="button" id="uploadOwnerAdditionalLogo">رفع الشعار الإضافي</button></div><p class="settings-help">لا يظهر مكان فارغ عند عدم رفع شعار إضافي، وتحافظ الطباعة على أبعاد كل شعار دون تمديد.</p></div>
+          <div class="school-logo-settings"><h4>شعارات التقارير والطباعة</h4><div class="logo-preview-grid"><div class="logo-preview-card"><img src="${esc(settings.madarLogoUrl || "/assets/print/madar-logo.svg")}" alt="شعار مدار"><span>شعار مدار الأصلي</span></div><div class="logo-preview-card"><img src="${esc(settings.visionLogoUrl || "/vision-2030-logo.png")}" alt="شعار رؤية السعودية 2030"><span>شعار رؤية السعودية ٢٠٣٠</span></div>${settings.additionalLogoUrl ? `<div class="logo-preview-card optional-logo-card"><img src="${esc(settings.additionalLogoUrl)}" alt="الشعار الإضافي"><span>${esc(settings.additionalLogoName || "الشعار الإضافي")}</span>${settings.additionalLogoUrl ? '<button type="button" class="btn btn-danger btn-sm" id="deleteOwnerAdditionalLogo">حذف الشعار</button>' : ''}</div>` : ""}</div><div class="optional-logo-upload"><label class="field">شعار المدرسة الإضافي<input type="file" id="setOwnerAdditionalLogo" accept="image/png,image/jpeg,image/webp" /></label><button class="btn btn-outline" type="button" id="uploadOwnerAdditionalLogo">إضافة شعار المدرسة</button></div><p class="settings-help">يظهر في التقارير والطباعة شعار مدار وشعار رؤية السعودية 2030، مع الشعار الإضافي إن وُجد.</p></div>
           <button class="btn btn-primary" id="saveOwnerSchool">حفظ إعدادات المدرسة</button>
         </form>
         <div class="platform-setting-row"><span>السماح للمعلمات بإنشاء حساب جديد من صفحة الدخول</span><button class="btn btn-sm ${registrationEnabled ? "btn-danger" : "btn-primary"}" id="toggleRegistration">${registrationEnabled ? "تعطيل الإنشاء" : "تفعيل الإنشاء"}</button></div>
@@ -538,19 +551,31 @@ async function renderSettings() {
   };
   content.querySelector("#ownerSchoolForm").onsubmit = async (event) => {
     event.preventDefault(); const button = content.querySelector("#saveOwnerSchool"); const message = content.querySelector("#ownerSchoolMessage"); button.disabled = true;
-    try { await api("/academic-year/school", { method: "PUT", body: JSON.stringify({ educationDepartment: content.querySelector("#ownerEducationDepartment").value.trim(), educationOffice: content.querySelector("#ownerEducationOffice").value.trim(), schoolName: content.querySelector("#ownerSchoolName").value.trim(), schoolLeaderName: content.querySelector("#ownerLeaderName").value.trim(), teacherName: content.querySelector("#ownerTeacherName").value.trim(), subjectName: content.querySelector("#ownerSubjectName").value.trim(), academicYear: content.querySelector("#ownerAcademicYear").value.trim() }) }); message.innerHTML = '<div class="form-success">تم حفظ إعدادات المدرسة.</div>'; toast("تم حفظ إعدادات المدرسة"); setTimeout(renderSettings, 600); }
+    try { await api("/academic-year/school", { method: "PUT", body: JSON.stringify({ educationDepartment: content.querySelector("#ownerEducationDepartment").value.trim(), educationOffice: content.querySelector("#ownerEducationOffice").value.trim(), schoolName: content.querySelector("#ownerSchoolName").value.trim(), schoolLeaderName: content.querySelector("#ownerLeaderName").value.trim(), academicYear: content.querySelector("#ownerAcademicYear").value.trim() }) }); message.innerHTML = '<div class="form-success">تم حفظ إعدادات المدرسة.</div>'; toast("تم حفظ إعدادات المدرسة"); setTimeout(renderSettings, 600); }
     catch (error) { message.innerHTML = `<div class="form-error">${esc(error.message)}</div>`; } finally { button.disabled = false; }
   };
   content.querySelector("#uploadOwnerAdditionalLogo").onclick = async () => {
-    const input = content.querySelector("#ownerAdditionalLogo"); if (!input.files?.[0]) { toast("اختاري صورة للشعار الإضافي"); return; }
-    const form = new FormData(); form.append("file", input.files[0]); const button = content.querySelector("#uploadOwnerAdditionalLogo"); button.disabled = true;
-    try { await api("/academic-year/additional-logo", { method: "POST", body: form }); toast("تم رفع الشعار الإضافي"); renderSettings(); } catch (error) { toast(error.message); } finally { button.disabled = false; }
+    const input = content.querySelector("#setOwnerAdditionalLogo");
+    if (!input.files?.[0]) { toast("اختاري صورة للشعار الإضافي."); return; }
+    const button = content.querySelector("#uploadOwnerAdditionalLogo");
+    button.disabled = true;
+    const form = new FormData();
+    form.append("file", input.files[0]);
+    try {
+      await api("/academic-year/additional-logo", { method: "POST", body: form });
+      toast("تم رفع شعار المدرسة الإضافي.");
+      renderSettings();
+    } catch (error) { toast(error.message); }
+    finally { button.disabled = false; }
   };
-  const deleteLogo = content.querySelector("#deleteOwnerAdditionalLogo");
-  if (deleteLogo) deleteLogo.onclick = () => confirmAction("هل تريدين حذف الشعار الإضافي؟", async () => { await api("/academic-year/additional-logo", { method: "DELETE" }); toast("تم حذف الشعار الإضافي"); renderSettings(); });
-  content.querySelector("#toggleRegistration").onclick = async () => { await api("/settings", { method: "PUT", body: JSON.stringify({ key: "teacher_registration_enabled", value: !registrationEnabled }) }); toast("تم تحديث الإعداد"); renderSettings(); };
-
-  let currentPreview = null;
+  const deleteOwnerAdditionalLogo = content.querySelector("#deleteOwnerAdditionalLogo");
+  if (deleteOwnerAdditionalLogo) {
+    deleteOwnerAdditionalLogo.onclick = () => confirmAction("هل تريدين حذف شعار المدرسة الإضافي؟", async () => {
+      await api("/academic-year/additional-logo", { method: "DELETE" });
+      toast("تم حذف شعار المدرسة الإضافي.");
+      renderSettings();
+    });
+  }
   const archiveSelect = content.querySelector("#archiveYearSelect");
   const previewButton = content.querySelector("#refreshResetPreview");
   const resetButton = content.querySelector("#startNewAcademicYear");
@@ -565,7 +590,9 @@ async function renderSettings() {
   archiveSelect.onchange = () => { const year = archiveSelect.value; backupLink.href = `/api/owner/academic-year/backup?year=${encodeURIComponent(year)}`; resetButton.disabled = true; currentPreview = null; if (year) loadPreview(); };
   previewButton.onclick = loadPreview;
   resetButton.onclick = async () => { if (!currentPreview || currentPreview.targetAcademicYear !== archiveSelect.value) await loadPreview(); if (currentPreview) openAcademicResetConfirmation(currentPreview); };
-  if (archiveSelect.value) loadPreview();
+  if (!hasArchiveYears) {
+    content.querySelector("#resetCountGrid").innerHTML = '<div class="reset-count-placeholder">لا توجد بيانات لعام سابق، لذلك لا يمكن بدء العام الجديد من هذا التابع.</div>';
+  } else if (archiveSelect.value) loadPreview();
 }
 
 
@@ -607,7 +634,7 @@ async function loadUsersTable() {
   });
 }
 
-async function renderUsers() {
+async function renderUsers(presetRole = "") {
   content.innerHTML = '<div class="empty-state">جارٍ تحميل المستخدمين والصلاحيات...</div>';
   ownerUsersMeta = await api("/users/meta");
   content.innerHTML = `
@@ -628,19 +655,176 @@ async function renderUsers() {
   content.querySelector("#ownerUserSearch").oninput = () => { clearTimeout(timer); timer = setTimeout(loadUsersTable, 260); };
   content.querySelector("#ownerUserRoleFilter").onchange = loadUsersTable;
   content.querySelector("#ownerUserStatusFilter").onchange = loadUsersTable;
+
+  if (presetRole) {
+    content.querySelector("#ownerUserRoleFilter").value = presetRole;
+  }
+
   await loadUsersTable();
+}
+
+async function renderParents() {
+  content.innerHTML = '<div class="empty-state">جارٍ تحميل حسابات أولياء الأمور...</div>';
+  const data = await api("/users?role=PARENT");
+  content.innerHTML = `
+    <div class="toolbar">
+      <div class="spacer"></div>
+      <button class="btn btn-primary btn-sm" id="createParentBtn">+ إنشاء حساب ولي أمر</button>
+    </div>
+    <div class="card table-card">
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>الاسم</th>
+              <th>البريد الإلكتروني</th>
+              <th>الحالة</th>
+              <th>تاريخ الإنشاء</th>
+              <th>الإجراءات</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.items.map((u) => `
+              <tr>
+                <td><strong>${esc(u.name)}</strong></td>
+                <td>${esc(u.emailDisplay || u.email)}</td>
+                <td>${userStatusBadge(u)}</td>
+                <td>${new Date(u.created_at).toLocaleDateString("ar-SA")}</td>
+                <td style="display:flex; gap:6px; flex-wrap:wrap">
+                  <button class="btn btn-outline btn-sm" data-parent-link="${u.id}">ربط</button>
+                  <button class="btn btn-outline btn-sm" data-reset="${u.id}">إعادة تعيين كلمة المرور</button>
+                  <button class="btn ${u.status === "active" ? "btn-secondary" : "btn-primary"} btn-sm" data-toggle="${u.id}" data-status="${esc(u.status)}">${u.status === "active" ? "تعطيل" : "تفعيل"}</button>
+                  <button class="btn btn-danger btn-sm" data-delete="${u.id}">حذف</button>
+                </td>
+              </tr>
+            `).join("") || '<tr><td colspan="5" class="empty-state">لا توجد حسابات أولياء أمور بعد.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  content.querySelector("#createParentBtn").onclick = () => openCreateOwnerUser("PARENT");
+
+  content.querySelectorAll("[data-parent-link]").forEach((button) => {
+    button.onclick = async () => openParentLinksModal(Number(button.dataset.parentLink));
+  });
+
+  content.querySelectorAll("[data-reset]").forEach((button) => {
+    button.onclick = () => openSimplePasswordReset("platform", Number(button.dataset.reset));
+  });
+
+  content.querySelectorAll("[data-toggle]").forEach((button) => {
+    button.onclick = async () => {
+      const id = Number(button.dataset.toggle);
+      const nextStatus = button.dataset.status === "active" ? "disabled" : "active";
+      try {
+        await api(`/users/platform/${id}`, { method: "PUT", body: JSON.stringify({ status: nextStatus }) });
+        toast(nextStatus === "active" ? "تم تفعيل حساب ولي الأمر" : "تم تعطيل حساب ولي الأمر");
+        renderParents();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+  });
+
+  content.querySelectorAll("[data-delete]").forEach((button) => {
+    button.onclick = () => confirmAction("هل تريدين حذف حساب ولي الأمر مؤقتًا؟", async () => {
+      await api(`/users/platform/${button.dataset.delete}/soft-delete`, { method: "DELETE" });
+      toast("تم حذف حساب ولي الأمر مؤقتًا");
+      renderParents();
+    });
+  });
+}
+
+async function openParentLinksModal(parentId) {
+  try {
+    const data = await api(`/users/platform/${parentId}`);
+    const children = Array.isArray(data.children) ? data.children : [];
+    openModal(`
+      <div class="confirm-box" style="max-width:680px">
+        <div class="ic">👩‍🎓</div>
+        <h3>الطالبات المرتبطات بولي الأمر</h3>
+        <p class="safe-note">هذه قائمة بإيميلات الطالبات اللاتي يتابعهن هذا الحساب، ويُعرفن في النظام باسم بنات ولي الأمر.</p>
+        ${children.length ? `
+          <div class="impact-grid">
+            ${children.map((child) => `
+              <div>
+                <span>${esc(child.name || "—")}</span>
+                <b dir="ltr">${esc(child.email || "—")}</b>
+              </div>
+            `).join("")}
+          </div>
+        ` : '<p class="safe-note">لا توجد طالبات مرتبطة بهذا الحساب بعد.</p>'}
+        <div class="modal-actions" style="justify-content:center">
+          <button class="btn btn-outline" id="closeParentLinks">إغلاق</button>
+        </div>
+      </div>
+    `);
+    modalRoot.querySelector("#closeParentLinks").onclick = closeModal;
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function classOptions(selected = "") {
   return (ownerUsersMeta?.classes || []).map((c) => `<option value="${c.id}" ${String(c.id)===String(selected)?"selected":""}>${esc(c.stage)} — ${esc(c.grade_label)} — الفصل ${esc(c.name)} (${esc(c.teacher_name)})</option>`).join("");
 }
 
-function openCreateOwnerUser() {
+async function openCreateStudentOwnerModal() {
+  if (!ownerUsersMeta) {
+    ownerUsersMeta = await api("/users/meta");
+  }
+  openModal(`
+    <h3>إنشاء حساب طالبة جديد</h3>
+    <form id="studentCreateForm">
+      <div class="form-grid full">
+        <div class="field">
+          <label>الدور</label>
+          <input type="text" value="طالبة" readonly aria-readonly="true" />
+        </div>
+        <div class="field"><label>اسم الطالبة</label><input type="text" id="studentName" required /></div>
+        <div class="field"><label>اسم المستخدم المدرسي</label><div class="owner-school-email" dir="ltr"><input type="text" id="studentEmail" inputmode="email" autocomplete="username" placeholder="اسم المستخدم" required /><span>@mkhg.moe.gov.sa</span></div></div>
+        <div class="field"><label>الفصل</label><select id="studentClass" required><option value="">اختاري الفصل</option>${classOptions()}</select></div>
+        <div class="field"><label>كلمة المرور المبدئية</label><input type="password" id="studentPassword" required minlength="10" placeholder="10 أحرف على الأقل، منها حرف ورقم" /></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-outline" id="cancelStudentCreate">إلغاء</button>
+        <button type="submit" class="btn btn-primary">إنشاء الحساب</button>
+      </div>
+    </form>
+  `);
+  modalRoot.querySelector("#cancelStudentCreate").onclick = closeModal;
+  modalRoot.querySelector("#studentCreateForm").onsubmit = async (event) => {
+    event.preventDefault();
+    try {
+      await api("/users", {
+        method: "POST",
+        body: JSON.stringify({
+          roleCode: "STUDENT",
+          name: modalRoot.querySelector("#studentName").value.trim(),
+          email: composeSchoolEmail(modalRoot.querySelector("#studentEmail").value),
+          password: modalRoot.querySelector("#studentPassword").value,
+          classId: modalRoot.querySelector("#studentClass").value || null,
+        }),
+      });
+      closeModal();
+      toast("تم إنشاء حساب الطالبة");
+      renderStudents();
+    } catch (error) {
+      toast(error.message);
+    }
+  };
+}
+
+async function openCreateOwnerUser(presetRole = "") {
+  if (!ownerUsersMeta) {
+    ownerUsersMeta = await api("/users/meta");
+  }
   openModal(`
     <h3>إنشاء حساب جديد</h3>
     <form id="createOwnerUserForm">
       <div class="form-grid">
-        <div class="field"><label>الدور</label><select id="newUserRole" required>${Object.entries(ownerUsersMeta.creatableRoles).map(([code,name])=>`<option value="${code}">${esc(name)}</option>`).join("")}</select></div>
+        <div class="field"><label>الدور</label><select id="newUserRole" required>${Object.entries(ownerUsersMeta.creatableRoles).map(([code,name])=>`<option value="${code}" ${presetRole===code?"selected":""}>${esc(name)}</option>`).join("")}</select></div>
         <div class="field"><label>الاسم</label><input id="newUserName" required></div>
         <div class="field" id="newUserEmailWrap"><label>اسم المستخدم المدرسي</label><div class="owner-school-email" dir="ltr"><input id="newUserEmail" required placeholder="اسم المستخدم"><span>@mkhg.moe.gov.sa</span></div><small id="newUserEmailHelp">لا يُطلب البريد عند اختيار ولي أمر.</small></div>
         <div class="field"><label>كلمة المرور المبدئية</label><input type="password" id="newUserPassword" minlength="10" required></div>
@@ -671,6 +855,8 @@ function openCreateOwnerUser() {
       if (role.value !== "PARENT") payload.email = composeSchoolEmail(modalRoot.querySelector("#newUserEmail").value);
       await api("/users", { method:"POST", body:JSON.stringify(payload) });
       closeModal(); toast("تم إنشاء الحساب وتطبيق الدور المحدد"); loadUsersTable();
+      if (role.value === "STUDENT") renderStudents();
+      if (role.value === "PARENT") renderParents();
     } catch (error) { toast(error.message); }
   };
 }
@@ -855,6 +1041,7 @@ const routes = {
   users: renderUsers,
   teachers: renderTeachers,
   students: renderStudents,
+  parents: renderParents,
   tests: renderTests,
   preview: renderPreview,
   permissions: renderPermissions,

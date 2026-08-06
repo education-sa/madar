@@ -140,7 +140,17 @@ function owner_tests_routes(string $method,array $segments,int $ownerId): never
         Http::json(fetch_all("SELECT t.id,t.title,t.test_type AS category,t.status,te.name AS teacher_name,(SELECT COUNT(*) FROM test_attempts a WHERE a.test_id=t.id) AS results_count FROM tests t JOIN teachers te ON te.id=t.teacher_id ORDER BY t.created_at DESC"));
     }
     $id=route_id($segments,0);$before=fetch_one('SELECT id,title,teacher_id,status,academic_year FROM tests WHERE id=?',[$id]);if(!$before)Http::json(['error'=>'الاختبار غير موجود.'],404);
-    if ($method==='DELETE') {Database::transaction(fn(PDO $pdo)=>$pdo->prepare('DELETE FROM tests WHERE id=?')->execute([$id]));Activity::logDetailed('owner',$ownerId,'حذف اختبار',"الاختبار رقم {$id}",$before,['deleted'=>true]);Http::json(['ok'=>true]);}
+    if ($method==='DELETE') {
+        Database::transaction(function (PDO $pdo) use ($id): void {
+            $pdo->prepare('DELETE FROM answers WHERE attempt_id IN (SELECT a.id FROM test_attempts a WHERE a.test_id=?)')->execute([$id]);
+            $pdo->prepare('DELETE FROM test_attempt_questions WHERE attempt_id IN (SELECT a.id FROM test_attempts a WHERE a.test_id=?)')->execute([$id]);
+            $pdo->prepare('DELETE FROM test_attempts WHERE test_id=?')->execute([$id]);
+            $pdo->prepare('DELETE FROM test_questions WHERE test_id=?')->execute([$id]);
+            $pdo->prepare('DELETE FROM tests WHERE id=?')->execute([$id]);
+        });
+        Activity::logDetailed('owner',$ownerId,'حذف اختبار',"الاختبار رقم {$id}",$before,['deleted'=>true]);
+        Http::json(['ok'=>true]);
+    }
     Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
 }
 

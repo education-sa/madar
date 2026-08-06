@@ -110,11 +110,26 @@ function me_route(string $role): never
     $user['preview'] = Auth::previewContext();
     if ($role === 'student') {
         $details = fetch_one(
-            'SELECT s.learning_style, s.progress_percent, s.grade_label, s.stage, s.must_change_password, c.name AS class_name
-             FROM students s LEFT JOIN classes c ON c.id = s.class_id WHERE s.id = ?',
+            'SELECT s.learning_style, s.progress_percent, s.grade_label, s.stage, s.must_change_password,
+                    c.name AS class_name, c.teacher_id,
+                    t.name AS teacher_name
+             FROM students s
+             LEFT JOIN classes c ON c.id = s.class_id
+             LEFT JOIN teachers t ON t.id = c.teacher_id
+             WHERE s.id = ?',
             [$user['id']]
         );
-        $user = array_merge($user, $details ?? []);
+        if ($details) {
+            $settings = teacher_school_settings_row((int) ($details['teacher_id'] ?? 0));
+            $details['teacher_name'] = trim((string) ($details['teacher_name'] ?? ''));
+            if ($details['teacher_name'] === '') {
+                $details['teacher_name'] = trim((string) ($settings['teacher_name'] ?? ''));
+            }
+            $details['school_leader_name'] = trim((string) ($settings['school_leader_name'] ?? ''));
+            $details['school_name'] = trim((string) ($settings['school_name'] ?? ''));
+            $details['subject_name'] = trim((string) ($settings['subject_name'] ?? ''));
+            $user = array_merge($user, $details);
+        }
     }
     Http::json($user);
 }

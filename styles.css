@@ -2247,6 +2247,12 @@ body {
   background:
     radial-gradient(circle at 75% 18%, rgba(92, 190, 175, .20), transparent 36%),
     linear-gradient(135deg, #143b39, #245c56 60%, #326d64);
+  transition: transform 0.35s ease, box-shadow 0.35s ease;
+}
+
+.quote-square:hover {
+  transform: translateY(-4px) scale(1.01);
+  box-shadow: 0 28px 65px rgba(20, 59, 57, 0.35), 0 0 20px rgba(226, 185, 95, 0.25);
 }
 
 .quote-square::after {
@@ -2256,6 +2262,11 @@ body {
   border: 1px solid rgba(232, 195, 112, .24);
   border-radius: 25px;
   pointer-events: none;
+  transition: border-color 0.35s ease;
+}
+
+.quote-square:hover::after {
+  border-color: rgba(232, 195, 112, 0.55);
 }
 
 .prince-portrait {
@@ -2270,6 +2281,12 @@ body {
   opacity: .94;
   -webkit-mask-image: linear-gradient(to right, #000 0%, #000 50%, transparent 100%);
   mask-image: linear-gradient(to right, #000 0%, #000 50%, transparent 100%);
+  transition: transform 0.5s ease, opacity 0.5s ease;
+}
+
+.quote-square:hover .prince-portrait {
+  transform: scale(1.03);
+  opacity: 1;
 }
 
 .quote-copy {
@@ -2288,6 +2305,11 @@ body {
   font-size: 62px;
   line-height: 1;
   text-shadow: 0 0 18px rgba(231, 189, 103, .42);
+  transition: transform 0.3s ease;
+}
+
+.quote-square:hover .quote-mark {
+  transform: scale(1.1) rotate(-4deg);
 }
 
 .quote-copy blockquote {
@@ -2305,6 +2327,7 @@ body {
   font-style: normal;
   font-weight: 800;
   line-height: 1.6;
+  letter-spacing: 0.3px;
 }
 
 .clock-square {

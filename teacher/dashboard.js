@@ -8,6 +8,7 @@ const toastRoot = document.getElementById("toastRoot");
 const ROUTE_TITLES = {
   home: "الرئيسية",
   profile: "الأداء الوظيفي",
+  portfolio: "ملف الإنجاز",
   "student-panel": "قائمة الطالبات",
   "student-files": "ملفات الطالبات",
   "follow-up": "سجل متابعة",
@@ -574,6 +575,257 @@ async function renderProfile() {
       renderProfile();
     };
   });
+}
+
+// ==========================================================================
+// ملف الإنجاز الإلكتروني للمعلمة
+// ==========================================================================
+let teacherPortfolioTab = "evidences";
+const DEFAULT_TEACHER_EVIDENCES = [
+  { id: 1, title: "خطة التخطيط الفصلي للرياضيات", category: "التخطيط والتحضير", date: "2026-01-15", note: "إعداد خطة متكاملة تشمل نواتج التعلم واستراتيجيات التدريس الحديثة.", status: "موثق" },
+  { id: 2, title: "تقرير تحليل نتائج الاختبار التشخيصي", category: "تقويم التعلم وتحليله", date: "2026-02-10", note: "تحليل الإتقان وتحديد المهارات المستهدفة بالخطط العلاجية.", status: "موثق" },
+  { id: 3, title: "تطبيق استراتيجية الصف المقلوب", category: "استراتيجيات التدريس", date: "2026-03-05", note: "استخدام الفيديوهات التفاعلية والأنشطة الرقمية في منصة مدار.", status: "مكتمل" },
+  { id: 4, title: "شهادة حضور ورشة الألعاب التعليمية", category: "التطوير المهني", date: "2026-04-12", note: "ورشة عمل تخصصية لتصميم الألعاب الرقمية التفاعلية.", status: "معتمد" },
+];
+
+function getTeacherEvidences() {
+  try {
+    const saved = localStorage.getItem("madarTeacherEvidences");
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return DEFAULT_TEACHER_EVIDENCES;
+}
+
+function saveTeacherEvidences(evidences) {
+  try {
+    localStorage.setItem("madarTeacherEvidences", JSON.stringify(evidences));
+  } catch {}
+}
+
+async function renderPortfolio() {
+  const teacherName = currentTeacher?.name || "المعلمة";
+  const teacherEmail = currentTeacher?.email || "—";
+  const evidences = getTeacherEvidences();
+
+  let totalClasses = allClasses.length || 0;
+  let totalStudentFiles = 0;
+  try {
+    const sfData = await api("/student-files");
+    totalStudentFiles = sfData?.files?.length || 0;
+  } catch {}
+
+  contentEl.innerHTML = `
+    <section class="student-files-hero" style="background: linear-gradient(135deg, #2b1055, #6336a5, #150050); border-radius: 20px; padding: 24px; color: #fff; margin-bottom: 24px; box-shadow: 0 10px 30px rgba(40,15,80,0.18);">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+        <div style="display: flex; align-items: center; gap: 16px;">
+          <div class="student-files-hero-icon" style="background: rgba(255,255,255,0.15); width: 64px; height: 64px; border-radius: 16px; display: grid; place-items: center; font-size: 2rem;">📁</div>
+          <div>
+            <span style="color: #ffd769; font-weight: 700; font-size: 0.85rem;">ملف الإنجاز الإلكتروني</span>
+            <h2 style="margin: 4px 0; font-size: 1.6rem; color: #fff;">ملف إنجاز المعلمة: ${escapeHtml(teacherName)}</h2>
+            <p style="margin: 0; color: rgba(255,255,255,0.85); font-size: 0.9rem;">توثيق الشواهد والوثائق المهنية، السيرة والتطوير المهني، ونتاجات التعلم للعام الدراسي 1447 هـ / 2026 م</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <button class="btn btn-outline" style="background: rgba(255,255,255,0.12); color: #fff; border-color: rgba(255,255,255,0.3);" id="printPortfolioBtn" type="button"><span aria-hidden="true">🖨️</span> طباعة الملف</button>
+          <button class="btn btn-primary" style="background: #ffbd28; color: #200545; border: none; font-weight: 800;" id="addEvidenceBtn" type="button"><span aria-hidden="true">➕</span> إضافة شاهد جديد</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="enhancement-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+      <article class="enhancement-card" style="padding: 16px; border-radius: 16px; background: #fff; border: 1px solid var(--border);">
+        <small style="color: var(--muted); font-size: 0.8rem;">الشواهد الموثقة</small>
+        <strong style="display: block; font-size: 1.5rem; color: var(--purple-950); margin-top: 4px;">${evidences.length} شاهد</strong>
+      </article>
+      <article class="enhancement-card" style="padding: 16px; border-radius: 16px; background: #fff; border: 1px solid var(--border);">
+        <small style="color: var(--muted); font-size: 0.8rem;">الفصول المستفيدة</small>
+        <strong style="display: block; font-size: 1.5rem; color: var(--purple-950); margin-top: 4px;">${totalClasses} فصل</strong>
+      </article>
+      <article class="enhancement-card" style="padding: 16px; border-radius: 16px; background: #fff; border: 1px solid var(--border);">
+        <small style="color: var(--muted); font-size: 0.8rem;">أعمال الطالبات المراجعة</small>
+        <strong style="display: block; font-size: 1.5rem; color: var(--purple-950); margin-top: 4px;">${totalStudentFiles} عمل</strong>
+      </article>
+      <article class="enhancement-card" style="padding: 16px; border-radius: 16px; background: #fff; border: 1px solid var(--border);">
+        <small style="color: var(--muted); font-size: 0.8rem;">عام التوثيق</small>
+        <strong style="display: block; font-size: 1.5rem; color: var(--purple-950); margin-top: 4px;">1447 هـ</strong>
+      </article>
+    </div>
+
+    <div class="student-panel-tabs" role="tablist" style="margin-bottom: 20px;">
+      <button class="tab-btn ${teacherPortfolioTab === "evidences" ? "active" : ""}" id="tabEvidences" type="button">سجل الشواهد والوثائق</button>
+      <button class="tab-btn ${teacherPortfolioTab === "bio" ? "active" : ""}" id="tabBio" type="button">السيرة والبيانات المهنية</button>
+      <button class="tab-btn ${teacherPortfolioTab === "student-files" ? "active" : ""}" id="tabStudentFiles" type="button">ملفات أعمال الطالبات</button>
+    </div>
+
+    <div id="portfolioTabContent"></div>
+  `;
+
+  document.getElementById("printPortfolioBtn").onclick = () => window.print();
+  document.getElementById("addEvidenceBtn").onclick = () => openAddEvidenceModal();
+
+  const tabEvidences = document.getElementById("tabEvidences");
+  const tabBio = document.getElementById("tabBio");
+  const tabStudentFiles = document.getElementById("tabStudentFiles");
+
+  tabEvidences.onclick = () => { teacherPortfolioTab = "evidences"; renderPortfolio(); };
+  tabBio.onclick = () => { teacherPortfolioTab = "bio"; renderPortfolio(); };
+  tabStudentFiles.onclick = () => { navigate("student-files"); };
+
+  const contentWrap = document.getElementById("portfolioTabContent");
+
+  if (teacherPortfolioTab === "evidences") {
+    contentWrap.innerHTML = `
+      <div class="card">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+          <h3 class="section-title" style="margin:0;">الشواهد والوثائق المهنية</h3>
+          <div style="display: flex; gap: 10px;">
+            <select id="filterCategory" style="padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border);">
+              <option value="">جميع المجالات</option>
+              <option value="التخطيط والتحضير">التخطيط والتحضير</option>
+              <option value="تقويم التعلم وتحليله">تقويم التعلم وتحليله</option>
+              <option value="استراتيجيات التدريس">استراتيجيات التدريس</option>
+              <option value="التطوير المهني">التطوير المهني</option>
+              <option value="بيئة التعلم والتفاعل الصفّي">بيئة التعلم والتفاعل الصفّي</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>عنوان الشاهد / الوثيقة</th>
+                <th>المجال / التصنيف</th>
+                <th>التاريخ</th>
+                <th>ملاحظات وتفاصيل الإنجاز</th>
+                <th>الحالة</th>
+                <th>الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody id="evidencesTableBody">
+              ${renderEvidencesRows(evidences)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("filterCategory").onchange = (e) => {
+      const cat = e.target.value;
+      const filtered = cat ? evidences.filter(item => item.category === cat) : evidences;
+      document.getElementById("evidencesTableBody").innerHTML = renderEvidencesRows(filtered);
+      bindEvidenceActions(filtered);
+    };
+
+    bindEvidenceActions(evidences);
+  } else if (teacherPortfolioTab === "bio") {
+    contentWrap.innerHTML = `
+      <div class="content-grid-two">
+        <div class="card">
+          <h3 class="section-title">بيانات المعلمة الأساسية</h3>
+          <div class="info-list">
+            <div class="info-row"><span>الاسم الكامل</span><strong>${escapeHtml(teacherName)}</strong></div>
+            <div class="info-row"><span>البريد الإلكتروني</span><strong>${escapeHtml(teacherEmail)}</strong></div>
+            <div class="info-row"><span>المادة التخصصية</span><strong>الرياضيات</strong></div>
+            <div class="info-row"><span>السنة الدراسية</span><strong>1447 هـ / 2026 م</strong></div>
+            <div class="info-row"><span>حالة التوثيق</span><strong><span class="badge badge-success" style="background:#ddf7eb; color:#176c4c; padding:4px 8px; border-radius:8px;">مفعل ونشط</span></strong></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="section-title">الرؤية والرسالة التربوية</h3>
+          <p style="line-height: 1.8; color: var(--text-color); margin-bottom: 16px;">
+            تقديم تعليم رياضيات ممتع وتفاعلي يميّز التفكير المنطقي، ويربط المفاهيم الرياضية بالحياة اليومية والتطبيقات الرقمية المعاصرة وفق أحدث الممارسات والتقنيات التربوية.
+          </p>
+          <h4 style="margin: 12px 0 6px; color: var(--purple-950);">الأهداف السامية:</h4>
+          <ul style="padding-right: 20px; line-height: 1.8; color: var(--muted);">
+            <li>رفع معدلات إتقان نواتج التعلم في مادة الرياضيات.</li>
+            <li>تفعيل التعلم الرقمي والألعاب التفاعلية وأنماط التعلم.</li>
+            <li>رعاية الطالبات وتحسين مستوياتهن بالخطط العلاجية والإثرائية.</li>
+          </ul>
+        </div>
+      </div>
+    `;
+  }
+}
+
+function renderEvidencesRows(items) {
+  if (!items.length) {
+    return `<tr><td colspan="6" style="text-align:center; padding:24px; color:var(--muted);">لا توجد شواهد مضافة حاليًا.</td></tr>`;
+  }
+  return items.map(item => `
+    <tr>
+      <td><strong>${escapeHtml(item.title)}</strong></td>
+      <td><span class="portfolio-type-badge">${escapeHtml(item.category)}</span></td>
+      <td>${escapeHtml(item.date)}</td>
+      <td><small style="color:var(--muted);">${escapeHtml(item.note || "—")}</small></td>
+      <td><span class="portfolio-review-badge approved">${escapeHtml(item.status || "موثق")}</span></td>
+      <td>
+        <button class="btn btn-outline btn-sm" data-delete-evidence="${item.id}" type="button">حذف</button>
+      </td>
+    </tr>
+  `).join("");
+}
+
+function bindEvidenceActions(items) {
+  document.querySelectorAll("[data-delete-evidence]").forEach(btn => {
+    btn.onclick = () => {
+      const id = Number(btn.dataset.deleteEvidence);
+      const updated = getTeacherEvidences().filter(item => item.id !== id);
+      saveTeacherEvidences(updated);
+      toast("تم حذف الشاهد بنجاح.");
+      renderPortfolio();
+    };
+  });
+}
+
+function openAddEvidenceModal() {
+  openModal(`
+    <h3>إضافة شاهد أو وثيقة إنجاز جديدة</h3>
+    <p>أدخلي تفاصيل الشاهد أو الإنجاز لتثبيته في ملف الإنجاز الخاص بكِ.</p>
+    <label class="field">عنوان الشاهد / الإنجاز
+      <input id="evidenceTitle" placeholder="مثال: ورقة عمل تفاعلية لنواتج التعلم" required />
+    </label>
+    <label class="field">المجال / التصنيف
+      <select id="evidenceCategory">
+        <option value="التخطيط والتحضير">التخطيط والتحضير</option>
+        <option value="تقويم التعلم وتحليله">تقويم التعلم وتحليله</option>
+        <option value="استراتيجيات التدريس">استراتيجيات التدريس</option>
+        <option value="التطوير المهني">التطوير المهني</option>
+        <option value="بيئة التعلم والتفاعل الصفّي">بيئة التعلم والتفاعل الصفّي</option>
+      </select>
+    </label>
+    <label class="field">التاريخ
+      <input id="evidenceDate" type="date" value="${new Date().toISOString().split("T")[0]}" required />
+    </label>
+    <label class="field">تفاصيل وملاحظات الشاهد
+      <textarea id="evidenceNote" placeholder="اكتبي وصفًا مختصرًا للإنجاز وأهم الشواهد المرتبطة به..."></textarea>
+    </label>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="cancelEvidence">إلغاء</button>
+      <button class="btn btn-primary" id="saveEvidence">حفظ الشاهد</button>
+    </div>
+  `);
+  document.getElementById("cancelEvidence").onclick = closeModal;
+  document.getElementById("saveEvidence").onclick = () => {
+    const title = document.getElementById("evidenceTitle").value.trim();
+    const category = document.getElementById("evidenceCategory").value;
+    const date = document.getElementById("evidenceDate").value;
+    const note = document.getElementById("evidenceNote").value.trim();
+    if (!title) return toast("يرجى كتابة عنوان الشاهد.");
+
+    const items = getTeacherEvidences();
+    items.unshift({
+      id: Date.now(),
+      title,
+      category,
+      date,
+      note,
+      status: "موثق"
+    });
+    saveTeacherEvidences(items);
+    closeModal();
+    toast("تمت إضافة الشاهد إلى ملف الإنجاز ✨");
+    renderPortfolio();
+  };
 }
 
 // ==========================================================================
@@ -1199,6 +1451,7 @@ async function renderStudentFiles() {
 // ==========================================================================
 let followUpPeriod = 1;
 let followUpMode = sessionStorage.getItem("madarFollowUpMode") === "tests" ? "tests" : "tracking";
+let followUpSection = sessionStorage.getItem("madarFollowUpSection") || "attendance";
 let followUpRowsById = new Map();
 let followUpLoadedSettings = {};
 
@@ -1225,10 +1478,10 @@ async function renderFollowUp() {
       <div class="follow-up-top-row">
         <div class="follow-up-main-tabs" role="tablist" aria-label="أقسام سجل المتابعة">
           <button class="follow-up-main-tab ${trackingMode ? "active" : ""}" type="button" data-follow-mode="tracking" role="tab" aria-selected="${trackingMode}">
-            <span aria-hidden="true">📖</span><span class="follow-up-tab-copy"><strong>متابعة</strong><small>الحضور والمشاركة والواجبات والمهام</small></span>
+            <span aria-hidden="true">📖</span><span class="follow-up-tab-copy"><strong>متابعة</strong></span>
           </button>
           <button class="follow-up-main-tab ${!trackingMode ? "active" : ""}" type="button" data-follow-mode="tests" role="tab" aria-selected="${!trackingMode}">
-            <span aria-hidden="true">📝</span><span class="follow-up-tab-copy"><strong>سجل الدرجات</strong><small>الفترات والاختبارات والمجموع</small></span>
+            <span aria-hidden="true">📝</span><span class="follow-up-tab-copy"><strong>سجل الدرجات</strong></span>
           </button>
         </div>
         <div class="follow-up-top-tools">
@@ -1241,10 +1494,10 @@ async function renderFollowUp() {
       </div>
       ${trackingMode ? `
         <div class="follow-up-categories follow-up-action-buttons" role="group" aria-label="خيارات المتابعة">
-          <button type="button"><span aria-hidden="true">🗓️</span><strong>الحضور</strong></button>
-          <button type="button"><span aria-hidden="true">🙋‍♀️</span><strong>المشاركة</strong></button>
-          <button type="button"><span aria-hidden="true">📖</span><strong>الواجبات</strong></button>
-          <button type="button"><span aria-hidden="true">📚</span><strong>المهام</strong></button>
+          <button type="button" class="${followUpSection === "attendance" ? "active" : ""}" data-follow-section="attendance" aria-pressed="${followUpSection === "attendance"}"><span aria-hidden="true">🗓️</span><strong>الحضور</strong></button>
+          <button type="button" class="${followUpSection === "participation" ? "active" : ""}" data-follow-section="participation" aria-pressed="${followUpSection === "participation"}"><span aria-hidden="true">🙋‍♀️</span><strong>المشاركة</strong></button>
+          <button type="button" class="${followUpSection === "homework" ? "active" : ""}" data-follow-section="homework" aria-pressed="${followUpSection === "homework"}"><span aria-hidden="true">📖</span><strong>الواجبات</strong></button>
+          <button type="button" class="${followUpSection === "tasks" ? "active" : ""}" data-follow-section="tasks" aria-pressed="${followUpSection === "tasks"}"><span aria-hidden="true">📚</span><strong>المهام</strong></button>
         </div>
       ` : `
         ${academicSelectorHtml("followUp")}
@@ -1266,7 +1519,16 @@ async function renderFollowUp() {
       renderFollowUp();
     };
   });
-  if (trackingMode) return;
+  if (trackingMode) {
+    document.querySelectorAll("[data-follow-section]").forEach((button) => {
+      button.onclick = () => {
+        followUpSection = button.dataset.followSection;
+        sessionStorage.setItem("madarFollowUpSection", followUpSection);
+        renderFollowUp();
+      };
+    });
+    return;
+  }
   bindAcademicSelector("followUp", renderFollowUp);
   document.querySelectorAll("[data-follow-period]").forEach((button) => {
     button.onclick = () => {
@@ -4413,6 +4675,7 @@ function openParentPrivateMessageModal(parentId, studentId, studentName) {
 const ROUTES = {
   home: renderHome,
   profile: renderProfile,
+  portfolio: renderPortfolio,
   "student-panel": renderStudentPanel,
   "student-files": renderStudentFiles,
   "follow-up": renderFollowUp,

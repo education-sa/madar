@@ -314,11 +314,18 @@ function finishGame() {
 }
 
 /* فتح الشهادة المطابقة للصورة المرفقة بالكامل مع جلب البيانات تلقائياً */
-function openCertificate() {
-  const studentName = state.student && state.student.name ? state.student.name : "سارة المحمد";
-  const teacherName = state.student && state.student.teacher_name ? state.student.teacher_name : "أ. نورة الشهري";
-  const principalName = state.student && (state.student.school_leader_name || state.student.principal_name) ? (state.student.school_leader_name || state.student.principal_name) : "أ. سارة العتيبي";
-  
+async function openCertificate() {
+  await detectStudent();
+
+  if (!state.student || !state.student.name) {
+    toast("الشهادة متاحة للطالبات فقط.");
+    return;
+  }
+
+  const studentName = String(state.student.name).trim();
+  const teacherName = (state.student.teacher_name ? String(state.student.teacher_name).trim() : "") || "أ. نورة الشهري";
+  const principalName = (state.student.school_leader_name || state.student.principal_name ? String(state.student.school_leader_name || state.student.principal_name).trim() : "") || "أ. سارة العتيبي";
+
   const formattedDuration = formatDurationArabic(state.lastDuration || 80);
   const scoreText = `${state.score} نقطة`;
 
@@ -333,9 +340,21 @@ function openCertificate() {
   document.body.style.overflow = "hidden";
 }
 
+function goToPortfolio() {
+  sessionStorage.setItem("madar-student-view", "portfolio");
+  window.location.assign("/student/index.html");
+}
+
 function closeCertificate() {
   $("certModal").hidden = true;
   document.body.style.overflow = "";
+}
+
+function sendCertificateToPortfolio() {
+  closeCertificate();
+  if (state.student && state.student.name) {
+    goToPortfolio();
+  }
 }
 
 function createConfetti() {
@@ -345,14 +364,38 @@ function createConfetti() {
 
 /* جلب بيانات الطالبة والمعلمة والمديرة تلقائياً من جلسة الموقع */
 async function detectStudent() {
+  const certButton = $("showCertButton");
+  const playerChip = $("playerChip");
+
+  if (state.student && state.student.name) {
+    if (playerChip) playerChip.textContent = `الطالبة: ${state.student.name}`;
+    if (certButton) certButton.hidden = false;
+    return state.student;
+  }
+
   try {
     const response = await fetch("/api/student/me", { headers: { Accept: "application/json" } });
-    if (!response.ok) return;
+    if (!response.ok) {
+      state.student = null;
+      state.csrf = "";
+      if (playerChip) playerChip.textContent = "الجلوس الحالي ليس لطالب/طالبة";
+      if (certButton) certButton.hidden = true;
+      return null;
+    }
+
     const data = await response.json();
     state.student = data;
     state.csrf = data.csrfToken || "";
-    $("playerChip").textContent = `الطالبة: ${data.name}`;
-  } catch (_) {}
+    if (playerChip && data.name) playerChip.textContent = `الطالبة: ${data.name}`;
+    if (certButton) certButton.hidden = false;
+    return data;
+  } catch (_) {
+    state.student = null;
+    state.csrf = "";
+    if (playerChip) playerChip.textContent = "الجلوس الحالي ليس لطالب/طالبة";
+    if (certButton) certButton.hidden = true;
+    return null;
+  }
 }
 
 async function saveAttempt({ duration, accuracy }) {
@@ -396,6 +439,9 @@ document.querySelectorAll("[data-rounds]").forEach((button) => {
 $("startButton").addEventListener("click", startGame);
 $("nextButton").addEventListener("click", nextQuestion);
 $("replayButton").addEventListener("click", () => showScreen("setup"));
+$("backToHomeButton").addEventListener("click", () => {
+  window.location.assign("/");
+});
 $("quitButton").addEventListener("click", () => {
   if (!confirm("هل تريدين إنهاء هذه الجولة والعودة إلى البداية؟")) return;
   clearInterval(state.timer);
@@ -411,6 +457,7 @@ $("soundButton").addEventListener("click", () => {
 
 $("showCertButton").addEventListener("click", openCertificate);
 $("closeCertButton").addEventListener("click", closeCertificate);
+$("sendToPortfolioButton").addEventListener("click", sendCertificateToPortfolio);
 $("printCertButton").addEventListener("click", () => window.print());
 
 document.addEventListener("keydown", (event) => {

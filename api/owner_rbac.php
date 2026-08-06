@@ -158,7 +158,14 @@ function owner_rbac_users_routes(string $method, array $segments, array $owner):
     if ($action==='' && $method==='GET') {
         Auth::requirePermission('users.view');
         unset($record['password_hash']);
-        Http::json(['user'=>$record,'impact'=>owner_rbac_impact($subjectType,$id),'permissions'=>Rbac::permissionsForRole((string)$record['role_code'])]);
+        $children=[];
+        if ((string)$record['role_code']===Rbac::PARENT) {
+            $children=fetch_all(
+                "SELECT s.id,s.name,s.email,c.name AS class_name FROM parent_student_links l JOIN students s ON s.id=l.student_id JOIN classes c ON c.id=s.class_id WHERE l.parent_id=? AND l.status='active' AND s.deleted_at IS NULL ORDER BY s.name",
+                [$id]
+            );
+        }
+        Http::json(['user'=>$record,'children'=>$children,'impact'=>owner_rbac_impact($subjectType,$id),'permissions'=>Rbac::permissionsForRole((string)$record['role_code'])]);
     }
     if ($action==='' && $method==='PUT') {
         Auth::requirePermission('users.update');

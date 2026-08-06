@@ -119,7 +119,7 @@ function teacher_school_settings_json(array $row): array
         'educationOffice' => (string) ($row['education_office'] ?? ''),
         'teacherName' => (string) ($row['teacher_name'] ?? ''),
         'schoolLeaderName' => (string) ($row['school_leader_name'] ?? ''),
-        'subjectName' => (string) ($row['subject_name'] ?? 'الرياضيات'),
+        'subjectName' => (string) ($row['subject_name'] ?? ''),
         'stageLabel' => (string) ($row['stage_label'] ?? ''),
         'gradeLabel' => (string) ($row['grade_label'] ?? ''),
         'academicYear' => (string) ($row['academic_year'] ?? ''),

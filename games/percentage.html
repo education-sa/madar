@@ -56,7 +56,7 @@
             </div>
           </div>
 
-          <button class="start-button" id="startButton" type="button">ابدئي التحدي واستخرجي الشهادة 🎮</button>
+          <button class="start-button" id="startButton" type="button">ابدئي التحدي</button>
           <p class="best-score" id="bestScoreText">أفضل نتيجة محلياً: 0 نقطة</p>
         </div>
       </div>
@@ -142,13 +142,13 @@
       <!-- زر إظهار الشهادة -->
       <div class="result-cert-box">
         <button class="start-button cert-main-btn" id="showCertButton" type="button">
-          📜 عرض وطباعة شهادة الإنجاز 🎓
+          عرض الشهادة
         </button>
       </div>
 
       <div class="result-actions">
         <button class="start-button" id="replayButton" type="button">العبي جولة جديدة ↻</button>
-        <a class="secondary-action" href="../index.html">العودة إلى مدار</a>
+        <button class="secondary-action" id="backToHomeButton" type="button">العودة إلى مدار</button>
       </div>
     </section>
   </main>
@@ -159,6 +159,7 @@
       <div class="cert-modal-header no-print">
         <h3>📜 شهادة اجتياز — النسبة المئوية</h3>
         <div class="cert-modal-actions">
+          <button type="button" class="btn-send" id="sendToPortfolioButton">إرسال إلى ملف إنجازي</button>
           <button type="button" class="btn-print" id="printCertButton">🖨️ طباعة الشهادة / حفظ PDF</button>
           <button type="button" class="btn-close" id="closeCertButton">✕ إغلاق</button>
         </div>
@@ -168,28 +169,24 @@
       <div class="certificate-paper-exact" id="certificatePaper">
         <div class="exact-cert-border">
           <div class="exact-cert-inner">
-            
-            <!-- الشعار العلوي الأيسر بنفس الأيقونة والألوان -->
-            <div class="exact-cert-icon">
-              <div class="exact-icon-circle">
-                <span class="exact-icon-star">✦</span>
-              </div>
-              <span class="exact-icon-arc"></span>
-            </div>
-
-            <!-- الرسومات الهندسية الشفافة في الخلفية -->
-            <div class="exact-bg-wireframes" aria-hidden="true">
-              <div class="wf-polyhedrons"></div>
-              <div class="wf-hatched-circle"></div>
-              <div class="wf-diamond-box"></div>
-            </div>
 
             <!-- محتوى النص المماثل للصورة بالضبط -->
             <div class="exact-cert-content">
+              <div class="exact-cert-topbar">
+                <div class="cert-brand-lockup">
+                  <img class="cert-madar-logo" src="/assets/print/madar-logo.svg" alt="شعار مدار">
+                  <div class="cert-brand-copy">
+                    <strong>مدار</strong>
+                    <small>منصة الرياضيات التفاعلية</small>
+                  </div>
+                </div>
+                <div class="cert-badge">شهادة معتمدة</div>
+              </div>
+
               <h1 class="exact-cert-title">شَهَادَةُ اِجْتِيَازٍ</h1>
               <p class="exact-cert-sub">تمنح هذه الشهادة</p>
-              <h2 class="exact-cert-student">لطالبة <span id="displayCertStudentName">فلانة</span></h2>
-              <p class="exact-cert-lesson">لاجتيازها درس <span id="displayCertLessonName">النسبة المئوية</span></p>
+              <h2 class="exact-cert-student">لطالبة <span class="cert-student-name" id="displayCertStudentName">فلانة</span></h2>
+              <p class="exact-cert-lesson">لاجتيازها درس <span class="cert-lesson-name" id="displayCertLessonName">النسبة المئوية</span></p>
               <p class="exact-cert-score-time">بدرجة <span id="displayCertScore">0</span> ووقت <span id="displayCertDuration">0 ثانية</span></p>
             </div>
 

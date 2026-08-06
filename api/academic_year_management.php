@@ -227,8 +227,6 @@ function site_school_settings_json(array $row): array
         'educationDepartment' => (string) ($row['education_department'] ?? ''),
         'educationOffice' => (string) ($row['education_office'] ?? ''),
         'schoolLeaderName' => (string) ($row['school_leader_name'] ?? ''),
-        'teacherName' => (string) ($row['teacher_name'] ?? ''),
-        'subjectName' => (string) ($row['subject_name'] ?? 'الرياضيات'),
         'stageLabel' => (string) ($row['stage_label'] ?? ''),
         'gradeLabel' => (string) ($row['grade_label'] ?? ''),
         'academicYear' => (string) ($row['academic_year'] ?? ''),
@@ -296,12 +294,10 @@ function owner_save_site_school(int $ownerId): never
         'educationDepartment' => academic_clean_text($data['educationDepartment'] ?? '', 190, 'إدارة التعليم', true),
         'educationOffice' => academic_clean_text($data['educationOffice'] ?? '', 190, 'مكتب التعليم'),
         'schoolLeaderName' => academic_clean_text($data['schoolLeaderName'] ?? '', 190, 'اسم مديرة المدرسة'),
-        'teacherName' => academic_clean_text($data['teacherName'] ?? '', 190, 'اسم المعلمة', true),
-        'subjectName' => academic_clean_text($data['subjectName'] ?? 'الرياضيات', 190, 'اسم المادة', true),
         'academicYear' => academic_clean_text($data['academicYear'] ?? '', 30, 'العام الدراسي', true),
     ];
     execute_sql(
-        'UPDATE site_school_settings SET school_name=?,education_department=?,education_office=?,school_leader_name=?,teacher_name=?,subject_name=?,academic_year=? WHERE id=1',
+        'UPDATE site_school_settings SET school_name=?,education_department=?,education_office=?,school_leader_name=?,academic_year=? WHERE id=1',
         array_values($values)
     );
     Activity::log('owner', $ownerId, 'تحديث إعدادات المدرسة', $values['schoolName'] . ' · ' . $values['academicYear']);
@@ -411,6 +407,27 @@ function academic_count_query(string $sql, array $params = []): int
     return (int) (fetch_one($sql, $params)['n'] ?? 0);
 }
 
+function academic_normalize_reset_selection(array $selectedItems): array
+{
+    $selection = [];
+    $allowed = [
+        'tests' => true,
+        'followUp' => true,
+        'weekly' => true,
+        'documents' => true,
+        'learningStyle' => true,
+        'motivation' => true,
+        'notifications' => true,
+        'remedial' => true,
+    ];
+    foreach ($selectedItems as $item) {
+        $key = trim((string) $item);
+        if ($key === '') continue;
+        if (isset($allowed[$key])) $selection[$key] = true;
+    }
+    return array_keys($selection);
+}
+
 function academic_reset_counts(string $targetYear): array
 {
     $counts = [
@@ -432,6 +449,9 @@ function academic_reset_counts(string $targetYear): array
         'learningStyleCampaigns' => 0,
         'learningStyleResults' => 0,
         'physicalFiles' => 0,
+        'motivationPoints' => 0,
+        'notifications' => 0,
+        'remedialPlans' => 0,
     ];
     if (academic_db_table_exists('tests')) {
         $counts['tests'] = academic_count_query('SELECT COUNT(*) AS n FROM tests WHERE academic_year=?', [$targetYear]);
@@ -469,8 +489,26 @@ function academic_reset_counts(string $targetYear): array
             $counts['learningStyleResults'] = academic_count_query('SELECT COUNT(*) AS n FROM learning_style_assessments a JOIN learning_style_campaigns c ON c.id=a.campaign_id WHERE c.academic_year=?', [$targetYear]);
         }
     }
+    if (academic_db_table_exists('motivational_points') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+        $counts['motivationPoints'] = academic_count_query(
+            'SELECT COUNT(*) AS n FROM motivational_points mp JOIN students s ON s.id=mp.student_id JOIN classes c ON c.id=s.class_id WHERE c.academic_year=?',
+            [$targetYear]
+        );
+    }
+    if (academic_db_table_exists('notifications') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+        $counts['notifications'] = academic_count_query(
+            'SELECT COUNT(*) AS n FROM notifications n JOIN students s ON s.id=n.student_id JOIN classes c ON c.id=s.class_id WHERE c.academic_year=?',
+            [$targetYear]
+        );
+    }
+    if (academic_db_table_exists('remedial_plans') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+        $counts['remedialPlans'] = academic_count_query(
+            'SELECT COUNT(*) AS n FROM remedial_plans rp JOIN students s ON s.id=rp.student_id JOIN classes c ON c.id=s.class_id WHERE c.academic_year=?',
+            [$targetYear]
+        );
+    }
     $counts['totalDatabaseRecords'] = array_sum(array_intersect_key($counts, array_flip([
-        'tests','testModels','questionDistributions','attempts','answers','followUpRecords','weeklyAcademicRecords','documents','studentFiles','activityRecords','learningStyleCampaigns','learningStyleResults'
+        'tests','testModels','questionDistributions','attempts','answers','followUpRecords','weeklyAcademicRecords','documents','studentFiles','activityRecords','learningStyleCampaigns','learningStyleResults','motivationPoints','notifications','remedialPlans'
     ])));
     return $counts;
 }
@@ -735,6 +773,7 @@ function owner_academic_reset_execute(int $ownerId): never
     $target = trim((string) ($data['targetAcademicYear'] ?? ''));
     $phrase = trim((string) ($data['confirmationPhrase'] ?? ''));
     $previewHash = trim((string) ($data['previewHash'] ?? ''));
+    $selectedItems = academic_normalize_reset_selection((array) ($data['selectedItems'] ?? []));
     if ($phrase !== 'بدء عام جديد') Http::json(['error' => 'اكتبي عبارة «بدء عام جديد» بصورة صحيحة لتأكيد العملية.'], 422);
     $_GET['year'] = $target;
     $target = academic_target_year_from_request();
@@ -772,30 +811,89 @@ function owner_academic_reset_execute(int $ownerId): never
             $moved[] = $item;
         }
 
-        $result = Database::transaction(function (PDO $transaction) use ($ownerId, $target, $current, $operationId): array {
+        $result = Database::transaction(function (PDO $transaction) use ($ownerId, $target, $current, $operationId, $selectedItems): array {
+            $selectedSet = array_fill_keys($selectedItems, true);
             if (academic_db_table_exists('activity_log') && academic_db_column_exists('activity_log', 'academic_year')) {
                 $transaction->prepare('DELETE FROM activity_log WHERE academic_year=?')->execute([$target]);
             }
-            if (academic_db_table_exists('weekly_attendance')) $transaction->prepare('DELETE FROM weekly_attendance WHERE academic_year=?')->execute([$target]);
-            if (academic_db_table_exists('weekly_participation')) $transaction->prepare('DELETE FROM weekly_participation WHERE academic_year=?')->execute([$target]);
-            if (academic_db_table_exists('weekly_follow_up_items')) $transaction->prepare('DELETE FROM weekly_follow_up_items WHERE academic_year=?')->execute([$target]);
-            if (academic_db_table_exists('student_follow_up')) $transaction->prepare('DELETE FROM student_follow_up WHERE academic_year=?')->execute([$target]);
-            if (academic_db_table_exists('follow_up_settings')) $transaction->prepare('DELETE FROM follow_up_settings WHERE academic_year=?')->execute([$target]);
-            if (academic_db_table_exists('knowledge_resources') && academic_db_column_exists('knowledge_resources', 'academic_year')) {
+            if (isset($selectedSet['weekly']) && academic_db_table_exists('weekly_attendance')) {
+                $transaction->prepare('DELETE FROM weekly_attendance WHERE academic_year=?')->execute([$target]);
+            }
+            if (isset($selectedSet['weekly']) && academic_db_table_exists('weekly_participation')) {
+                $transaction->prepare('DELETE FROM weekly_participation WHERE academic_year=?')->execute([$target]);
+            }
+            if (isset($selectedSet['weekly']) && academic_db_table_exists('weekly_follow_up_items')) {
+                $transaction->prepare('DELETE FROM weekly_follow_up_items WHERE academic_year=?')->execute([$target]);
+            }
+            if (isset($selectedSet['followUp']) && academic_db_table_exists('student_follow_up')) {
+                $transaction->prepare('DELETE FROM student_follow_up WHERE academic_year=?')->execute([$target]);
+            }
+            if (isset($selectedSet['followUp']) && academic_db_table_exists('follow_up_settings')) {
+                $transaction->prepare('DELETE FROM follow_up_settings WHERE academic_year=?')->execute([$target]);
+            }
+            if (isset($selectedSet['documents']) && academic_db_table_exists('knowledge_resources') && academic_db_column_exists('knowledge_resources', 'academic_year')) {
                 $transaction->prepare('DELETE FROM knowledge_resources WHERE academic_year=?')->execute([$target]);
             }
-            if (academic_db_table_exists('student_portfolio_files') && academic_db_column_exists('student_portfolio_files', 'academic_year')) {
+            if (isset($selectedSet['documents']) && academic_db_table_exists('student_portfolio_files') && academic_db_column_exists('student_portfolio_files', 'academic_year')) {
                 $transaction->prepare('DELETE FROM student_portfolio_files WHERE academic_year=?')->execute([$target]);
             }
-            if (academic_db_table_exists('learning_style_campaigns') && academic_db_column_exists('learning_style_campaigns', 'academic_year')) {
+            if (isset($selectedSet['learningStyle']) && academic_db_table_exists('learning_style_campaigns') && academic_db_column_exists('learning_style_campaigns', 'academic_year')) {
                 if (academic_db_table_exists('learning_style_assessments')) {
                     $transaction->prepare('DELETE a FROM learning_style_assessments a JOIN learning_style_campaigns c ON c.id=a.campaign_id WHERE c.academic_year=?')->execute([$target]);
                 }
                 $transaction->prepare('DELETE FROM learning_style_campaigns WHERE academic_year=?')->execute([$target]);
             }
-            if (academic_db_table_exists('tests')) $transaction->prepare('DELETE FROM tests WHERE academic_year=?')->execute([$target]);
+            if (isset($selectedSet['motivation']) && academic_db_table_exists('motivational_points') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+                $transaction->prepare(
+                    'DELETE mp FROM motivational_points mp JOIN students s ON s.id=mp.student_id JOIN classes c ON c.id=s.class_id WHERE c.academic_year=?'
+                )->execute([$target]);
+            }
+            if (isset($selectedSet['notifications']) && academic_db_table_exists('notifications') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+                $transaction->prepare(
+                    'DELETE n FROM notifications n JOIN students s ON s.id=n.student_id JOIN classes c ON c.id=s.class_id WHERE c.academic_year=?'
+                )->execute([$target]);
+            }
+            if (isset($selectedSet['remedial']) && academic_db_table_exists('remedial_plans') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+                $transaction->prepare(
+                    'DELETE rp FROM remedial_plans rp JOIN students s ON s.id=rp.student_id JOIN classes c ON c.id=s.class_id WHERE c.academic_year=?'
+                )->execute([$target]);
+            }
 
-            academic_rebuild_derived_results($transaction);
+            if (isset($selectedSet['tests']) && academic_db_table_exists('answers') && academic_db_table_exists('test_attempts') && academic_db_table_exists('tests')) {
+                $transaction->prepare(
+                    'DELETE FROM answers WHERE attempt_id IN (
+                        SELECT a.id FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE t.academic_year=?
+                    )'
+                )->execute([$target]);
+            }
+            if (isset($selectedSet['tests']) && academic_db_table_exists('test_attempt_questions') && academic_db_table_exists('test_attempts') && academic_db_table_exists('tests')) {
+                $transaction->prepare(
+                    'DELETE FROM test_attempt_questions WHERE attempt_id IN (
+                        SELECT a.id FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE t.academic_year=?
+                    )'
+                )->execute([$target]);
+            }
+            if (isset($selectedSet['tests']) && academic_db_table_exists('test_attempts') && academic_db_table_exists('tests')) {
+                $transaction->prepare(
+                    'DELETE FROM test_attempts WHERE test_id IN (
+                        SELECT id FROM tests WHERE academic_year=?
+                    )'
+                )->execute([$target]);
+            }
+            if (isset($selectedSet['tests']) && academic_db_table_exists('test_questions') && academic_db_table_exists('tests')) {
+                $transaction->prepare(
+                    'DELETE FROM test_questions WHERE test_id IN (
+                        SELECT id FROM tests WHERE academic_year=?
+                    )'
+                )->execute([$target]);
+            }
+            if (isset($selectedSet['tests']) && academic_db_table_exists('tests')) {
+                $transaction->prepare('DELETE FROM tests WHERE academic_year=?')->execute([$target]);
+            }
+
+            if (isset($selectedSet['tests'])) {
+                academic_rebuild_derived_results($transaction);
+            }
             $transaction->prepare("UPDATE academic_year_reset_operations SET status='completed',completed_at=NOW() WHERE id=?")
                 ->execute([$operationId]);
             $transaction->prepare(
