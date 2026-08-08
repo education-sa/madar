@@ -48,7 +48,7 @@ function handle_teacher_routes(string $method, array $segments): never
         'analysis' => in_array($method, ['GET','HEAD'], true) ? 'analytics.view' : 'analytics.manage',
         'learning-styles' => in_array($method, ['GET','HEAD'], true) ? 'analytics.view' : 'analytics.manage',
         'reports' => 'export.use',
-        'school-settings' => 'school_settings.manage',
+        'school-settings', 'interactive-games' => 'school_settings.manage',
         'privacy' => 'dashboard.view',
         'enhancements' => match ($segments[1] ?? '') {
             'remedial','messages','password-requests' => 'students.manage',
@@ -116,6 +116,9 @@ function handle_teacher_routes(string $method, array $segments): never
     }
     if ($resource === 'school-settings') {
         teacher_school_settings_routes($method, array_slice($segments, 1), $teacherId);
+    }
+    if ($resource === 'interactive-games') {
+        teacher_interactive_games_routes($method, array_slice($segments, 1), $teacherId);
     }
     if ($resource === 'privacy') { platform_privacy_routes('teacher',$teacherId,$method); }
     if ($resource === 'enhancements') {
@@ -481,7 +484,7 @@ function printable_report(string $title,string $body,int $teacherId,array $conte
         .($school['educationDepartment']!==''?'<div>إدارة التعليم: '.$h($school['educationDepartment']).'</div>':'')
         .($school['educationOffice']!==''?'<div>مكتب التعليم: '.$h($school['educationOffice']).'</div>':'')
         .($school['schoolName']!==''?'<div>المدرسة: '.$h($school['schoolName']).'</div>':'');
-    $logos='<img class="madar-logo" src="'.$h($school['madarLogoUrl']??'/assets/print/madar-logo.svg').'" alt="شعار مدار">'
+    $logos='<img class="madar-logo" src="'.$h($school['madarLogoUrl']??'/assets/print/madar-official-logo-transparent.png').'" alt="شعار مدار">'
         .'<img class="vision-logo" src="'.$h($school['visionLogoUrl']??'/vision-2030-logo.png').'" alt="شعار رؤية السعودية 2030">';
     if (!empty($school['additionalLogoUrl'])) $logos.='<img class="additional-logo" src="'.$h($school['additionalLogoUrl']).'" alt="الشعار الإضافي">';
     $leader=trim((string)($school['schoolLeaderName']??''));

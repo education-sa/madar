@@ -52,6 +52,7 @@ try {
     require_once __DIR__ . '/student_portfolio.php';
     require_once __DIR__ . '/knowledge_exchange.php';
     require_once __DIR__ . '/academic_year_management.php';
+    require_once __DIR__ . '/interactive_games.php';
     require_once __DIR__ . '/learning_styles.php';
     require_once __DIR__ . '/parent_portal.php';
     require_once __DIR__ . '/platform_enhancements.php';

@@ -49,6 +49,7 @@ let allSkills = [];
 let csrfToken = "";
 
 let schoolSettings = null;
+let interactiveGamesState = { migrationReady: false, games: [] };
 const ACADEMIC_GRADES = {
   "ابتدائي": ["رابع ابتدائي", "خامس ابتدائي", "سادس ابتدائي"],
   "متوسط": ["أول متوسط", "ثاني متوسط", "ثالث متوسط"],
@@ -57,6 +58,7 @@ const ACADEMIC_GRADES = {
 const academicSelections = {
   followUp: JSON.parse(sessionStorage.getItem("madarAcademicFollowUp") || "null") || {},
   tests: JSON.parse(sessionStorage.getItem("madarAcademicTests") || "null") || {},
+  games: JSON.parse(sessionStorage.getItem("madarAcademicGames") || "null") || {},
 };
 let recentCreatedTestId = Number(sessionStorage.getItem("madarRecentCreatedTestId") || 0);
 let recentCreatedTestType = sessionStorage.getItem("madarRecentCreatedTestType") || "";
@@ -89,6 +91,12 @@ async function loadSchoolSettings(force = false) {
   return schoolSettings;
 }
 
+async function loadInteractiveGames() {
+  interactiveGamesState = await api("/interactive-games");
+  if (!Array.isArray(interactiveGamesState.games)) interactiveGamesState.games = [];
+  return interactiveGamesState;
+}
+
 function normalizedAcademicYear(value) {
   return String(value || "").replace(/[^0-9-]/g, "");
 }
@@ -112,7 +120,8 @@ function normalizeAcademicSelection(kind) {
   }
   const classes = academicClasses(selection);
   if (!classes.some((item) => String(item.id) === String(selection.classId))) selection.classId = classes[0]?.id ? String(classes[0].id) : "";
-  sessionStorage.setItem(kind === "followUp" ? "madarAcademicFollowUp" : "madarAcademicTests", JSON.stringify(selection));
+  const storageKey = { followUp: "madarAcademicFollowUp", tests: "madarAcademicTests", games: "madarAcademicGames" }[kind];
+  if (storageKey) sessionStorage.setItem(storageKey, JSON.stringify(selection));
   return selection;
 }
 
@@ -1411,10 +1420,14 @@ async function renderStudentFiles() {
         ${data.files.length ? `<div class="table-wrap"><table id="studentFilesTable"><thead><tr><th>الطالبة والفصل</th><th>عنوان الملف ونوعه</th><th>تاريخ الرفع</th><th>الحالة</th><th>المعاينة والتنزيل</th><th>المراجعة</th></tr></thead><tbody>${data.files.map((file) => {
           const meta = PORTFOLIO_CATEGORY_META[file.category] || PORTFOLIO_CATEGORY_META.other;
           const search = `${file.studentName} ${file.studentEmail} ${file.title} ${file.note} ${file.className}`.toLocaleLowerCase("ar");
-          const fileKind = file.mimeType === "application/pdf" ? "PDF" : "صورة";
+          const certificateKey = String(file.certificateKey || file.certificate_key || "").trim();
+          const isGameCertificate = Boolean(certificateKey);
+          const duplicateCertificate = isGameCertificate && /\(مكرر\)/.test(String(file.title || ""));
+          const certificateLabel = duplicateCertificate ? "شهادة إتقان (مكرر)" : "شهادة إتقان";
+          const fileKind = isGameCertificate ? certificateLabel : (file.mimeType === "application/pdf" ? "PDF" : "صورة");
           return `<tr data-student-file data-category="${escapeHtml(file.category)}" data-search="${escapeHtml(search)}">
             <td><strong>${escapeHtml(file.studentName)}</strong><br><small>${escapeHtml(file.className || "—")} · ${escapeHtml(file.studentEmail)}</small></td>
-            <td><strong>${escapeHtml(file.title)}</strong><br><span class="portfolio-type-badge"><i aria-hidden="true">${meta.icon}</i>${meta.label}</span><small class="portfolio-file-meta">${fileKind} · ${escapeHtml(file.originalName)} · ${formatFileSize(file.sizeBytes)}</small></td>
+            <td><strong>${escapeHtml(file.title)}</strong><br><span class="portfolio-type-badge"><i aria-hidden="true">${meta.icon}</i>${isGameCertificate ? certificateLabel : meta.label}</span><small class="portfolio-file-meta">${fileKind} · ${escapeHtml(file.originalName)} · ${formatFileSize(file.sizeBytes)}</small></td>
             <td>${formatDate(file.createdAt)}</td>
             <td>${portfolioReviewBadge(file.reviewStatus)}${file.awardedPoints?`<small class="portfolio-points-added">+${Number(file.awardedPoints)} نقطة</small>`:""}</td>
             <td><div class="portfolio-table-actions"><button class="btn btn-secondary btn-sm" type="button" data-preview-file="${file.id}">معاينة</button><a class="btn btn-outline btn-sm" href="/api/teacher/student-files/${file.id}/download">تنزيل</a></div></td>
@@ -2142,7 +2155,7 @@ async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientati
     settings = {};
   }
   const context = analysisClassContext(classId);
-  const absoluteMadarLogo = new URL(settings.madarLogoUrl || "/assets/print/madar-logo.svg", window.location.origin).href;
+  const absoluteMadarLogo = new URL(settings.madarLogoUrl || "/assets/print/madar-official-logo-transparent.png", window.location.origin).href;
   const absoluteVisionLogo = new URL(settings.visionLogoUrl || "/vision-2030-logo.png", window.location.origin).href;
   const absoluteAdditionalLogo = settings.additionalLogoUrl ? new URL(settings.additionalLogoUrl, window.location.origin).href : "";
   const governmentLines = [
@@ -2798,7 +2811,7 @@ async function renderSettings() {
           <div class="school-logo-settings">
             <h4>شعارات التقارير والطباعة</h4>
             <div class="logo-preview-grid">
-              <div class="logo-preview-card"><img src="${escapeHtml(settings.madarLogoUrl || "/assets/print/madar-logo.svg")}" alt="شعار مدار"><span>شعار مدار الأصلي</span></div>
+              <div class="logo-preview-card"><img src="${escapeHtml(settings.madarLogoUrl || "/assets/print/madar-official-logo-transparent.png")}" alt="شعار مدار الرسمي"><span>شعار مدار الرسمي</span></div>
               <div class="logo-preview-card"><img src="${escapeHtml(settings.visionLogoUrl || "/vision-2030-logo.png")}" alt="شعار رؤية السعودية 2030"><span>شعار رؤية السعودية ٢٠٣٠</span></div>
               ${additionalLogo}
             </div>
@@ -4148,7 +4161,7 @@ function openGamesPanel(mode = "interactive-games") {
   navigate("games-panel");
 }
 
-function renderGamesPanel() {
+async function renderGamesPanel() {
   contentEl.innerHTML = `
     <div class="student-panel-tabs" role="tablist" aria-label="أقسام الألعاب">
       <button class="tab-btn ${gamesPanelMode === "interactive-games" ? "active" : ""}" data-games-panel="interactive-games">الألعاب التفاعلية</button>
@@ -4162,7 +4175,11 @@ function renderGamesPanel() {
       renderGamesPanel();
     };
   });
-  renderEducationalContent(gamesPanelMode, document.getElementById("gamesPanelContent"));
+  const panel = document.getElementById("gamesPanelContent");
+  panel.innerHTML = '<div class="empty-state">جارٍ تحميل إعدادات اللعبة…</div>';
+  try { await Promise.all([loadSchoolSettings(), loadInteractiveGames()]); } catch (_) {}
+  if (!document.body.contains(panel)) return;
+  renderEducationalContent(gamesPanelMode, panel);
 }
 
 function openStrategiesPanel() {
@@ -4429,39 +4446,135 @@ async function renderParentCommunity() {
 function renderEducationalContent(key, target = contentEl) {
   const section = EDUCATIONAL_CONTENT[key];
   if (key === "interactive-games") {
+    const gameAcademicContext = academicSelectorHtml("games");
+    const formatGameNumber = (value) => new Intl.NumberFormat("ar-SA", { useGrouping: false }).format(value);
+    const games = Array.isArray(interactiveGamesState.games) ? interactiveGamesState.games : [];
     target.innerHTML = `
       <section class="games-library-grid" aria-label="الألعاب التفاعلية المتاحة">
-        <article class="card teacher-game-card">
-          <div class="teacher-game-visual" aria-hidden="true">
-            <span class="teacher-game-percent">%</span>
-            <small>١٠٠</small>
-          </div>
-          <div class="teacher-game-copy">
-            <span class="teacher-game-tag">درس النسبة المئوية</span>
-            <h3>تحدي النسبة المئوية</h3>
-            <p>لعبة تفاعلية متدرجة تساعد الطالبات على التدريب على إيجاد النسبة المئوية، مع تصحيح فوري وحفظ المحاولات والنتائج في حساب الطالبة.</p>
-            <div class="teacher-game-features" aria-label="مميزات اللعبة">
-              <span>⚡ أسئلة متجددة</span>
-              <span>🏆 نقاط ومستويات</span>
-              <span>💡 شرح للحل</span>
+        ${gameAcademicContext}
+        ${interactiveGamesState.migrationReady ? "" : '<div class="form-error game-migration-notice">يلزم تشغيل Migration الألعاب التفاعلية بعد مراجعته حتى يمكن حفظ بيانات كل لعبة بصورة مستقلة.</div>'}
+        ${games.map((game) => {
+          const unitNumber = Number(game.unitNumber);
+          const lessonNumber = Number(game.lessonNumber);
+          const configured = Boolean(game.configured) && Number.isInteger(unitNumber) && unitNumber > 0 && Number.isInteger(lessonNumber) && lessonNumber > 0 && String(game.lessonName || "").trim() !== "";
+          const lessonMeta = configured ? `${formatGameNumber(unitNumber)}-${formatGameNumber(lessonNumber)}` : "—";
+          const timeMode = game.timeMode === "timed" ? "timed" : "open";
+          const playUrl = `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1&from=teacher`;
+          const studentUrl = `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1`;
+          return `<article class="card teacher-game-card" data-game-card="${escapeHtml(game.gameKey)}">
+            <div class="teacher-game-lesson-number">${escapeHtml(lessonMeta)}</div>
+            <div class="teacher-game-copy">
+              <h3>${configured ? `تحدي ${escapeHtml(game.lessonName)}` : "إعداد درس اللعبة غير مكتمل"}</h3>
+              <p>${configured ? "لعبة تفاعلية متدرجة مع تصحيح فوري وحفظ المحاولات والنتائج في حساب الطالبة." : "أكملي رقم الوحدة ورقم الدرس واسم الدرس قبل إتاحة الشهادة للطالبات."}</p>
+              <div class="teacher-game-features" aria-label="مميزات اللعبة"><span>✦ أسئلة متجددة</span><span>🏆 نقاط ومستويات</span><span>${timeMode === "timed" ? `⏱ ${formatGameNumber(game.timePerQuestionSeconds)} ثانية` : "⌁ وقت مفتوح"}</span></div>
+              <div class="teacher-game-actions">
+                <a class="btn btn-primary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">فتح اللعبة</a>
+                <button class="btn btn-secondary" type="button" data-copy-game-link="${escapeHtml(studentUrl)}">نسخ رابط اللعبة</button>
+                <button class="btn btn-outline" type="button" data-configure-game="${escapeHtml(game.gameKey)}">إعداد اللعبة</button>
+                <button class="btn teacher-game-timer-toggle${timeMode === "timed" ? " is-active" : ""}" type="button" data-game-timer="${escapeHtml(game.gameKey)}" aria-pressed="${timeMode === "timed"}">مؤقت</button>
+              </div>
             </div>
-            <div class="teacher-game-actions">
-              <a class="btn btn-primary" href="/games/percentage.html" target="_blank" rel="noopener">فتح اللعبة</a>
-              <button class="btn btn-secondary" type="button" data-copy-game-link="/games/percentage.html">نسخ رابط اللعبة</button>
-            </div>
-          </div>
-        </article>
+          </article>`;
+        }).join("") || '<div class="empty-state">لا توجد ألعاب تفاعلية مسجلة في النظام.</div>'}
       </section>`;
-    const copyButton = target.querySelector("[data-copy-game-link]");
-    if (copyButton) copyButton.onclick = async () => {
+    bindAcademicSelector("games", () => renderGamesPanel());
+    target.querySelectorAll("[data-copy-game-link]").forEach((copyButton) => { copyButton.onclick = async () => {
       const url = new URL(copyButton.dataset.copyGameLink, window.location.origin).href;
+      try { await navigator.clipboard.writeText(url); toast("تم نسخ رابط اللعبة."); }
+      catch (_) { window.prompt("انسخي رابط اللعبة:", url); }
+    }; });
+
+    const refreshGames = async () => {
+      await loadInteractiveGames();
+      renderEducationalContent("interactive-games", target);
+    };
+    const saveTimerSettings = async (gameKey, mode, seconds, button) => {
+      if (button) button.disabled = true;
       try {
-        await navigator.clipboard.writeText(url);
-        toast("تم نسخ رابط لعبة النسبة المئوية.");
-      } catch (_) {
-        window.prompt("انسخي رابط اللعبة:", url);
+        await api(`/interactive-games/${encodeURIComponent(gameKey)}`, { method: "PUT", body: JSON.stringify({
+          timerOnly: true,
+          timeMode: mode,
+          timePerQuestionSeconds: seconds,
+        }) });
+        closeModal();
+        toast(mode === "timed" ? "تم تفعيل المؤقت." : "تم إيقاف المؤقت.");
+        await refreshGames();
+      } catch (error) {
+        const message = document.getElementById("gameTimerMessage");
+        if (message) message.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+        else toast(error.message || "تعذّر تحديث المؤقت.");
+        if (button) button.disabled = false;
       }
     };
+
+    target.querySelectorAll("[data-game-timer]").forEach((timerToggle) => { timerToggle.onclick = () => {
+      const game = games.find((item) => item.gameKey === timerToggle.dataset.gameTimer);
+      if (!game?.configured) {
+        toast("أكملي إعداد بيانات اللعبة أولًا.");
+        target.querySelector(`[data-configure-game="${CSS.escape(timerToggle.dataset.gameTimer)}"]`)?.click();
+        return;
+      }
+      const timerIsActive = game.timeMode === "timed";
+      const currentSeconds = Number(game.timePerQuestionSeconds);
+      openModal(`
+        <form class="game-timer-dialog" id="gameTimerForm">
+          <h3>${timerIsActive ? "تعديل المؤقت" : "تفعيل المؤقت"}</h3>
+          <p>حددي وقت السؤال بالثواني.</p>
+          <div id="gameTimerMessage"></div>
+          <label class="field">وقت السؤال بالثواني<input id="gameTimerSeconds" type="number" min="15" max="120" inputmode="numeric" value="${Number.isInteger(currentSeconds) ? currentSeconds : ""}" required /></label>
+          <div class="modal-actions">${timerIsActive ? '<button class="btn btn-outline" type="button" id="disableGameTimer">إيقاف المؤقت</button>' : ''}<button class="btn btn-outline" type="button" id="cancelGameTimer">إلغاء</button><button class="btn btn-primary" type="submit" id="saveGameTimer">${timerIsActive ? "حفظ" : "تفعيل"}</button></div>
+        </form>
+      `, "game-timer-modal");
+      document.getElementById("cancelGameTimer").onclick = closeModal;
+      const disableTimerButton = document.getElementById("disableGameTimer");
+      if (disableTimerButton) disableTimerButton.onclick = () => saveTimerSettings(game.gameKey, "open", null, disableTimerButton);
+      document.getElementById("gameTimerForm").onsubmit = (event) => {
+        event.preventDefault();
+        saveTimerSettings(game.gameKey, "timed", Number(document.getElementById("gameTimerSeconds").value), document.getElementById("saveGameTimer"));
+      };
+    }; });
+
+    target.querySelectorAll("[data-configure-game]").forEach((button) => { button.onclick = () => {
+      const game = games.find((item) => item.gameKey === button.dataset.configureGame);
+      if (!interactiveGamesState.migrationReady) {
+        toast("شغّلي Migration الألعاب بعد مراجعته أولًا.");
+        return;
+      }
+      openModal(`
+        <form class="game-config-dialog" id="gameConfigForm">
+          <h3>إعداد بيانات اللعبة</h3>
+          <p>أدخلي بيانات الدرس الفعلية المرتبطة بهذه اللعبة.</p>
+          <div id="gameConfigMessage"></div>
+          <label class="field">اسم الدرس<input id="gameLessonName" maxlength="190" value="${escapeHtml(game.lessonName || "")}" required /></label>
+          <div class="form-grid two"><label class="field">رقم الوحدة<input id="gameUnitNumber" type="number" min="1" max="999" value="${game.unitNumber || ""}" required /></label><label class="field">رقم الدرس<input id="gameLessonNumber" type="number" min="1" max="999" value="${game.lessonNumber || ""}" required /></label></div>
+          <label class="check-row"><input id="gameCertificatePortfolio" type="checkbox" ${!game.exists || game.certificatePortfolioEnabled ? "checked" : ""}> السماح بإرسال الشهادة إلى ملف الإنجاز</label>
+          <div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelGameConfig">إلغاء</button><button class="btn btn-primary" type="submit" id="saveGameConfig">حفظ الإعداد</button></div>
+        </form>
+      `, "game-config-modal");
+      document.getElementById("cancelGameConfig").onclick = closeModal;
+      document.getElementById("gameConfigForm").onsubmit = async (event) => {
+        event.preventDefault();
+        const saveButton = document.getElementById("saveGameConfig");
+        saveButton.disabled = true;
+        try {
+          await api(`/interactive-games/${encodeURIComponent(game.gameKey)}`, { method: "PUT", body: JSON.stringify({
+            lessonName: document.getElementById("gameLessonName").value.trim(),
+            unitNumber: Number(document.getElementById("gameUnitNumber").value),
+            lessonNumber: Number(document.getElementById("gameLessonNumber").value),
+            timeMode: game.timeMode === "timed" ? "timed" : "open",
+            timePerQuestionSeconds: game.timePerQuestionSeconds,
+            certificatePortfolioEnabled: document.getElementById("gameCertificatePortfolio").checked,
+            isActive: true,
+          }) });
+          closeModal();
+          toast("تم حفظ بيانات اللعبة الفعلية.");
+          await refreshGames();
+        } catch (error) {
+          document.getElementById("gameConfigMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+          saveButton.disabled = false;
+        }
+      };
+    }; });
     return;
   }
   target.innerHTML = `

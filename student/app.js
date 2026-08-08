@@ -401,7 +401,8 @@ function portfolioFileSize(bytes) {
 
 async function portfolio() {
   setActive("portfolio");
-  const data = await api("/portfolio");
+  const [data, gameCatalog] = await Promise.all([api("/portfolio"), api("/games/catalog").catch(() => ({ catalog: [] }))]);
+  const gamePageByKey = new Map((gameCatalog.catalog || []).map((game) => [game.gameKey, game.playPath]));
   content.innerHTML = `
     <section class="portfolio-hero">
       <div><span>📁 مساحتي الخاصة</span><h1>ملف إنجازي</h1><p>اجمعي أعمالكِ المميزة في مكان واحد، واكتبي عنوانًا واضحًا وملاحظة تساعد معلمتكِ على معرفة تفاصيل الإنجاز.</p></div>
@@ -436,11 +437,22 @@ async function portfolio() {
         ${data.files.length ? `<div class="portfolio-files-list">${data.files.map((file) => {
           const meta = portfolioCategoryMeta[file.category] || portfolioCategoryMeta.other;
           const review = portfolioReviewMeta[file.reviewStatus] || portfolioReviewMeta.pending;
-          const kind = file.mimeType === "application/pdf" ? "PDF" : "صورة";
-          return `<article class="portfolio-file-card">
+          const certificateKey = String(file.certificateKey || file.certificate_key || "").trim();
+          const isGameCertificate = Boolean(certificateKey);
+          const duplicateCertificate = isGameCertificate && /\(مكرر\)/.test(String(file.title || ""));
+          const certificateLabel = duplicateCertificate ? "شهادة إتقان (مكرر)" : "شهادة إتقان";
+          const kind = isGameCertificate ? certificateLabel : (file.mimeType === "application/pdf" ? "PDF" : "صورة");
+          const certificateGameKey = certificateKey.split(":u", 1)[0];
+          const certificateGamePath = gamePageByKey.get(certificateGameKey);
+          const action = isGameCertificate && certificateGamePath
+            ? `<a class="secondary-button portfolio-certificate-link" href="${esc(certificateGamePath)}?game=${encodeURIComponent(certificateGameKey)}&certificate=${encodeURIComponent(file.id)}">عرض الشهادة</a>`
+            : isGameCertificate
+              ? '<span class="portfolio-file-meta">تعذّر تحديد واجهة اللعبة لهذه الشهادة.</span>'
+            : `<a class="secondary-button" href="/api/student/portfolio/${file.id}/file" target="_blank" rel="noopener">فتح ملفي</a>`;
+          return `<article class="portfolio-file-card${isGameCertificate ? " portfolio-certificate-card" : ""}">
             <div class="portfolio-file-icon" aria-hidden="true">${meta.icon}</div>
-            <div class="portfolio-file-copy"><div class="portfolio-file-labels"><span>${meta.label}</span><span class="portfolio-student-status ${esc(file.reviewStatus || "pending")}">${review.icon} ${review.label}</span>${file.awardedPoints ? `<span class="portfolio-student-points">+${Number(file.awardedPoints)} نقطة مدار ✨</span>` : ""}</div><h3>${esc(file.title)}</h3>${file.note ? `<p>${esc(file.note)}</p>` : ""}${file.teacherComment ? `<aside class="portfolio-teacher-comment"><strong>تعليق المعلمة</strong><p>${esc(file.teacherComment)}</p></aside>` : ""}<small>${esc(file.originalName)} · ${kind} · ${portfolioFileSize(file.sizeBytes)} · ${studentDate(file.createdAt)}</small></div>
-            <a class="secondary-button" href="/api/student/portfolio/${file.id}/file" target="_blank" rel="noopener">فتح ملفي</a>
+            <div class="portfolio-file-copy"><div class="portfolio-file-labels"><span>${isGameCertificate ? certificateLabel : meta.label}</span><span class="portfolio-student-status ${esc(file.reviewStatus || "pending")}">${review.icon} ${review.label}</span>${file.awardedPoints ? `<span class="portfolio-student-points">+${Number(file.awardedPoints)} نقطة مدار ✨</span>` : ""}</div><h3>${esc(file.title)}</h3>${file.note ? `<p>${esc(file.note)}</p>` : ""}${file.teacherComment ? `<aside class="portfolio-teacher-comment"><strong>تعليق المعلمة</strong><p>${esc(file.teacherComment)}</p></aside>` : ""}<small>${esc(file.originalName)} · ${kind} · ${portfolioFileSize(file.sizeBytes)} · ${studentDate(file.createdAt)}</small></div>
+            ${action}
           </article>`;
         }).join("")}</div>` : '<div class="portfolio-empty"><span aria-hidden="true">📂</span><strong>ملف إنجازكِ ينتظر أول عمل</strong><p>ارفعي واجبًا أو ورقة عمل أو مشروعًا مميزًا ليظهر هنا.</p></div>'}
       </section>
@@ -508,27 +520,41 @@ async function portfolio() {
 
 async function games() {
   setActive("games");
-  const attempts = await api("/games/attempts");
+  const [attempts, gameCatalog] = await Promise.all([
+    api("/games/attempts"),
+    api("/games/catalog"),
+  ]);
+  const availableGames = Array.isArray(gameCatalog?.games) ? gameCatalog.games : [];
+  const gameByKey = new Map(availableGames.map((game) => [game.gameKey, game]));
+  const formatGameNumber = (value) => new Intl.NumberFormat("ar-SA", { useGrouping: false }).format(value);
+  const gameContextData = gameCatalog?.context || {};
+  const gameContext = [
+    ["المرحلة", gameContextData.stageLabel],
+    ["الصف", gameContextData.gradeLabel],
+    ["الفصل", gameContextData.className],
+    ["الفصل الدراسي", gameContextData.semesterLabel],
+  ].map(([label, value]) => ({ label, value: String(value || "").trim() || "—" }));
   const best = attempts.reduce((highest, attempt) => Math.max(highest, Number(attempt.score || 0)), 0);
   content.innerHTML = `
     <section class="hero-card game-hero">
-      <div><h1>الألعاب</h1><p>العبي وتدرّبي؛ تتغير الأسئلة في كل جولة وتُحفظ نتيجتك تلقائيًا.</p></div>
+      <div><h1>الألعاب</h1><p>العبي وتدرّبي؛ تتغير الأسئلة في كل جولة وتُحفظ نتيجتك تلقائيًا.</p><dl class="game-context-strip" aria-label="سياق الألعاب الحالي">${gameContext.map((item) => `<div><dt>${item.label}</dt><dd>${esc(item.value)}</dd></div>`).join("")}</dl></div>
       <span class="style-badge">أفضل نتيجة: ${best}</span>
     </section>
     <section class="game-library">
-      <article class="game-library-card">
-        <div class="game-library-art"><span>%</span><i>✦</i></div>
-        <div class="game-library-copy">
-          <span class="game-tag">النسبة المئوية</span>
-          <h2>تحدي النسبة المئوية</h2>
-          <p>ثلاثة مستويات، وقت ونقاط وتصحيح فوري مع شرح الحل.</p>
-          <div class="game-features"><span>⚡ أسئلة متجددة</span><span>🏆 نقاط</span><span>💡 شرح</span></div>
-          <a class="primary-button game-play-link" href="/games/percentage.html">ابدئي اللعب الآن 🎮</a>
-        </div>
-      </article>
+      ${availableGames.length ? availableGames.map((game) => {
+        const unitNumber = Number(game.unitNumber);
+        const lessonNumber = Number(game.lessonNumber);
+        const lessonCode = `${formatGameNumber(unitNumber)}-${formatGameNumber(lessonNumber)}`;
+        const timeMode = game.timeMode === "timed" ? `${formatGameNumber(game.timePerQuestionSeconds)} ثانية لكل سؤال` : "وقت مفتوح";
+        const playUrl = `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1`;
+        return `<article class="game-library-card">
+          <div class="game-lesson-number">${esc(lessonCode)}</div>
+          <div class="game-library-copy"><h2>تحدي ${esc(game.lessonName)}</h2><p>ثلاثة مستويات، ${esc(timeMode)}، وتصحيح فوري مع شرح الحل في كل جولة.</p><div class="game-features"><span>✦ أسئلة متجددة</span><span>🏆 نقاط</span><span>⏱ ${esc(timeMode)}</span></div><a class="primary-button game-play-link" href="${esc(playUrl)}">ابدئي اللعب الآن 🎮</a></div>
+        </article>`;
+      }).join("") : `<div class="card student-empty-state"><span>🎮</span><strong>لا توجد لعبة جاهزة حاليًا</strong><p>${gameCatalog?.migrationReady ? "ستظهر اللعبة بعد أن تكمل المعلمة بيانات الدرس وتفعّلها." : "يلزم تجهيز بنية الألعاب ثم إضافة بيانات الدرس الفعلية من حساب المعلمة."}</p></div>`}
       <div class="card game-history">
         <h2>آخر محاولاتي</h2>
-        ${attempts.length ? attempts.slice(0, 8).map((attempt) => `<div class="test-row"><div><h3>تحدي النسبة المئوية · ${attempt.difficulty === "easy" ? "سهل" : attempt.difficulty === "medium" ? "متوسط" : "متقدم"}</h3><p>${new Date(attempt.played_at).toLocaleString("ar-SA")} · ${attempt.correct_count}/${attempt.question_count} صحيحة</p></div><strong>${attempt.score} نقطة</strong></div>`).join("") : "<p>لا توجد محاولات محفوظة بعد. ابدئي أول لعبة لكِ!</p>"}
+        ${attempts.length ? attempts.slice(0, 8).map((attempt) => { const game = gameByKey.get(attempt.game_key); return `<div class="test-row"><div><h3>${game ? `تحدي ${esc(game.lessonName)}` : esc(attempt.game_key)} · ${attempt.difficulty === "easy" ? "بسيط" : attempt.difficulty === "medium" ? "متوسط" : "متقدم"}</h3><p>${new Date(attempt.played_at).toLocaleString("ar-SA")} · ${attempt.correct_count}/${attempt.question_count} صحيحة</p></div><strong>${attempt.score} نقطة</strong></div>`; }).join("") : "<p>لا توجد محاولات محفوظة بعد. ابدئي أول لعبة لكِ!</p>"}
       </div>
     </section>`;
 }

@@ -234,7 +234,7 @@ function site_school_settings_json(array $row): array
         'semesterLabel' => $semester === 'second' ? 'الفصل الدراسي الثاني' : 'الفصل الدراسي الأول',
         'periodStartDate' => $row['period_start_date'] ?: '',
         'periodEndDate' => $row['period_end_date'] ?: '',
-        'madarLogoUrl' => '/assets/print/madar-logo.svg',
+        'madarLogoUrl' => '/assets/print/madar-official-logo-transparent.png',
         'visionLogoUrl' => '/vision-2030-logo.png',
         'additionalLogoName' => (string) ($row['additional_logo_original_name'] ?? ''),
         'additionalLogoUrl' => $hasLogo ? '/api/owner/academic-year/additional-logo?v=' . rawurlencode((string) ($row['updated_at'] ?? '')) : '',

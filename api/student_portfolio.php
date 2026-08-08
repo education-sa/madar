@@ -34,6 +34,7 @@ function ensure_student_portfolio_schema(): void
     try {
         Database::connection()->query('SELECT 1 FROM student_portfolio_files LIMIT 1');
         ensure_student_portfolio_review_columns();
+        ensure_student_portfolio_certificate_columns();
         $ready=true;
         return;
     } catch (PDOException) {
@@ -56,16 +57,20 @@ function ensure_student_portfolio_schema(): void
           reviewed_at DATETIME NULL,
           awarded_points SMALLINT UNSIGNED NOT NULL DEFAULT 0,
           motivation_point_id BIGINT UNSIGNED NULL,
+          certificate_key VARCHAR(190) NULL,
+          certificate_data_json LONGTEXT NULL,
           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
           CONSTRAINT fk_portfolio_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
           CONSTRAINT fk_portfolio_reviewer FOREIGN KEY (reviewed_by) REFERENCES teachers(id) ON DELETE SET NULL,
           CONSTRAINT fk_portfolio_point FOREIGN KEY (motivation_point_id) REFERENCES motivational_points(id) ON DELETE SET NULL,
           INDEX idx_portfolio_student_date (student_id,created_at),
           INDEX idx_portfolio_status (review_status),
-          INDEX idx_portfolio_category (category)
+          INDEX idx_portfolio_category (category),
+          UNIQUE INDEX uq_portfolio_student_certificate (student_id,certificate_key)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
     ensure_student_portfolio_review_columns();
+    ensure_student_portfolio_certificate_columns();
     $ready=true;
 }
 
@@ -82,6 +87,22 @@ function ensure_student_portfolio_review_columns(): void
     ];
     foreach ($definitions as $name=>$definition) {
         if (!isset($columns[$name])) execute_sql("ALTER TABLE student_portfolio_files ADD COLUMN {$name} {$definition}");
+    }
+}
+
+function ensure_student_portfolio_certificate_columns(): void
+{
+    $columns=array_fill_keys(array_map(static fn(array $column)=>(string)$column['Field'],fetch_all('SHOW COLUMNS FROM student_portfolio_files')),true);
+    $definitions=[
+        'certificate_key'=>'VARCHAR(190) NULL AFTER motivation_point_id',
+        'certificate_data_json'=>'LONGTEXT NULL AFTER certificate_key',
+    ];
+    foreach ($definitions as $name=>$definition) {
+        if (!isset($columns[$name])) execute_sql("ALTER TABLE student_portfolio_files ADD COLUMN {$name} {$definition}");
+    }
+    $index=fetch_one("SELECT 1 AS ok FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='student_portfolio_files' AND index_name='uq_portfolio_student_certificate' LIMIT 1");
+    if (!$index) {
+        execute_sql('ALTER TABLE student_portfolio_files ADD UNIQUE INDEX uq_portfolio_student_certificate (student_id,certificate_key)');
     }
 }
 
@@ -111,6 +132,7 @@ function portfolio_json_row(array $row): array
         'awardedPoints'=>(int)($row['awarded_points']??0),
         'createdAt'=>$row['created_at'],
     ];
+    if (!empty($row['certificate_key'])) $item['certificateKey']=(string)$row['certificate_key'];
     if (isset($row['student_id'])) $item['studentId']=(int)$row['student_id'];
     if (isset($row['student_name'])) $item['studentName']=(string)$row['student_name'];
     if (isset($row['student_email'])) $item['studentEmail']=(string)$row['student_email'];
@@ -123,14 +145,15 @@ function student_portfolio_routes(string $method,array $segments,int $studentId)
 {
     ensure_student_portfolio_schema();
     if (!$segments && $method==='GET') {
-        $rows=fetch_all('SELECT id,category,title,note,original_name,mime_type,size_bytes,review_status,teacher_comment,reviewed_at,awarded_points,created_at FROM student_portfolio_files WHERE student_id=? ORDER BY created_at DESC,id DESC',[$studentId]);
+        $rows=fetch_all('SELECT id,category,title,note,original_name,mime_type,size_bytes,review_status,teacher_comment,reviewed_at,awarded_points,certificate_key,created_at FROM student_portfolio_files WHERE student_id=? ORDER BY created_at DESC,id DESC',[$studentId]);
         Http::json(['categories'=>portfolio_categories(),'files'=>array_map('portfolio_json_row',$rows)]);
     }
     if (!$segments && $method==='POST') student_portfolio_upload($studentId);
     if (isset($segments[0]) && ($segments[1]??'')==='file' && $method==='GET') {
         $fileId=route_id($segments,0);
-        $row=fetch_one('SELECT id,original_name,stored_name,mime_type,size_bytes FROM student_portfolio_files WHERE id=? AND student_id=?',[$fileId,$studentId]);
+        $row=fetch_one('SELECT id,original_name,stored_name,mime_type,size_bytes,certificate_key FROM student_portfolio_files WHERE id=? AND student_id=?',[$fileId,$studentId]);
         if (!$row) Http::json(['error'=>'الملف غير موجود.'],404);
+        if (!empty($row['certificate_key'])) Http::json(['error'=>'استخدمي زر عرض الشهادة لفتح شهادة الإتقان.'],422);
         portfolio_send_file($row,false);
     }
     Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
@@ -142,7 +165,7 @@ function teacher_student_files_routes(string $method,array $segments,int $teache
     if (!$segments && $method==='GET') {
         $rows=fetch_all(
             'SELECT f.id,f.student_id,f.category,f.title,f.note,f.original_name,f.mime_type,f.size_bytes,
-                    f.review_status,f.teacher_comment,f.reviewed_at,f.awarded_points,f.created_at,
+                    f.review_status,f.teacher_comment,f.reviewed_at,f.awarded_points,f.certificate_key,f.created_at,
                     s.name AS student_name,s.email AS student_email,s.stage,c.name AS class_name
              FROM student_portfolio_files f
              JOIN students s ON s.id=f.student_id
@@ -155,7 +178,7 @@ function teacher_student_files_routes(string $method,array $segments,int $teache
     if (isset($segments[0]) && in_array(($segments[1]??''),['file','download'],true) && $method==='GET') {
         $fileId=route_id($segments,0);
         $row=fetch_one(
-            'SELECT f.id,f.original_name,f.stored_name,f.mime_type,f.size_bytes
+            'SELECT f.id,f.original_name,f.stored_name,f.mime_type,f.size_bytes,f.certificate_key
              FROM student_portfolio_files f
              JOIN students s ON s.id=f.student_id
              JOIN classes c ON c.id=s.class_id
@@ -163,6 +186,7 @@ function teacher_student_files_routes(string $method,array $segments,int $teache
             [$fileId,$teacherId]
         );
         if (!$row) Http::json(['error'=>'الملف غير موجود ضمن طالباتك.'],404);
+        if (!empty($row['certificate_key'])) Http::json(['error'=>'يمكن للطالبة إعادة عرض الشهادة من ملف إنجازها.'],422);
         portfolio_send_file($row,($segments[1]??'')==='download');
     }
     if (isset($segments[0]) && ($segments[1]??'')==='review' && $method==='PUT') teacher_review_portfolio_file(route_id($segments,0),$teacherId);
@@ -305,7 +329,7 @@ function student_portfolio_upload(int $studentId): never
     }
     $id=(int)Database::connection()->lastInsertId();
     Activity::log('student',$studentId,'إضافة ملف إنجاز',$categories[$category].' — '.$title);
-    $row=fetch_one('SELECT id,category,title,note,original_name,mime_type,size_bytes,review_status,teacher_comment,reviewed_at,awarded_points,created_at FROM student_portfolio_files WHERE id=? AND student_id=?',[$id,$studentId]);
+    $row=fetch_one('SELECT id,category,title,note,original_name,mime_type,size_bytes,review_status,teacher_comment,reviewed_at,awarded_points,certificate_key,created_at FROM student_portfolio_files WHERE id=? AND student_id=?',[$id,$studentId]);
     if (!$row) {
         @unlink($path);
         Http::json(['error'=>'تم حفظ الملف لكن تعذّر قراءة بياناته.'],500);
@@ -325,7 +349,7 @@ function portfolio_safe_original_name(string $name,string $extension): string
 function portfolio_send_file(array $row,bool $download=false): never
 {
     $stored=(string)($row['stored_name']??'');
-    if (!preg_match('/^[a-f0-9]{40}\.(?:pdf|jpg|png|webp|gif|avif|heic|heif)$/',$stored)) Http::json(['error'=>'مسار الملف غير صالح.'],404);
+    if (!preg_match('/^[a-f0-9]{40}\.(?:pdf|jpg|png|webp|gif|avif|heic|heif|json)$/',$stored)) Http::json(['error'=>'مسار الملف غير صالح.'],404);
     $path=portfolio_storage_directory().'/'.$stored;
     if (!is_file($path)) Http::json(['error'=>'الملف غير موجود في التخزين.'],404);
     $original=portfolio_safe_original_name((string)($row['original_name']??''),pathinfo($stored,PATHINFO_EXTENSION));
@@ -352,6 +376,6 @@ function portfolio_remove_stored_files(array $storedNames): void
     $directory=MADAR_ROOT.'/storage/private/student-portfolios';
     if (!is_dir($directory)) return;
     foreach($storedNames as $stored) {
-        if (preg_match('/^[a-f0-9]{40}\.(?:pdf|jpg|png|webp|gif|avif|heic|heif)$/',(string)$stored)) @unlink($directory.'/'.(string)$stored);
+        if (preg_match('/^[a-f0-9]{40}\.(?:pdf|jpg|png|webp|gif|avif|heic|heif|json)$/',(string)$stored)) @unlink($directory.'/'.(string)$stored);
     }
 }

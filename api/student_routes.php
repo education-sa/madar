@@ -43,7 +43,25 @@ function handle_student_routes(string $method,array $segments): never
 function student_games_routes(string $method,array $segments,int $studentId): never
 {
     ensure_platform_enhancement_schema();
-    if (($segments[0]??'')!=='attempts') Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
+    $action=$segments[0]??'';
+    if ($action==='catalog' && $method==='GET') {
+        [$student,$settings]=student_game_context($studentId);
+        Http::json([
+            'games'=>interactive_games_for_teacher((int)$student['teacher_id'],true),
+            'catalog'=>array_values(interactive_game_catalog()),
+            'context'=>student_game_academic_context($student,$settings),
+            'migrationReady'=>interactive_games_table_exists(),
+        ]);
+    }
+    if ($action==='config' && $method==='GET') {
+        Http::json(student_game_config($studentId,interactive_game_key($_GET['gameKey']??'')));
+    }
+    if ($action==='certificates') {
+        if ($method==='GET') student_game_certificate_route($studentId, route_id($segments,1));
+        if ($method==='POST') student_game_save_certificate_route($studentId);
+        Http::json(['error'=>'الطريقة غير مسموحة.'],405);
+    }
+    if ($action!=='attempts') Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
     if ($method==='GET') {
         Http::json(fetch_all('SELECT id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds,played_at FROM game_attempts WHERE student_id=? ORDER BY played_at DESC LIMIT 30',[$studentId]));
     }
@@ -51,7 +69,7 @@ function student_games_routes(string $method,array $segments,int $studentId): ne
 
     $data=Http::input();
     Http::requireFields($data,['gameKey','difficulty','score','questionCount','correctCount','bestStreak','durationSeconds']);
-    $gameKey=(string)$data['gameKey'];
+    $gameKey=interactive_game_key($data['gameKey']);
     $difficulty=(string)$data['difficulty'];
     $score=(int)$data['score'];
     $questionCount=(int)$data['questionCount'];
@@ -59,22 +77,331 @@ function student_games_routes(string $method,array $segments,int $studentId): ne
     $bestStreak=(int)$data['bestStreak'];
     $durationSeconds=(int)$data['durationSeconds'];
 
-    if ($gameKey!=='percentage-challenge' || !in_array($difficulty,['easy','medium','hard'],true)) {
+    if (!in_array($difficulty,['easy','medium','hard'],true)) {
         Http::json(['error'=>'بيانات اللعبة غير صالحة.'],422);
     }
     if (!in_array($questionCount,[5,10,15],true) || $correctCount<0 || $correctCount>$questionCount || $bestStreak<0 || $bestStreak>$correctCount) {
         Http::json(['error'=>'نتيجة المحاولة غير صالحة.'],422);
     }
-    if ($score<0 || $score>100000 || $durationSeconds<1 || $durationSeconds>7200) {
+    if ($score<0 || $score>100000 || $durationSeconds<1 || $durationSeconds>86400) {
         Http::json(['error'=>'قيمة النقاط أو الوقت غير صالحة.'],422);
+    }
+
+    [$student,$settings,$game]=student_game_context($studentId,$gameKey);
+    if (!interactive_game_is_configured($game) || !(bool)($game['is_active']??false)) {
+        Http::json(['error'=>'إعدادات هذه اللعبة غير مكتملة أو أنها غير مفعّلة حاليًا.'],422);
     }
 
     $accuracy=round(($correctCount/$questionCount)*100,2);
     execute_sql('INSERT INTO game_attempts (student_id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds) VALUES (?,?,?,?,?,?,?,?,?)',[$studentId,$gameKey,$difficulty,$score,$questionCount,$correctCount,$bestStreak,$accuracy,$durationSeconds]);
     $attemptId=(int)Database::connection()->lastInsertId();
     execute_sql('UPDATE students SET last_active=NOW() WHERE id=?',[$studentId]);
-    Activity::log('student',$studentId,'إكمال لعبة','تحدي النسبة المئوية - '.$accuracy.'%');
-    Http::json(['id'=>$attemptId,'accuracy'=>$accuracy,'saved'=>true],201);
+    $activityName=interactive_game_is_configured($game) ? trim((string)$game['lesson_name']) : $gameKey;
+    Activity::log('student',$studentId,'إكمال لعبة',$activityName.' - '.$accuracy.'%');
+    $certificate=student_game_certificate_after_attempt(
+        $studentId,
+        $attemptId,
+        $gameKey,
+        $difficulty,
+        $score,
+        $accuracy,
+        $correctCount,
+        $questionCount,
+        $durationSeconds
+    );
+    $certificateMessage=$certificate===null
+        ? 'لن تصدر شهادة الإتقان قبل أن تستكمل المعلمة رقم الوحدة ورقم الدرس واسم الدرس في إعدادات اللعبة.'
+        : null;
+    Http::json([
+        'id'=>$attemptId,
+        'accuracy'=>$accuracy,
+        'saved'=>true,
+        'certificate'=>$certificate,
+        'certificateSaved'=>(bool)($certificate['saved']??false),
+        'message'=>$certificateMessage,
+    ],201);
+}
+
+function student_game_config(int $studentId,string $gameKey): array
+{
+    [$student,$settings,$game]=student_game_context($studentId,$gameKey);
+    return array_merge(
+        interactive_game_json($gameKey,$game),
+        student_game_academic_context($student,$settings)
+    );
+}
+
+function student_game_context(int $studentId,?string $gameKey=null): array
+{
+    ensure_teacher_school_settings_schema();
+    $student=fetch_one(
+        'SELECT s.id,s.name AS student_name,c.teacher_id,c.stage AS stage_label,c.grade_label,c.name AS class_name,c.academic_year AS class_academic_year,t.name AS teacher_account_name
+         FROM students s JOIN classes c ON c.id=s.class_id JOIN teachers t ON t.id=c.teacher_id WHERE s.id=?',
+        [$studentId]
+    );
+    if (!$student) Http::json(['error'=>'تعذّر العثور على سياق اللعبة للطالبة.'],404);
+    $settings=fetch_one(
+        'SELECT teacher_name,school_leader_name,current_semester,academic_year FROM teacher_school_settings WHERE teacher_id=? LIMIT 1',
+        [(int)$student['teacher_id']]
+    ) ?: [];
+    if ($gameKey===null) return [$student,$settings];
+    return [$student,$settings,interactive_game_row((int)$student['teacher_id'],$gameKey)];
+}
+
+function student_game_academic_context(array $student,array $settings): array
+{
+    $semesterLabel=match ((string)($settings['current_semester']??'')) {
+        'first'=>'الفصل الدراسي الأول',
+        'second'=>'الفصل الدراسي الثاني',
+        default=>'',
+    };
+    $teacherName=trim((string)($settings['teacher_name']??''));
+    if ($teacherName==='') $teacherName=trim((string)($student['teacher_account_name']??''));
+    return [
+        'teacherName'=>$teacherName,
+        'schoolLeaderName'=>trim((string)($settings['school_leader_name']??'')),
+        'studentName'=>trim((string)($student['student_name']??'')),
+        'stageLabel'=>trim((string)($student['stage_label']??'')),
+        'gradeLabel'=>trim((string)($student['grade_label']??'')),
+        'className'=>trim((string)($student['class_name']??'')),
+        'semesterLabel'=>$semesterLabel,
+        'academicYear'=>trim((string)($settings['academic_year']??'')),
+    ];
+}
+
+function student_game_level_label(string $difficulty): string
+{
+    return match ($difficulty) {
+        'easy'=>'بسيط',
+        'medium'=>'متوسط',
+        'hard'=>'متقدم',
+        default=>'—',
+    };
+}
+
+function student_game_certificate_key_prefix(string $gameKey,array $game): string
+{
+    return sprintf(
+        '%s:u%d:l%d',
+        $gameKey,
+        (int)$game['unit_number'],
+        (int)$game['lesson_number']
+    );
+}
+
+function student_game_certificate_key(string $gameKey,array $game,int $attemptId): string
+{
+    return student_game_certificate_key_prefix($gameKey,$game).':a'.$attemptId;
+}
+
+function student_game_certificate_payload(array $student,array $settings,array $game,int $attemptId,string $gameKey,string $difficulty,int $score,float $accuracy,int $correctCount,int $questionCount,int $durationSeconds): array
+{
+    $context=student_game_academic_context($student,$settings);
+    return [
+        'version'=>2,
+        'studentId'=>(int)$student['id'],
+        'studentName'=>trim((string)($student['student_name']??'')),
+        'gameKey'=>$gameKey,
+        'unitNumber'=>(int)$game['unit_number'],
+        'lessonNumber'=>(int)$game['lesson_number'],
+        'lessonName'=>trim((string)$game['lesson_name']),
+        'level'=>$difficulty,
+        'levelLabel'=>student_game_level_label($difficulty),
+        'score'=>$score,
+        'accuracy'=>$accuracy,
+        'correctCount'=>$correctCount,
+        'questionCount'=>$questionCount,
+        'durationSeconds'=>$durationSeconds,
+        'teacherName'=>$context['teacherName'],
+        'schoolLeaderName'=>$context['schoolLeaderName'],
+        'stageLabel'=>$context['stageLabel'],
+        'gradeLabel'=>$context['gradeLabel'],
+        'className'=>$context['className'],
+        'semesterLabel'=>$context['semesterLabel'],
+        'academicYear'=>$context['academicYear'],
+        'attemptId'=>$attemptId,
+        'issuedAt'=>date(DATE_ATOM),
+    ];
+}
+
+function student_game_certificate_after_attempt(int $studentId,int $attemptId,string $gameKey,string $difficulty,int $score,float $accuracy,int $correctCount,int $questionCount,int $durationSeconds): ?array
+{
+    [$student,$settings,$game]=student_game_context($studentId,$gameKey);
+    if (!interactive_game_is_configured($game)) return null;
+    $payload=student_game_certificate_payload($student,$settings,$game,$attemptId,$gameKey,$difficulty,$score,$accuracy,$correctCount,$questionCount,$durationSeconds);
+    $payload['certificateKey']=student_game_certificate_key($gameKey,$game,$attemptId);
+    $payload['portfolioId']=null;
+    $payload['saved']=false;
+    $payload['enabled']=(bool)$game['certificate_portfolio_enabled'];
+    return $payload;
+}
+
+function student_game_save_certificate_route(int $studentId): never
+{
+    $data=Http::input();
+    $attemptId=filter_var($data['attemptId']??null,FILTER_VALIDATE_INT);
+    if ($attemptId===false || $attemptId===null || $attemptId<1) {
+        Http::json(['error'=>'محاولة اللعبة غير صالحة.'],422);
+    }
+    $attempt=fetch_one(
+        'SELECT id,game_key,difficulty,score,question_count,correct_count,accuracy,duration_seconds FROM game_attempts WHERE id=? AND student_id=? LIMIT 1',
+        [(int)$attemptId,$studentId]
+    );
+    if (!$attempt) Http::json(['error'=>'محاولة اللعبة غير موجودة ضمن حسابكِ.'],404);
+
+    $gameKey=interactive_game_key($attempt['game_key']);
+    [$student,$settings,$game]=student_game_context($studentId,$gameKey);
+    if (!interactive_game_is_configured($game)) {
+        Http::json(['error'=>'أكملي إعدادات اللعبة قبل إرسال شهادة الإتقان إلى ملف الإنجاز.'],422);
+    }
+    if (!(bool)$game['certificate_portfolio_enabled']) {
+        Http::json(['error'=>'إرسال شهادة هذه اللعبة إلى ملف الإنجاز غير مفعّل حاليًا.'],422);
+    }
+
+    $payload=student_game_certificate_payload(
+        $student,
+        $settings,
+        $game,
+        (int)$attempt['id'],
+        (string)$attempt['game_key'],
+        (string)$attempt['difficulty'],
+        (int)$attempt['score'],
+        (float)$attempt['accuracy'],
+        (int)$attempt['correct_count'],
+        (int)$attempt['question_count'],
+        (int)$attempt['duration_seconds']
+    );
+    $payload['certificateKey']=student_game_certificate_key($gameKey,$game,(int)$attempt['id']);
+    $certificate=student_game_store_certificate($studentId,$settings,$game,$payload);
+    Http::json([
+        'certificate'=>$certificate,
+        'saved'=>true,
+        'alreadySaved'=>(bool)($certificate['alreadySaved']??false),
+    ]);
+}
+
+function student_game_store_certificate(int $studentId,array $settings,array $game,array $payload): array
+{
+    ensure_student_portfolio_schema();
+    $certificateKey=(string)$payload['certificateKey'];
+    $certificatePrefix=student_game_certificate_key_prefix((string)$payload['gameKey'],$game);
+    $academicYear=trim((string)($settings['academic_year']??''));
+    $createdPath='';
+    $alreadySaved=false;
+    $portfolioDuplicate=false;
+
+    try {
+        $row=Database::transaction(function(PDO $pdo) use($studentId,$certificateKey,$certificatePrefix,$payload,$academicYear,&$createdPath,&$alreadySaved,&$portfolioDuplicate): array {
+            $select=$pdo->prepare('SELECT id,stored_name,certificate_key,certificate_data_json FROM student_portfolio_files WHERE student_id=? AND certificate_key=? LIMIT 1 FOR UPDATE');
+            $select->execute([$studentId,$certificateKey]);
+            $existing=$select->fetch();
+            if ($existing) {
+                $alreadySaved=true;
+                return $existing;
+            }
+
+            $duplicateCheck=$pdo->prepare('SELECT id FROM student_portfolio_files WHERE student_id=? AND (certificate_key=? OR certificate_key LIKE ?) LIMIT 1 FOR UPDATE');
+            $duplicateCheck->execute([$studentId,$certificatePrefix,$certificatePrefix.':a%']);
+            $portfolioDuplicate=(bool)$duplicateCheck->fetch();
+            $payload['portfolioDuplicate']=$portfolioDuplicate;
+            $certificateJson=json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+            $title='شهادة إتقان'.($portfolioDuplicate?' (مكرر)':'').' — '.$payload['lessonName'];
+            $note='لعبة '.$payload['lessonName'].' · الوحدة '.$payload['unitNumber'].' · الدرس '.$payload['lessonNumber'].' · '.$payload['score'].' نقطة';
+
+            $stored=bin2hex(random_bytes(20)).'.json';
+            $createdPath=portfolio_storage_directory().'/'.$stored;
+            student_game_write_certificate_artifact($stored,$certificateJson);
+            $insert=$pdo->prepare('INSERT INTO student_portfolio_files (student_id,academic_year,category,title,note,original_name,stored_name,mime_type,size_bytes,review_status,certificate_key,certificate_data_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+            $insert->execute([
+                $studentId,
+                $academicYear!==''?$academicYear:null,
+                'achievement_image',
+                $title,
+                $note,
+                student_game_certificate_original_name($payload),
+                $stored,
+                'application/json',
+                strlen($certificateJson),
+                'approved',
+                $certificateKey,
+                $certificateJson,
+            ]);
+            return [
+                'id'=>(int)$pdo->lastInsertId(),
+                'stored_name'=>$stored,
+                'certificate_key'=>$certificateKey,
+                'certificate_data_json'=>$certificateJson,
+            ];
+        });
+    } catch (Throwable $error) {
+        if ($createdPath!=='' && is_file($createdPath)) @unlink($createdPath);
+        throw $error;
+    }
+
+    $result=student_game_certificate_json($row);
+    $portfolioDuplicate=(bool)($result['portfolioDuplicate']??$portfolioDuplicate);
+    $result['saved']=true;
+    $result['enabled']=true;
+    $result['alreadySaved']=$alreadySaved;
+    $result['portfolioDuplicate']=$portfolioDuplicate;
+    return $result;
+}
+
+function student_game_certificate_original_name(array $payload): string
+{
+    return portfolio_safe_original_name(
+        'شهادة-إتقان-'.(string)$payload['unitNumber'].'-'.(string)$payload['lessonNumber'].'-محاولة-'.(string)$payload['attemptId'].'.json',
+        'json'
+    );
+}
+
+function student_game_write_certificate_artifact(string $stored,string $certificateJson): void
+{
+    if (!preg_match('/^[a-f0-9]{40}\.json$/',$stored)) {
+        throw new RuntimeException('اسم ملف الشهادة غير صالح.');
+    }
+    $path=portfolio_storage_directory().'/'.$stored;
+    if (file_put_contents($path,$certificateJson,LOCK_EX)===false) {
+        throw new RuntimeException('تعذّر حفظ بيانات شهادة الإتقان.');
+    }
+    @chmod($path,0640);
+}
+
+function student_game_certificate_json(array $row): array
+{
+    $data=json_decode((string)($row['certificate_data_json']??''),true);
+    if (!is_array($data)) Http::json(['error'=>'تعذّر قراءة بيانات شهادة الإتقان.'],500);
+    $data['portfolioId']=(int)($row['id']??0);
+    $data['certificateKey']=(string)($row['certificate_key']??$data['certificateKey']??'');
+    return $data;
+}
+
+function student_game_certificate_route(int $studentId,int $portfolioId): never
+{
+    ensure_student_portfolio_schema();
+    $row=fetch_one('SELECT id,certificate_key,certificate_data_json FROM student_portfolio_files WHERE id=? AND student_id=? AND certificate_key IS NOT NULL LIMIT 1',[$portfolioId,$studentId]);
+    if (!$row) Http::json(['error'=>'شهادة الإتقان غير موجودة في ملف الإنجاز.'],404);
+    $certificate=student_game_certificate_with_attempt_grade(student_game_certificate_json($row),$studentId);
+    $certificate['saved']=true;
+    $certificate['enabled']=true;
+    $certificate['alreadySaved']=true;
+    Http::json($certificate);
+}
+
+function student_game_certificate_with_attempt_grade(array $certificate,int $studentId): array
+{
+    $correctCount=filter_var($certificate['correctCount']??null,FILTER_VALIDATE_INT);
+    $questionCount=filter_var($certificate['questionCount']??null,FILTER_VALIDATE_INT);
+    if ($correctCount!==false && $questionCount!==false && $correctCount!==null && $questionCount!==null && $questionCount>0) {
+        return $certificate;
+    }
+    $attemptId=filter_var($certificate['attemptId']??null,FILTER_VALIDATE_INT);
+    if ($attemptId===false || $attemptId===null || $attemptId<1) return $certificate;
+    $attempt=fetch_one('SELECT correct_count,question_count FROM game_attempts WHERE id=? AND student_id=? LIMIT 1',[(int)$attemptId,$studentId]);
+    if (!$attempt) return $certificate;
+    $certificate['correctCount']=(int)$attempt['correct_count'];
+    $certificate['questionCount']=(int)$attempt['question_count'];
+    return $certificate;
 }
 
 function student_change_password(int $studentId): never
@@ -289,5 +616,3 @@ function student_results(int $studentId): never
     unset($row);
     Http::json($rows);
 }
-
-

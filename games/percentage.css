@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&family=Noto+Naskh+Arabic:wght@400;500;700;800;900&display=swap");
-
 :root {
   --purple-950: #25104f;
   --purple-900: #35136f;
@@ -64,7 +62,7 @@ a { color: inherit; text-decoration: none; }
   backdrop-filter: blur(18px);
 }
 .game-brand { display: flex; align-items: center; gap: 11px; }
-.brand-mark { width: 52px; height: 52px; display: grid; place-items: center; color: white; font-size: 22px; border-radius: 50%; background: linear-gradient(135deg,var(--purple-700),var(--purple-900)); box-shadow: inset 0 0 0 6px rgba(255,255,255,.18), 0 8px 18px rgba(61,25,135,.25); }
+.brand-logo { width: 58px; height: 58px; flex: 0 0 auto; object-fit: contain; }
 .game-brand > span:last-child { display: flex; flex-direction: column; line-height: 1; }
 .game-brand strong { font-size: 2rem; font-weight: 900; color: var(--purple-900); }
 .game-brand small { margin-top: 7px; color: var(--purple-700); font-size: .72rem; font-weight: 700; }
@@ -79,7 +77,7 @@ a { color: inherit; text-decoration: none; }
 @keyframes screenIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 
 /* شاشة الإعدادات */
-.setup-screen.active { min-height: 620px; display: grid; grid-template-columns: minmax(0,1.15fr) minmax(330px,.85fr); align-items: stretch; overflow: hidden; border: 1px solid rgba(229,219,247,.9); border-radius: 36px; background: rgba(255,255,255,.9); box-shadow: var(--shadow); }
+.setup-screen.active { width: min(820px, 100%); min-height: 0; margin-inline: auto; overflow: hidden; border: 1px solid rgba(229,219,247,.9); border-radius: 36px; background: rgba(255,255,255,.9); box-shadow: var(--shadow); }
 .setup-copy { position: relative; z-index: 2; padding: clamp(28px,4vw,56px); }
 .eyebrow { display: inline-flex; padding: 8px 13px; border-radius: 999px; color: var(--purple-700); background: var(--purple-100); font-size: .84rem; font-weight: 800; }
 .setup-copy h1 { margin: 18px 0 10px; color: var(--purple-950); font-size: clamp(2.4rem,4.5vw,4.5rem); line-height: 1; font-weight: 900; }
@@ -104,26 +102,15 @@ a { color: inherit; text-decoration: none; }
 
 .start-button { min-height: 54px; padding: 13px 25px; border: 0; border-radius: 17px; color: white; background: linear-gradient(135deg,var(--teal),#159c9e); box-shadow: 0 13px 28px rgba(26,167,165,.25); font-size: 1.08rem; font-weight: 900; transition: .2s ease; width: 100%; }
 .start-button:hover { transform: translateY(-2px); box-shadow: 0 16px 32px rgba(26,167,165,.32); }
+.setup-actions { display: grid; gap: 10px; }
+.setup-back-link { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 42px; width: fit-content; margin-inline: auto; padding: 8px 12px; border-radius: 11px; color: var(--purple-800); font-size: .84rem; font-weight: 800; transition: color .18s ease, background .18s ease; }
+.setup-back-link:hover { color: var(--purple-950); background: var(--purple-100); }
+.setup-back-link:focus-visible { outline: 3px solid rgba(97,55,200,.28); outline-offset: 3px; }
 .best-score { margin-top: 10px !important; text-align: center; font-size: .82rem !important; color: var(--muted); }
-
-/* الرسم الجانبي بدون مستطيل % */
-.setup-visual { position: relative; min-height: 100%; display: grid; place-items: center; overflow: hidden; isolation: isolate; background: radial-gradient(circle at 50% 45%,rgba(255,255,255,.95),rgba(233,225,255,.75) 34%,rgba(62,25,137,.96) 75%); }
-.interactive-math-target { position: relative; width: min(250px,46vw); aspect-ratio: 1; display: grid; place-items: center; border-radius: 50%; background: radial-gradient(circle at 35% 28%,#fff,#d9cdf9 34%,#6c46bd 68%,#32136f); box-shadow: inset -18px -24px 40px rgba(28,8,72,.35),0 30px 70px rgba(24,7,68,.4); animation: planetFloat 4s ease-in-out infinite; }
-.target-center-star { color: var(--gold); font-size: 5.5rem; text-shadow: 0 0 30px rgba(255,197,61,.8); }
-.target-glow { position: absolute; inset: -28px; z-index: -1; border-radius: 50%; background: rgba(120,222,214,.25); filter: blur(20px); }
-.orbit { position: absolute; width: 420px; aspect-ratio: 1; border: 2px solid rgba(255,255,255,.25); border-radius: 50%; transform: rotate(28deg) scaleY(.45); }
-.orbit-two { width: 520px; transform: rotate(-28deg) scaleY(.38); }
-.spark { position: absolute; color: var(--gold); font-style: normal; animation: sparkle 2s ease-in-out infinite; }
-.spark-one { top: 2%; right: 13%; font-size: 2rem; }.spark-two { left: -12%; bottom: 20%; }.spark-three { right: 4%; bottom: -8%; font-size: 1.4rem; }
-
-.floating-pill { position: absolute; min-width: 120px; padding: 10px 14px; display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,.8); border-radius: 18px; background: rgba(255,255,255,.88); box-shadow: 0 15px 34px rgba(24,7,67,.2); backdrop-filter: blur(8px); animation: planetFloat 4s ease-in-out infinite; }
-.floating-pill b { color: var(--purple-900); font-size: 1.15rem; }.floating-pill span { color: var(--muted); font-size: .78rem; font-weight: 700; }
-.pill-a { top: 18%; right: 6%; }.pill-b { bottom: 18%; left: 6%; animation-delay: -1.5s; }
-@keyframes planetFloat { 50% { transform: translateY(-10px); } }
-@keyframes sparkle { 50% { opacity: .35; transform: scale(.65) rotate(30deg); } }
 
 /* شاشة الأسئلة واللعب */
 .play-screen { max-width: 980px; margin-inline: auto; }
+.play-screen.active { min-height: calc(100vh - 158px); display: flex; flex-direction: column; justify-content: center; }
 .play-topbar { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 20px; background: rgba(255,255,255,.9); }
 .progress-copy { display: flex; flex-direction: column; min-width: 130px; }.progress-copy span { color: var(--muted); font-size: .82rem; }.progress-copy strong { color: var(--purple-900); }
 .progress-track { height: 10px; overflow: hidden; border-radius: 99px; background: #eee9f6; }.progress-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg,var(--teal),var(--purple-700)); transition: width .35s ease; }
@@ -135,9 +122,6 @@ a { color: inherit; text-decoration: none; }
 
 .question-card { position: relative; min-height: 500px; padding: clamp(24px,4vw,46px); overflow: hidden; border: 1px solid var(--line); border-radius: 31px; background: rgba(255,255,255,.96); box-shadow: var(--shadow); }
 .question-meta { display: flex; justify-content: space-between; gap: 14px; }.question-meta span { padding: 7px 11px; border-radius: 999px; color: var(--purple-700); background: var(--purple-100); font-size: .8rem; font-weight: 800; }.question-meta span:last-child { color: #9a5b00; background: #fff4d8; }
-.question-visual-ring { min-height: 70px; margin: 16px auto 5px; display: flex; align-items: center; justify-content: center; gap: 8px; }
-.percent-circle-ring { width: 60px; height: 60px; border-radius: 50%; border: 4px solid var(--teal); display: grid; place-items: center; color: var(--purple-900); font-weight: 900; background: var(--purple-100); }
-
 .question-card h2 { max-width: 760px; min-height: 72px; margin: 12px auto 4px; text-align: center; color: var(--purple-950); font-size: clamp(1.45rem,3vw,2.2rem); line-height: 1.55; }
 .question-hint { margin: 0 0 20px; text-align: center; color: var(--muted); }
 .answer-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; }
@@ -171,14 +155,16 @@ a { color: inherit; text-decoration: none; }
 /* ============================================================
    تصميم الشهادة المطابق للصورة المرفقة بالكامل 100%
    ============================================================ */
-.cert-modal-overlay { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(23,11,48,.88); backdrop-filter: blur(12px); overflow-y: auto; }
-.cert-modal-container { position: relative; width: min(960px, 95vw); background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 30px 90px rgba(0,0,0,.45); }
-.cert-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 22px; background: var(--purple-950); color: white; }
+.cert-modal-overlay { position: fixed; inset: 0; z-index: 999; display: flex; align-items: flex-start; justify-content: center; padding: 20px; background: rgba(23,11,48,.88); backdrop-filter: blur(12px); overflow-y: auto; }
+.cert-modal-container { position: relative; width: min(960px, calc(100vw - 40px)); max-height: calc(100vh - 40px); margin: 0 auto; overflow: auto; background: white; border-radius: 20px; box-shadow: 0 30px 90px rgba(0,0,0,.45); }
+.cert-modal-header { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; justify-content: space-between; padding: 14px 22px; background: var(--purple-950); color: white; }
 .cert-modal-header h3 { margin: 0; font-size: 1.1rem; color: var(--gold); }
 .cert-modal-actions { display: flex; gap: 10px; }
 .btn-print { padding: 9px 18px; border: 0; border-radius: 12px; background: var(--gold); color: var(--purple-950); font-weight: 900; font-size: .95rem; }
 .btn-print:hover { background: #ffe07d; }
 .btn-close { padding: 9px 16px; border: 1px solid rgba(255,255,255,.3); border-radius: 12px; background: transparent; color: white; font-weight: 800; }
+.btn-save-certificate { padding: 9px 14px; border: 0; border-radius: 12px; color: white; background: linear-gradient(135deg,var(--teal),#159c9e); box-shadow: 0 9px 20px rgba(26,167,165,.2); font-weight: 900; white-space: nowrap; }
+.btn-save-certificate:disabled { cursor: default; color: #386d69; background: #e5f5f2; box-shadow: none; }
 
 /* جسم ورقة الشهادة المطلوبة في الصورة */
 .certificate-paper-exact {
@@ -509,4 +495,94 @@ a { color: inherit; text-decoration: none; }
   .no-print { display: none !important; }
   .certificate-paper-exact { padding: 20px; page-break-inside: avoid; }
   @page { size: A4 landscape; margin: 0; }
+}
+
+/* رحلة اللعبة الجديدة: مدار هادئ ومركّز */
+.game-header,
+.game-shell { width: min(1120px, calc(100% - 32px)); }
+
+.game-shell { margin-top: 24px; }
+.setup-screen.active { width: min(820px, 100%); min-height: 0; }
+.eyebrow { border: 1px solid #ded0fb; border-radius: 12px; }
+.play-lesson-meta { margin-top: 4px; color: var(--teal-dark); font-size: .73rem; font-weight: 800; }
+.timer-stat.is-open { border-color: #bce9e4; background: linear-gradient(135deg, #f7fffe, #ebfaf7); }
+.timer-stat.is-open strong { color: var(--teal-dark); font-size: 1.18rem; }
+.timer-ring[hidden] { display: none; }
+
+.certificate-paper-exact {
+  aspect-ratio: 297 / 210;
+  padding: clamp(15px, 2.1vw, 27px);
+  border-radius: 0 0 18px 18px;
+}
+
+.exact-cert-border { height: 100%; padding: clamp(7px, .9vw, 12px); }
+.exact-cert-inner { min-height: 0; height: 100%; padding: clamp(18px, 3vw, 38px); gap: 8px; }
+.exact-cert-content { margin-top: 0; display: flex; flex-direction: column; align-items: center; }
+.exact-cert-topbar { direction: ltr; margin-bottom: 2px; }
+.cert-brand-lockup { direction: ltr; }
+.cert-brand-copy { direction: rtl; align-items: flex-start; text-align: right; }
+.cert-madar-logo { width: clamp(54px, 7vw, 82px); height: clamp(54px, 7vw, 82px); }
+.cert-badge { padding: 7px 12px; border-radius: 11px; font-size: .75rem; }
+.exact-cert-title { margin: clamp(7px, 1.2vw, 16px) 0 3px; font-size: clamp(2.1rem, 4vw, 3.45rem); line-height: 1.15; }
+.exact-cert-sub { margin: 0 0 5px; font-size: clamp(.95rem, 1.75vw, 1.3rem); line-height: 1.35; }
+.exact-cert-student { margin: 0 0 4px; font-size: clamp(1.65rem, 3vw, 2.38rem); line-height: 1.25; }
+.exact-cert-lesson { margin: 0; font-size: clamp(1.1rem, 2.1vw, 1.55rem); line-height: 1.35; }
+.certificate-lesson-code { margin: 5px 0 7px; padding: 5px 10px; border: 1px solid #d7c9f4; border-radius: 10px; color: var(--purple-800); background: rgba(241, 235, 255, .75); font-size: clamp(.72rem, 1.3vw, .92rem); font-weight: 800; line-height: 1.25; }
+.certificate-academic-context { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 10px; margin: 0 0 6px; color: #6f627f; font-size: clamp(.66rem, 1.05vw, .8rem); line-height: 1.25; }
+.certificate-academic-context span { white-space: nowrap; }
+.certificate-academic-context strong { margin-inline-start: 3px; color: var(--purple-900); }
+.certificate-facts { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }
+.certificate-facts span { padding: 5px 9px; border: 1px solid rgba(112, 80, 191, .18); border-radius: 9px; color: #5d5270; background: rgba(255, 255, 255, .7); font-size: clamp(.72rem, 1.25vw, .9rem); line-height: 1.3; }
+.certificate-facts strong { margin-inline-start: 4px; color: var(--purple-900); }
+.certificate-issued { min-height: 1.2em; margin: 5px 0 0; color: #786a8c; font-size: .72rem; line-height: 1.25; }
+.exact-cert-footer { padding: 0 clamp(0px, 3vw, 30px); gap: clamp(8px, 2vw, 20px); }
+.exact-sig-col { min-width: min(210px, 42%); padding: clamp(6px, .9vw, 10px); border-radius: 12px; }
+.exact-sig-label { margin-bottom: 2px; font-size: clamp(.78rem, 1.35vw, 1rem); line-height: 1.25; }
+.exact-sig-value { margin-bottom: 4px; font-size: clamp(.72rem, 1.25vw, .96rem); line-height: 1.25; }
+.exact-sig-line { height: 3px; }
+
+@media (max-width: 760px) {
+  .game-header { width: min(100% - 20px, 1120px); min-height: 0; margin-top: 10px; padding: 11px 13px; border-radius: 20px; }
+  .game-header .game-brand strong { font-size: 1.55rem; }
+  .game-header .game-brand small, .player-chip { display: none; }
+  .header-actions { gap: 6px; }
+  .back-link { padding: 10px; font-size: .82rem; }
+  .game-shell { width: min(100% - 20px, 1120px); margin-top: 12px; }
+  .setup-screen.active { width: 100%; min-height: 0; border-radius: 25px; }
+  .setup-copy { padding: 26px 20px; }
+  .setup-copy h1 { font-size: 2.35rem; }
+  .play-screen.active { min-height: 0; }
+  .level-options { grid-template-columns: 1fr; }
+  .level-card { min-height: 84px; flex-direction: row; justify-content: flex-start; gap: 10px; text-align: right; }
+  .level-card small { margin-top: 0; }
+  .round-options { align-items: flex-start; flex-direction: column; }
+  .play-topbar { grid-template-columns: 1fr auto; gap: 10px; }
+  .progress-track { grid-column: 1 / -1; }
+  .stats-row { grid-template-columns: 1fr; }
+  .question-card { min-height: 0; padding: 22px 17px; border-radius: 24px; }
+  .answer-grid { grid-template-columns: 1fr; }
+  .result-grid { grid-template-columns: repeat(2, 1fr); }
+  .result-actions { flex-direction: column; }
+  .cert-modal-overlay { align-items: flex-start; padding: 8px; }
+  .cert-modal-container { width: 100%; margin: 0; border-radius: 15px; }
+  .cert-modal-header { align-items: flex-start; flex-direction: column; gap: 9px; padding: 13px; }
+  .cert-modal-actions { width: 100%; }.cert-modal-actions button { flex: 1; padding: 9px 8px; font-size: .74rem; }
+  .certificate-paper-exact { aspect-ratio: auto; padding: 10px; }
+  .btn-save-certificate { min-width: 0; }
+  .exact-cert-inner { min-height: 570px; padding: 18px 12px; }
+  .exact-cert-topbar { align-items: center; flex-direction: column; }
+  .cert-brand-lockup { justify-content: center; }.cert-brand-copy { align-items: center; text-align: center; }
+  .exact-cert-title { margin-top: 12px; font-size: 2.3rem; }
+  .exact-cert-footer { align-items: stretch; flex-direction: column; margin-top: 6px; }
+  .exact-sig-col { min-width: 0; }
+}
+
+@media print {
+  html, body { width: 297mm; height: 210mm; background: #fff; }
+  .cert-modal-overlay { width: 297mm; height: 210mm; }
+  .cert-modal-container { width: 297mm; height: 210mm; overflow: hidden; }
+  .certificate-paper-exact { width: 297mm; height: 210mm; min-height: 210mm; padding: 7mm; border-radius: 0; }
+  .exact-cert-border { padding: 3mm; }
+  .exact-cert-inner { padding: 7mm 10mm; }
+  .no-print { display: none !important; }
 }

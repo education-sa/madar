@@ -23,12 +23,22 @@ const state = {
   sound: localStorage.getItem("madar-game-sound") !== "off",
   student: null,
   csrf: "",
+  gameConfig: null,
+  certificate: null,
+  certificateSaving: false,
 };
 
-const levelConfig = {
-  easy: { label: "المستوى المبتدئ", seconds: 25, multiplier: 1 },
-  medium: { label: "المستوى المتوسط", seconds: 22, multiplier: 1.35 },
-  hard: { label: "المستوى المحترف", seconds: 28, multiplier: 1.75 },
+const levelConfig = MadarInteractiveGame.levels;
+
+const defaultGameConfig = {
+  unitNumber: null,
+  lessonNumber: null,
+  lessonName: "",
+  timeMode: "open",
+  timePerQuestionSeconds: null,
+  certificatePortfolioEnabled: false,
+  teacherName: "",
+  schoolLeaderName: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -36,6 +46,71 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const random = (items) => items[Math.floor(Math.random() * items.length)];
 const roundSmart = (value) => Number.isInteger(value) ? value : Number(value.toFixed(1));
 const formatNumber = (value) => new Intl.NumberFormat("ar-SA", { maximumFractionDigits: 1 }).format(value);
+const isTeacherGameContext = new URLSearchParams(window.location.search).get("from") === "teacher";
+const requestedGameKey = new URLSearchParams(window.location.search).get("game") || document.body.dataset.gameKey;
+const gameRuntime = new MadarInteractiveGame.Runtime({ gameKey: requestedGameKey, teacherPreview: isTeacherGameContext });
+const gameKey = gameRuntime.gameKey;
+const siteHomePath = MadarInteractiveGame.siteHomePath;
+const gamesHomePath = MadarInteractiveGame.gamesHomePath(isTeacherGameContext);
+const formatDurationArabic = MadarInteractiveGame.formatDurationArabic;
+
+function numericOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function normalizedGameConfig(value = {}) {
+  return {
+    ...defaultGameConfig,
+    ...value,
+    unitNumber: numericOrNull(value.unitNumber ?? value.unit_number),
+    lessonNumber: numericOrNull(value.lessonNumber ?? value.lesson_number),
+    lessonName: String(value.lessonName ?? value.lesson_name ?? defaultGameConfig.lessonName).trim() || defaultGameConfig.lessonName,
+    timeMode: (value.timeMode ?? value.time_mode) === "timed" ? "timed" : "open",
+    timePerQuestionSeconds: (value.timeMode ?? value.time_mode) === "timed"
+      ? clamp(Number(value.timePerQuestionSeconds ?? value.time_per_question_seconds), 15, 120)
+      : null,
+    certificatePortfolioEnabled: Boolean(value.certificatePortfolioEnabled ?? value.certificate_portfolio_enabled),
+    teacherName: String(value.teacherName ?? value.teacher_name ?? "").trim(),
+    schoolLeaderName: String(value.schoolLeaderName ?? value.school_leader_name ?? "").trim(),
+  };
+}
+
+function lessonMeta(config = state.gameConfig || defaultGameConfig) {
+  const unit = numericOrNull(config.unitNumber);
+  const lesson = numericOrNull(config.lessonNumber);
+  if (!unit && !lesson) return "الوحدة — · الدرس —";
+  return `الوحدة ${unit || "—"} · الدرس ${lesson || "—"}`;
+}
+
+function setText(id, value, fallback = "—") {
+  const element = $(id);
+  if (element) element.textContent = String(value ?? "").trim() || fallback;
+}
+
+function applyGameConfig(config) {
+  state.gameConfig = normalizedGameConfig(config);
+  const meta = lessonMeta();
+  setText("setupLessonMeta", meta);
+  setText("playLessonMeta", meta);
+  setText("setupLessonName", state.gameConfig.lessonName);
+  document.body.dataset.timeMode = state.gameConfig.timeMode;
+  const startButton = $("startButton");
+  if (startButton && !isTeacherGameContext) {
+    const ready = Boolean(state.gameConfig.configured && state.gameConfig.isActive);
+    startButton.disabled = !ready;
+    startButton.textContent = ready ? "ابدئي التحدي" : "إعداد اللعبة غير مكتمل";
+  }
+}
+
+async function loadGameConfig() {
+  try {
+    const data = await gameRuntime.loadConfig();
+    applyGameConfig(data.gameConfig || data.config || data);
+  } catch (_) {
+    applyGameConfig(defaultGameConfig);
+  }
+}
 
 function showScreen(name) {
   Object.entries(screens).forEach(([key, element]) => element.classList.toggle("active", key === name));
@@ -171,7 +246,8 @@ function renderQuestion() {
   clearInterval(state.timer);
   state.answered = false;
   state.question = createQuestion();
-  state.questionTime = levelConfig[state.level].seconds;
+  const timed = state.gameConfig?.timeMode === "timed";
+  state.questionTime = timed ? state.gameConfig.timePerQuestionSeconds : levelConfig[state.level].seconds;
   state.timeLeft = state.questionTime;
   
   $("questionCounter").textContent = `السؤال ${state.index + 1} من ${state.total}`;
@@ -181,7 +257,6 @@ function renderQuestion() {
   $("questionSkill").textContent = state.question.skill;
   $("questionPoints").textContent = `+${Math.round(100 * levelConfig[state.level].multiplier)} نقطة`;
   
-  $("questionVisual").innerHTML = `<div class="percent-circle-ring">✦</div>`;
   $("questionText").textContent = state.question.text;
   $("questionHint").textContent = state.question.hint || "اختاري الإجابة الصحيحة:";
   
@@ -201,18 +276,25 @@ function renderQuestion() {
   });
 
   updateTimerUI();
-  state.timer = setInterval(() => {
-    state.timeLeft -= 1;
-    updateTimerUI();
-    if (state.timeLeft <= 0) {
-      clearInterval(state.timer);
-      handleAnswer(null, null);
-    }
-  }, 1000);
+  if (timed) {
+    state.timer = setInterval(() => {
+      state.timeLeft -= 1;
+      updateTimerUI();
+      if (state.timeLeft <= 0) {
+        clearInterval(state.timer);
+        handleAnswer(null, null);
+      }
+    }, 1000);
+  }
 }
 
 function updateTimerUI() {
-  $("timerValue").textContent = Math.max(0, state.timeLeft);
+  const timed = state.gameConfig?.timeMode === "timed";
+  $("timerStat").classList.toggle("is-open", !timed);
+  $("timerLabel").textContent = timed ? "الوقت المتبقي" : "وقت مرن";
+  $("timerValue").textContent = timed ? Math.max(0, state.timeLeft) : "مرن";
+  $("timerRing").hidden = !timed;
+  if (!timed) return;
   const percent = Math.max(0, (state.timeLeft / state.questionTime) * 100);
   $("timerRing").style.setProperty("--timer-progress", `${percent}%`);
 }
@@ -236,7 +318,9 @@ function handleAnswer(selectedValue, targetButton) {
     state.correct += 1;
     state.streak += 1;
     state.bestStreak = Math.max(state.bestStreak, state.streak);
-    const speedBonus = Math.round(state.timeLeft * 4);
+    const speedBonus = state.gameConfig?.timeMode === "timed"
+      ? Math.round(Math.min(state.timeLeft, levelConfig[state.level].seconds) * 4)
+      : 0;
     const streakBonus = Math.min(50, Math.max(0, state.streak - 1) * 10);
     state.score += Math.round((100 + speedBonus + streakBonus) * levelConfig[state.level].multiplier);
     $("feedbackIcon").textContent = "✓";
@@ -246,8 +330,9 @@ function handleAnswer(selectedValue, targetButton) {
   } else {
     if (targetButton) targetButton.classList.add("wrong");
     state.streak = 0;
-    $("feedbackIcon").textContent = state.timeLeft <= 0 ? "⏱" : "×";
-    $("feedbackTitle").textContent = state.timeLeft <= 0 ? "انتهى الوقت" : "ليست الإجابة الصحيحة";
+    const timeEnded = state.gameConfig?.timeMode === "timed" && state.timeLeft <= 0;
+    $("feedbackIcon").textContent = timeEnded ? "⏱" : "×";
+    $("feedbackTitle").textContent = timeEnded ? "انتهى الوقت" : "ليست الإجابة الصحيحة";
     $("feedback").classList.add("wrong");
     $("questionCard").classList.add("shake-wrong");
     playTone("wrong");
@@ -276,14 +361,6 @@ function startGame() {
   renderQuestion();
 }
 
-function formatDurationArabic(seconds) {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (mins === 0) return `${secs} ثانية`;
-  if (secs === 0) return `${mins} ${mins === 1 ? "دقيقة" : mins === 2 ? "دقيقتين" : "دقائق"}`;
-  return `${mins} ${mins === 1 ? "دقيقة" : mins === 2 ? "دقيقتين" : "دقائق"} و ${secs} ثانية`;
-}
-
 function finishGame() {
   clearInterval(state.timer);
   const duration = Math.max(1, Math.round((Date.now() - state.startedAt) / 1000));
@@ -291,7 +368,7 @@ function finishGame() {
   const accuracy = Math.round((state.correct / state.total) * 100);
   state.lastAccuracy = accuracy;
   
-  const bestKey = `madar-percentage-best-${state.level}`;
+  const bestKey = `madar-game-best-${gameKey}-${state.level}`;
   const previousBest = Number(localStorage.getItem(bestKey) || 0);
   if (state.score > previousBest) localStorage.setItem(bestKey, String(state.score));
 
@@ -303,57 +380,127 @@ function finishGame() {
   
   $("resultBadge").textContent = accuracy >= 90 ? "🏆" : accuracy >= 70 ? "⭐" : "🚀";
   $("resultTitle").textContent = accuracy >= 90 ? "مبارك الإنجاز والتفوق!" : accuracy >= 70 ? "أحسنتِ وصنعتِ نتيجة ممتازة!" : "بداية موفقة!";
-  $("resultMessage").textContent = accuracy >= 90 ? "أصبحتِ نجمة النسبة المئوية واجتزتِ التحدي بتفوق." : accuracy >= 70 ? "نتيجة جميلة، استخرجي شهادتكِ وحاولي كسر رقمكِ." : "كل جولة تقربكِ أكثر من الإتقان.";
+  $("resultMessage").textContent = accuracy >= 90 ? "أصبحتِ نجمة الدرس واجتزتِ التحدي بتفوق." : accuracy >= 70 ? "نتيجة جميلة، استخرجي شهادتكِ وحاولي كسر رقمكِ." : "كل جولة تقربكِ أكثر من الإتقان.";
   
-  $("saveStatus").textContent = "اكتملت اللعبة بنجاح! جاهزة لاستخراج شهادة الاجتياز المعتمدة باسمكِ.";
+  state.certificate = null;
+  state.certificateSaving = false;
+  updateCertificateButton();
+  $("saveStatus").textContent = state.student
+    ? "يجري حفظ نتيجة الجولة والتحقق من اكتمال بيانات الشهادة…"
+    : "اكتملت الجولة. سجّلي الدخول كطالبة ليُحفظ الإنجاز.";
   
   createConfetti();
   showScreen("result");
   playTone("finish");
-  if (state.student) saveAttempt({ duration, accuracy });
+  if (state.student) {
+    saveAttempt({ duration, accuracy }).then((response) => {
+      state.certificate = response?.certificate || null;
+      updateCertificateButton();
+      if (state.certificate) {
+        $("saveStatus").textContent = certificateCanBeSaved(state.certificate)
+          ? "حُفظت النتيجة، وشهادة الإتقان جاهزة للعرض والإرسال إلى ملف إنجازكِ."
+          : "حُفظت النتيجة، وشهادة الإتقان جاهزة للعرض.";
+      } else $("saveStatus").textContent = response?.message || "حُفظت النتيجة، ولن تصدر الشهادة قبل اكتمال بيانات اللعبة.";
+    });
+  }
 }
 
-/* فتح الشهادة المطابقة للصورة المرفقة بالكامل مع جلب البيانات تلقائياً */
-async function openCertificate() {
-  await detectStudent();
+function certificateCanBeSaved(certificate = state.certificate) {
+  const attemptId = Number(certificate?.attemptId);
+  return certificate?.enabled !== false
+    && state.gameConfig?.certificatePortfolioEnabled !== false
+    && Number.isInteger(attemptId) && attemptId > 0
+    && numericOrNull(certificate?.unitNumber) !== null
+    && numericOrNull(certificate?.lessonNumber) !== null
+    && String(certificate?.lessonName || "").trim() !== "";
+}
 
-  if (!state.student || !state.student.name) {
-    toast("الشهادة متاحة للطالبات فقط.");
+function updateCertificateButton() {
+  const button = $("showCertButton");
+  if (button) button.hidden = !state.certificate;
+  updateCertificatePortfolioButton();
+}
+
+function certificateIsSaved(certificate = state.certificate) {
+  return Boolean(certificate?.saved) || Number(certificate?.portfolioId) > 0;
+}
+
+function updateCertificatePortfolioButton() {
+  const button = $("saveCertificateButton");
+  if (!button) return;
+  const hasCertificate = Boolean(state.certificate);
+  const canSave = certificateCanBeSaved();
+  const saved = certificateIsSaved();
+  button.hidden = !hasCertificate || !canSave;
+  button.disabled = !hasCertificate || !canSave || !state.student || state.certificateSaving || saved;
+  button.textContent = saved
+    ? "تم الإرسال إلى ملف الإنجاز ✓"
+    : state.certificateSaving
+      ? "جارٍ الإرسال إلى ملف الإنجاز…"
+      : state.student
+        ? "إرسال إلى ملف الإنجاز"
+        : "سجّلي الدخول لإرسال الشهادة";
+}
+
+function renderCertificate(certificate) {
+  MadarInteractiveGame.certificate.render(certificate, state.gameConfig || defaultGameConfig);
+  updateCertificatePortfolioButton();
+}
+
+function openCertificate() {
+  if (!state.certificate) {
+    toast("لا توجد شهادة إتقان متاحة لهذه الجولة حتى الآن.");
     return;
   }
-
-  const studentName = String(state.student.name).trim();
-  const teacherName = (state.student.teacher_name ? String(state.student.teacher_name).trim() : "") || "أ. نورة الشهري";
-  const principalName = (state.student.school_leader_name || state.student.principal_name ? String(state.student.school_leader_name || state.student.principal_name).trim() : "") || "أ. سارة العتيبي";
-
-  const formattedDuration = formatDurationArabic(state.lastDuration || 80);
-  const scoreText = `${state.score} نقطة`;
-
-  $("displayCertStudentName").textContent = studentName;
-  $("displayCertLessonName").textContent = "النسبة المئوية";
-  $("displayCertScore").textContent = scoreText;
-  $("displayCertDuration").textContent = formattedDuration;
-  $("displayCertTeacher").textContent = teacherName;
-  $("displayCertPrincipal").textContent = principalName;
-
-  $("certModal").hidden = false;
-  document.body.style.overflow = "hidden";
-}
-
-function goToPortfolio() {
-  sessionStorage.setItem("madar-student-view", "portfolio");
-  window.location.assign("/student/index.html");
+  MadarInteractiveGame.certificate.open(state.certificate, state.gameConfig || defaultGameConfig);
+  updateCertificatePortfolioButton();
 }
 
 function closeCertificate() {
-  $("certModal").hidden = true;
-  document.body.style.overflow = "";
+  MadarInteractiveGame.certificate.close();
 }
 
-function sendCertificateToPortfolio() {
-  closeCertificate();
-  if (state.student && state.student.name) {
-    goToPortfolio();
+async function saveCurrentCertificateToPortfolio() {
+  if (!state.certificate || certificateIsSaved()) {
+    updateCertificatePortfolioButton();
+    return;
+  }
+  if (!certificateCanBeSaved()) {
+    toast("يمكنكِ عرض الشهادة الآن، وسيظهر إرسالها إلى ملف الإنجاز بعد ضبط بيانات الدرس.");
+    return;
+  }
+  const attemptId = Number(state.certificate.attemptId);
+  if (!state.student || !Number.isInteger(attemptId) || attemptId < 1) {
+    toast("تعذّر تحديد محاولة اللعبة الخاصة بهذه الشهادة.");
+    return;
+  }
+
+  state.certificateSaving = true;
+  updateCertificatePortfolioButton();
+  try {
+    const data = await gameRuntime.saveCertificate(attemptId, state.csrf);
+    state.certificate = data.certificate || data;
+    state.certificate.saved = true;
+    renderCertificate(state.certificate);
+    toast(data.alreadySaved ? "هذه الشهادة موجودة بالفعل في ملف إنجازكِ." : "تم إرسال الشهادة إلى ملف إنجازكِ.");
+  } catch (error) {
+    toast(error.message || "تعذّر إرسال الشهادة إلى ملف الإنجاز.");
+  } finally {
+    state.certificateSaving = false;
+    updateCertificatePortfolioButton();
+  }
+}
+
+async function loadCertificateFromUrl() {
+  const portfolioId = new URLSearchParams(window.location.search).get("certificate");
+  if (!portfolioId) return;
+  try {
+    const data = await gameRuntime.loadCertificate(portfolioId);
+    state.certificate = data.certificate || data;
+    updateCertificateButton();
+    openCertificate();
+  } catch (_) {
+    toast("تعذر تحميل الشهادة. تأكدي من تسجيل الدخول وحاولي من ملف الإنجاز.");
   }
 }
 
@@ -364,12 +511,11 @@ function createConfetti() {
 
 /* جلب بيانات الطالبة والمعلمة والمديرة تلقائياً من جلسة الموقع */
 async function detectStudent() {
-  const certButton = $("showCertButton");
   const playerChip = $("playerChip");
 
   if (state.student && state.student.name) {
     if (playerChip) playerChip.textContent = `الطالبة: ${state.student.name}`;
-    if (certButton) certButton.hidden = false;
+    updateCertificateButton();
     return state.student;
   }
 
@@ -379,7 +525,7 @@ async function detectStudent() {
       state.student = null;
       state.csrf = "";
       if (playerChip) playerChip.textContent = "الجلوس الحالي ليس لطالب/طالبة";
-      if (certButton) certButton.hidden = true;
+      updateCertificateButton();
       return null;
     }
 
@@ -387,30 +533,27 @@ async function detectStudent() {
     state.student = data;
     state.csrf = data.csrfToken || "";
     if (playerChip && data.name) playerChip.textContent = `الطالبة: ${data.name}`;
-    if (certButton) certButton.hidden = false;
+    updateCertificateButton();
     return data;
   } catch (_) {
     state.student = null;
     state.csrf = "";
     if (playerChip) playerChip.textContent = "الجلوس الحالي ليس لطالب/طالبة";
-    if (certButton) certButton.hidden = true;
+    updateCertificateButton();
     return null;
   }
 }
 
 async function saveAttempt({ duration, accuracy }) {
   try {
-    const response = await fetch("/api/student/games/attempts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": state.csrf },
-      body: JSON.stringify({
-        gameKey: "percentage-challenge", difficulty: state.level, score: state.score,
+    return await gameRuntime.saveAttempt({
+        difficulty: state.level, score: state.score,
         questionCount: state.total, correctCount: state.correct, bestStreak: state.bestStreak,
         durationSeconds: duration,
-      }),
-    });
-    if (!response.ok) throw new Error("save failed");
-  } catch (_) {}
+      }, state.csrf);
+  } catch (_) {
+    return null;
+  }
 }
 
 document.querySelectorAll("[data-level]").forEach((button) => {
@@ -421,7 +564,7 @@ document.querySelectorAll("[data-level]").forEach((button) => {
       item.classList.toggle("selected", selected);
       item.setAttribute("aria-checked", String(selected));
     });
-    $("bestScoreText").textContent = `أفضل نتيجة محلياً: ${Number(localStorage.getItem(`madar-percentage-best-${state.level}`) || 0)} نقطة`;
+    $("bestScoreText").textContent = `أفضل نتيجة محلياً: ${Number(localStorage.getItem(`madar-game-best-${gameKey}-${state.level}`) || 0)} نقطة`;
   });
 });
 
@@ -440,7 +583,7 @@ $("startButton").addEventListener("click", startGame);
 $("nextButton").addEventListener("click", nextQuestion);
 $("replayButton").addEventListener("click", () => showScreen("setup"));
 $("backToHomeButton").addEventListener("click", () => {
-  window.location.assign("/");
+  window.location.assign(siteHomePath);
 });
 $("quitButton").addEventListener("click", () => {
   if (!confirm("هل تريدين إنهاء هذه الجولة والعودة إلى البداية؟")) return;
@@ -457,8 +600,8 @@ $("soundButton").addEventListener("click", () => {
 
 $("showCertButton").addEventListener("click", openCertificate);
 $("closeCertButton").addEventListener("click", closeCertificate);
-$("sendToPortfolioButton").addEventListener("click", sendCertificateToPortfolio);
 $("printCertButton").addEventListener("click", () => window.print());
+$("saveCertificateButton").addEventListener("click", saveCurrentCertificateToPortfolio);
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("certModal").hidden) {
@@ -470,7 +613,15 @@ document.addEventListener("keydown", (event) => {
 });
 
 $("soundButton").textContent = state.sound ? "🔊" : "🔇";
-$("bestScoreText").textContent = `أفضل نتيجة محلياً: ${Number(localStorage.getItem("madar-percentage-best-easy") || 0)} نقطة`;
+$("gameHomeLink").href = siteHomePath;
+$("gameBackLink").href = siteHomePath;
+$("setupBackLink").href = gamesHomePath;
+$("setupBackLink").addEventListener("click", () => {
+  if (!isTeacherGameContext) sessionStorage.setItem("madar-student-view", "games");
+});
+$("bestScoreText").textContent = `أفضل نتيجة محلياً: ${Number(localStorage.getItem(`madar-game-best-${gameKey}-easy`) || 0)} نقطة`;
 closeCertificate();
 showScreen("setup");
-detectStudent();
+Promise.all([detectStudent(), loadGameConfig()]).then(async () => {
+  await loadCertificateFromUrl();
+});
