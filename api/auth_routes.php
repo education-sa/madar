@@ -64,6 +64,7 @@ function public_login(string $role): never
 
 function teacher_register(): never
 {
+    Http::rateLimit('teacher-register',5,3600);
     $enabled=fetch_one("SELECT setting_value FROM app_settings WHERE setting_key='teacher_registration_enabled'");
     if (($enabled['setting_value']??'true')==='false') Http::json(['error'=>'إنشاء حسابات المعلمات متوقف حاليًا. تواصلي مع مالكة الموقع.'],403);
     $data = Http::input();

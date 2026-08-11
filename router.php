@@ -4,8 +4,8 @@ declare(strict_types=1);
 $path = rawurldecode(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
 $root = __DIR__;
 
-$blockedPrefixes = ['/config/', '/lib/', '/database/', '/scripts/', '/owner/protected/', '/backend/', '/storage/'];
-$blockedFiles = ['/.env', '/.env.example', '/server.js', '/package.json', '/package-lock.json', '/replit.md', '/.replit'];
+$blockedPrefixes = ['/config/', '/lib/', '/database/', '/scripts/', '/deploy/', '/backups/', '/owner/protected/', '/backend/', '/storage/', '/.git/'];
+$blockedFiles = ['/.env', '/.env.example', '/.git', '/server.js', '/package.json', '/package-lock.json', '/replit.md', '/.replit'];
 $blocked = in_array($path, $blockedFiles, true);
 foreach ($blockedPrefixes as $prefix) {
     if (str_starts_with($path, $prefix)) {

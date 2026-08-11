@@ -132,11 +132,17 @@ function portfolio_json_row(array $row): array
         'awardedPoints'=>(int)($row['awarded_points']??0),
         'createdAt'=>$row['created_at'],
     ];
-    if (!empty($row['certificate_key'])) $item['certificateKey']=(string)$row['certificate_key'];
+    if (!empty($row['certificate_key'])) {
+        $item['certificateKey']=(string)$row['certificate_key'];
+        $certificate=json_decode((string)($row['certificate_data_json']??''),true);
+        if(is_array($certificate)&&isset($certificate['gameId'])&&(int)$certificate['gameId']>0)$item['certificateGameId']=(int)$certificate['gameId'];
+    }
     if (isset($row['student_id'])) $item['studentId']=(int)$row['student_id'];
     if (isset($row['student_name'])) $item['studentName']=(string)$row['student_name'];
     if (isset($row['student_email'])) $item['studentEmail']=(string)$row['student_email'];
     if (isset($row['stage'])) $item['stage']=(string)$row['stage'];
+    if (isset($row['grade_label'])) $item['gradeLabel']=(string)$row['grade_label'];
+    if (isset($row['class_id'])) $item['classId']=(int)$row['class_id'];
     if (isset($row['class_name'])) $item['className']=(string)$row['class_name'];
     return $item;
 }
@@ -145,7 +151,7 @@ function student_portfolio_routes(string $method,array $segments,int $studentId)
 {
     ensure_student_portfolio_schema();
     if (!$segments && $method==='GET') {
-        $rows=fetch_all('SELECT id,category,title,note,original_name,mime_type,size_bytes,review_status,teacher_comment,reviewed_at,awarded_points,certificate_key,created_at FROM student_portfolio_files WHERE student_id=? ORDER BY created_at DESC,id DESC',[$studentId]);
+        $rows=fetch_all('SELECT id,category,title,note,original_name,mime_type,size_bytes,review_status,teacher_comment,reviewed_at,awarded_points,certificate_key,certificate_data_json,created_at FROM student_portfolio_files WHERE student_id=? ORDER BY created_at DESC,id DESC',[$studentId]);
         Http::json(['categories'=>portfolio_categories(),'files'=>array_map('portfolio_json_row',$rows)]);
     }
     if (!$segments && $method==='POST') student_portfolio_upload($studentId);
@@ -165,8 +171,8 @@ function teacher_student_files_routes(string $method,array $segments,int $teache
     if (!$segments && $method==='GET') {
         $rows=fetch_all(
             'SELECT f.id,f.student_id,f.category,f.title,f.note,f.original_name,f.mime_type,f.size_bytes,
-                    f.review_status,f.teacher_comment,f.reviewed_at,f.awarded_points,f.certificate_key,f.created_at,
-                    s.name AS student_name,s.email AS student_email,s.stage,c.name AS class_name
+                    f.review_status,f.teacher_comment,f.reviewed_at,f.awarded_points,f.certificate_key,f.certificate_data_json,f.created_at,
+                    s.name AS student_name,s.email AS student_email,c.stage,c.grade_label,c.id AS class_id,c.name AS class_name
              FROM student_portfolio_files f
              JOIN students s ON s.id=f.student_id
              JOIN classes c ON c.id=s.class_id

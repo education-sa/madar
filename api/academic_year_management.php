@@ -535,48 +535,33 @@ function owner_academic_reset_preview(): never
     ]);
 }
 
-function academic_backup_sql_dump(PDO $pdo): string
+function academic_backup_sql_dump(PDO $pdo,string $path): void
 {
-    $lines = [
-        '-- نسخة احتياطية كاملة لقاعدة بيانات منصة مدار',
-        '-- تم الإنشاء: ' . date(DATE_ATOM),
-        'SET NAMES utf8mb4;',
-        'SET FOREIGN_KEY_CHECKS=0;',
-        '',
-    ];
-    $tables = $pdo->query("SHOW FULL TABLES WHERE Table_type='BASE TABLE'")->fetchAll(PDO::FETCH_NUM);
-    foreach ($tables as $tableRow) {
-        $table = (string) $tableRow[0];
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) continue;
-        $createRow = $pdo->query("SHOW CREATE TABLE `{$table}`")->fetch(PDO::FETCH_NUM);
-        $createSql = (string) ($createRow[1] ?? '');
-        $lines[] = "DROP TABLE IF EXISTS `{$table}`;";
-        $lines[] = $createSql . ';';
-        $statement = $pdo->query("SELECT * FROM `{$table}`");
-        $batch = [];
-        $columns = null;
-        while ($row = $statement->fetch(PDO::FETCH_ASSOC)) {
-            if ($columns === null) $columns = array_keys($row);
-            $values = [];
-            foreach ($row as $value) {
-                if ($value === null) $values[] = 'NULL';
-                else $values[] = $pdo->quote((string) $value);
+    $handle=@fopen($path,'wb');
+    if(!$handle)throw new RuntimeException('تعذّر إنشاء ملف قاعدة البيانات المؤقت.');
+    $write=static function(string $text)use($handle):void{if(fwrite($handle,$text)===false)throw new RuntimeException('تعذّرت كتابة نسخة قاعدة البيانات.');};
+    try{
+        $write('-- نسخة احتياطية كاملة لقاعدة بيانات منصة مدار'."\n".'-- تم الإنشاء: '.date(DATE_ATOM)."\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n");
+        $tables=$pdo->query("SHOW FULL TABLES WHERE Table_type='BASE TABLE'")->fetchAll(PDO::FETCH_NUM);
+        foreach($tables as $tableRow){
+            $table=(string)$tableRow[0];if(!preg_match('/^[a-zA-Z0-9_]+$/',$table))continue;
+            $createRow=$pdo->query("SHOW CREATE TABLE `{$table}`")->fetch(PDO::FETCH_NUM);
+            $write("DROP TABLE IF EXISTS `{$table}`;\n".(string)($createRow[1]??'').";\n");
+            $statement=$pdo->query("SELECT * FROM `{$table}`");$batch=[];$columns=null;
+            while($row=$statement->fetch(PDO::FETCH_ASSOC)){
+                if($columns===null)$columns=array_keys($row);$values=[];
+                foreach($row as $value)$values[]=$value===null?'NULL':$pdo->quote((string)$value);
+                $batch[]='('.implode(',',$values).')';
+                if(count($batch)>=100){
+                    $columnSql=implode(',',array_map(static fn(string $column):string=>"`{$column}`",$columns));
+                    $write("INSERT INTO `{$table}` ({$columnSql}) VALUES\n".implode(",\n",$batch).";\n");$batch=[];
+                }
             }
-            $batch[] = '(' . implode(',', $values) . ')';
-            if (count($batch) >= 100) {
-                $columnSql = implode(',', array_map(static fn(string $column): string => "`{$column}`", $columns));
-                $lines[] = "INSERT INTO `{$table}` ({$columnSql}) VALUES\n" . implode(",\n", $batch) . ';';
-                $batch = [];
-            }
+            if($batch&&$columns){$columnSql=implode(',',array_map(static fn(string $column):string=>"`{$column}`",$columns));$write("INSERT INTO `{$table}` ({$columnSql}) VALUES\n".implode(",\n",$batch).";\n");}
+            $write("\n");
         }
-        if ($batch && $columns) {
-            $columnSql = implode(',', array_map(static fn(string $column): string => "`{$column}`", $columns));
-            $lines[] = "INSERT INTO `{$table}` ({$columnSql}) VALUES\n" . implode(",\n", $batch) . ';';
-        }
-        $lines[] = '';
-    }
-    $lines[] = 'SET FOREIGN_KEY_CHECKS=1;';
-    return implode("\n", $lines) . "\n";
+        $write("SET FOREIGN_KEY_CHECKS=1;\n");
+    }finally{fclose($handle);}
 }
 
 function academic_archive_file_list(string $base, string $prefix): array
@@ -618,6 +603,7 @@ function owner_academic_backup(int $ownerId): never
         Http::json(['error' => 'تعذّر تجهيز ملف النسخة الاحتياطية.'], 500);
     }
     @unlink($temporary);
+    $databasePath = $temporary . '.sql';
     $archivePath = '';
     $extension = '';
     $contentType = '';
@@ -628,7 +614,7 @@ function owner_academic_backup(int $ownerId): never
         // لقطة متسقة لقاعدة البيانات، مع منع الحذف بالتزامن معها.
         $pdo->exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
         $pdo->beginTransaction();
-        $databaseDump = academic_backup_sql_dump($pdo);
+        academic_backup_sql_dump($pdo,$databasePath);
         $pdo->commit();
 
         $manifest = [
@@ -650,7 +636,7 @@ function owner_academic_backup(int $ownerId): never
             if ($zip->open($archivePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
                 throw new RuntimeException('تعذّر إنشاء ملف النسخة الاحتياطية.');
             }
-            $zip->addFromString('database.sql', $databaseDump);
+            $zip->addFile($databasePath, 'database.sql');
             $zip->addFromString('manifest.json', (string) $manifestJson);
             foreach ($storedFiles as $file) $zip->addFile($file['path'], $file['archive']);
             if (!$zip->close()) throw new RuntimeException('تعذّر إغلاق ملف النسخة الاحتياطية بصورة سليمة.');
@@ -661,7 +647,7 @@ function owner_academic_backup(int $ownerId): never
             $contentType = 'application/x-tar';
             $archivePath = $temporary . '.tar';
             $tar = new PharData($archivePath);
-            $tar->addFromString('database.sql', $databaseDump);
+            $tar->addFile($databasePath, 'database.sql');
             $tar->addFromString('manifest.json', (string) $manifestJson);
             foreach ($storedFiles as $file) $tar->addFile($file['path'], $file['archive']);
             unset($tar);
@@ -679,12 +665,14 @@ function owner_academic_backup(int $ownerId): never
         header('Cache-Control: no-store');
         readfile($archivePath);
         @unlink($archivePath);
+        @unlink($databasePath);
         exit;
     } catch (Throwable $error) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         if ($zip instanceof ZipArchive) @$zip->close();
         unset($tar);
         if ($archivePath !== '') @unlink($archivePath);
+        @unlink($databasePath);
         academic_release_reset_lock($pdo);
         error_log('[academic-year-backup] ' . $error->getMessage());
         Http::json(['error' => 'تعذّر إنشاء النسخة الاحتياطية الكاملة. لم يتم تنفيذ أي حذف.'], 500);

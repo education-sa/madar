@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS game_attempts (
   best_streak SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   accuracy DECIMAL(5,2) NOT NULL DEFAULT 0,
   duration_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+  game_snapshot_json LONGTEXT NULL,
   played_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_game_attempt_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
   INDEX idx_game_attempt_student_date (student_id,played_at),
@@ -161,8 +162,23 @@ CREATE TABLE IF NOT EXISTS system_error_log (
   INDEX idx_system_error_status (resolved_at,severity,created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE notifications ADD COLUMN IF NOT EXISTS severity ENUM('info','success','warning','danger') NOT NULL DEFAULT 'info' AFTER body;
-ALTER TABLE notifications ADD COLUMN IF NOT EXISTS route VARCHAR(190) NULL AFTER severity;
-ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(190) NULL AFTER route;
-ALTER TABLE notifications ADD INDEX IF NOT EXISTS idx_notifications_teacher_read (teacher_id,is_read,created_at);
-ALTER TABLE notifications ADD UNIQUE INDEX IF NOT EXISTS uq_notifications_dedupe (teacher_id,dedupe_key);
+DROP PROCEDURE IF EXISTS madar_v11_add_column;
+DELIMITER $$
+CREATE PROCEDURE madar_v11_add_column(IN table_name_value VARCHAR(64),IN column_name_value VARCHAR(64),IN definition_value TEXT)
+BEGIN
+  IF (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=table_name_value AND COLUMN_NAME=column_name_value)=0 THEN
+    SET @sql_text=CONCAT('ALTER TABLE `',table_name_value,'` ADD COLUMN `',column_name_value,'` ',definition_value);
+    PREPARE statement_to_run FROM @sql_text;EXECUTE statement_to_run;DEALLOCATE PREPARE statement_to_run;
+  END IF;
+END$$
+DELIMITER ;
+CALL madar_v11_add_column('notifications','severity',"ENUM('info','success','warning','danger') NOT NULL DEFAULT 'info' AFTER body");
+CALL madar_v11_add_column('notifications','route',"VARCHAR(190) NULL AFTER severity");
+CALL madar_v11_add_column('notifications','dedupe_key',"VARCHAR(190) NULL AFTER route");
+CALL madar_v11_add_column('game_attempts','game_snapshot_json',"LONGTEXT NULL AFTER duration_seconds");
+DROP PROCEDURE IF EXISTS madar_v11_add_column;
+
+SET @v11_notification_index_sql=IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='notifications' AND INDEX_NAME='idx_notifications_teacher_read')=0,'ALTER TABLE notifications ADD INDEX idx_notifications_teacher_read (teacher_id,is_read,created_at)','SELECT 1');
+PREPARE v11_notification_index_statement FROM @v11_notification_index_sql;EXECUTE v11_notification_index_statement;DEALLOCATE PREPARE v11_notification_index_statement;
+SET @v11_notification_unique_sql=IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='notifications' AND INDEX_NAME='uq_notifications_dedupe')=0,'ALTER TABLE notifications ADD UNIQUE INDEX uq_notifications_dedupe (teacher_id,dedupe_key)','SELECT 1');
+PREPARE v11_notification_unique_statement FROM @v11_notification_unique_sql;EXECUTE v11_notification_unique_statement;DEALLOCATE PREPARE v11_notification_unique_statement;

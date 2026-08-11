@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "key": "fractions-challenge",
+  "name": "تحدي الكسور",
+  "entry": "fractions.html",
+  "runtime": "madar-game-bridge-v1"
+}

@@ -10,8 +10,9 @@
 2. من phpMyAdmin استوردي `database/schema.sql`.
 3. ارفعي ملفات المشروع إلى مجلد الموقع.
 4. أنشئي `.env` من `.env.example` وأدخلي بيانات القاعدة. لا ترفعي `.env` إلى GitHub.
+   اضبطي `BACKUP_DIR` على مجلد خاص خارج مجلد الموقع، أو اتركيه فارغًا لاستخدام `../../madar-backups`.
 5. اجعلي إصدار PHP 8.1 أو أحدث وفعّلي `pdo_mysql` و`mbstring` و`zip` و`fileinfo`، و`curl` عند استخدام الذكاء الاصطناعي.
-6. عند تحديث موقع قائم، استوردي `database/migration_20260716_teacher_tools.sql` ثم `database/migration_20260717_madar_points.sql` ثم `database/migration_20260717_student_portfolio.sql` مرة واحدة لكل ملف.
+6. عند تحديث موقع قائم، استوردي ملفات الترحيل القديمة المطلوبة، ثم `database/migration_20260721_platform_enhancements_v11.sql`، ثم ملفات الألعاب الثلاثة بتاريخ `20260808`، وأخيرًا `database/migration_20260809_security_integrity.sql`. الملفات الجديدة قابلة لإعادة التشغيل بأمان.
 7. من Terminal في لوحة الاستضافة شغّلي `php scripts/create_owner.php` مرة واحدة.
 8. افتحي `/api/health`. يجب أن يظهر `"ok": true`.
 9. افتحي `/owner/login.html` وسجلي الدخول، ثم احذفي كلمة المرور الأولية من `.env`.

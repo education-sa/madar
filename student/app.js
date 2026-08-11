@@ -55,6 +55,17 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 }[char]));
 
+function studentSafeResourceUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    if (raw.startsWith("/") && !raw.startsWith("//")) return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    return parsed.href;
+  } catch (_) { return ""; }
+}
+
 const MADAR_ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
 const MADAR_OPTION_LABELS = ["أ", "ب", "جـ", "د"];
 
@@ -259,6 +270,79 @@ async function tests() {
   content.querySelectorAll("[data-test]").forEach((button) => { button.onclick = () => openTest(button.dataset.test); });
 }
 
+const paperSubmissionMeta = {
+  not_registered: { label: "لم تسجلي", css: "not-registered" },
+  draft: { label: "مسودة", css: "draft" },
+  submitted: { label: "بانتظار اعتماد المعلمة", css: "submitted" },
+  approved: { label: "معتمدة", css: "approved" },
+  returned: { label: "معادة للتعديل", css: "returned" },
+};
+
+function paperFileSize(bytes) {
+  const size = Number(bytes || 0);
+  if (size < 1024) return `${size} بايت`;
+  if (size < 1048576) return `${(size / 1024).toFixed(1)} ك.ب`;
+  return `${(size / 1048576).toFixed(1)} م.ب`;
+}
+
+async function paperAssessments() {
+  setActive("paper-assessments");
+  const data = await api("/paper-assessments");
+  if (!data.migrationReady) {
+    content.innerHTML = `<section class="student-paper-empty"><span>📝</span><h2>الاختبارات الورقية غير مفعلة بعد</h2><p>تحتاج المعلمة تشغيل ملف ${esc(data.migrationFile || "migration_20260810_paper_assessments.sql")} مرة واحدة.</p></section>`;
+    return;
+  }
+  const items = Array.isArray(data.assessments) ? data.assessments : [];
+  content.innerHTML = `<section class="student-paper-hero"><div><small>نتائج أوراقكِ داخل مدار</small><h1>الاختبارات الورقية</h1><p>أدخلي درجات الورقة المصححة، احفظيها كمسودة، ثم سلّميها لاعتماد المعلمة.</p></div><span aria-hidden="true">📝</span></section>
+    <section class="student-paper-list">${items.length ? items.map((item) => {
+      const meta = paperSubmissionMeta[item.submissionStatus] || paperSubmissionMeta.not_registered;
+      const action = item.canEdit ? (item.submissionStatus === "not_registered" ? "بدء التسجيل" : "متابعة التسجيل") : "عرض النتيجة";
+      return `<article class="student-paper-card"><div class="student-paper-card-head"><span>${esc(item.testTypeLabel)}</span><b class="paper-student-status ${meta.css}">${esc(meta.label)}</b></div><h2>${esc(item.title)}</h2><p>${esc(item.subject || "مادة الرياضيات")} · ${studentArabicNumber(item.questionCount,me?.stage)} أسئلة · العتبة ${studentArabicNumber(item.threshold,me?.stage)}٪</p><dl><div><dt>تاريخ الاختبار</dt><dd>${esc(item.assessmentDate)}</dd></div><div><dt>التسجيل</dt><dd>${esc(item.windowMessage)}</dd></div></dl>${item.returnNote ? `<div class="student-paper-return-note"><strong>ملاحظة المعلمة:</strong> ${esc(item.returnNote)}</div>` : ""}<button class="primary-button" data-paper-assessment="${item.id}">${action}</button></article>`;
+    }).join("") : '<div class="student-paper-empty"><span>📄</span><h2>لا توجد اختبارات ورقية الآن</h2><p>ستظهر هنا عندما تنشر المعلمة اختبارًا لفصلكِ.</p></div>'}</section>`;
+  content.querySelectorAll("[data-paper-assessment]").forEach((button) => { button.onclick = () => openPaperAssessment(button.dataset.paperAssessment); });
+}
+
+async function openPaperAssessment(id) {
+  try {
+    const data = await api(`/paper-assessments/${id}`);
+    const assessment = data.assessment;
+    const submission = data.submission;
+    const meta = paperSubmissionMeta[submission?.status || "not_registered"] || paperSubmissionMeta.not_registered;
+    const answers = data.answers || {};
+    const editable = Boolean(data.canEdit);
+    content.innerHTML = `<section class="student-paper-hero compact"><div><small>${esc(assessment.testTypeLabel)}</small><h1>${esc(assessment.title)}</h1><p>${esc(assessment.subject || "مادة الرياضيات")} · ${esc(assessment.className)} · عتبة الإتقان ${studentArabicNumber(assessment.threshold,me?.stage)}٪</p></div><b class="paper-student-status ${meta.css}">${esc(meta.label)}</b></section>
+      ${submission?.returnNote ? `<div class="student-paper-return-note"><strong>أعادتها المعلمة للتعديل:</strong> ${esc(submission.returnNote)}</div>` : ""}
+      ${assessment.instructions ? `<section class="student-paper-instructions"><strong>تعليمات المعلمة</strong><p>${esc(assessment.instructions)}</p></section>` : ""}
+      ${submission?.status === "submitted" ? '<section class="student-paper-review-note"><strong>النتيجة بانتظار اعتماد المعلمة</strong><p>حُفظت الدرجات وقُفل التعديل. سيظهر تحليل المهارات بعد مراجعة المعلمة واعتماد النتيجة.</p></section>' : ""}
+      <form class="student-paper-form" id="paperAssessmentForm"><div class="student-paper-questions">${data.questions.map((question,index) => {
+        const current = Object.prototype.hasOwnProperty.call(answers,String(question.id)) ? answers[String(question.id)] : "";
+        return `<article><header><span>السؤال ${studentArabicNumber(question.number || index + 1,me?.stage)}</span><b>${esc(question.skillName)}</b></header>${question.text ? `<p>${esc(question.text)}</p>` : ""}<label><span>درجتي</span><div><input type="number" inputmode="decimal" min="0" max="${question.maxPoints}" step="0.01" data-paper-answer="${question.id}" value="${current}" ${editable ? "" : "disabled"}><strong>من ${studentArabicNumber(question.maxPoints,me?.stage)}</strong></div></label></article>`;
+      }).join("")}</div>
+      <section class="student-paper-files"><div><h2>صورة ورقة الاختبار <small>اختيارية</small></h2><p>يمكن رفع صور أو PDF، وبحد أقصى خمسة ملفات.</p></div>${editable ? '<label class="student-paper-file-picker"><input type="file" name="files[]" accept="application/pdf,image/jpeg,image/png,image/webp" multiple><span>＋</span><b>اختيار الملفات</b></label>' : ""}<div class="student-paper-file-list">${data.files.length ? data.files.map((file) => `<article><a href="${file.url}" target="_blank" rel="noopener">${esc(file.name)}</a><span>${paperFileSize(file.sizeBytes)}</span>${editable ? `<button type="button" data-paper-file-delete="${file.id}">حذف</button>` : ""}</article>`).join("") : '<p>لم تُرفق صورة.</p>'}</div></section>
+      ${data.skillResults?.length ? `<section class="student-paper-results"><h2>نتيجتكِ حسب المهارة</h2>${data.skillResults.map((skill) => `<article><div><strong>${esc(skill.skillName)}</strong><span>${studentArabicNumber(skill.earned,me?.stage)} من ${studentArabicNumber(skill.possible,me?.stage)}</span></div><div class="student-paper-progress"><i style="width:${skill.percent}%"></i><b>${studentArabicNumber(skill.percent,me?.stage)}٪</b></div><small class="${skill.mastered ? "mastered" : "developing"}">${skill.mastered ? "متقنة" : "تحتاج دعمًا"}</small></article>`).join("")}</section>` : ""}
+      <div class="student-paper-actions"><button type="button" class="secondary-button" data-paper-back>العودة للقائمة</button>${editable ? '<button type="button" class="secondary-button" data-paper-save>حفظ مسودة</button><button type="submit" class="primary-button">تسليم للمعلمة</button>' : ""}</div></form>`;
+    const form = document.getElementById("paperAssessmentForm");
+    content.querySelector("[data-paper-back]").onclick = () => paperAssessments().catch(errorView);
+    content.querySelectorAll("[data-paper-file-delete]").forEach((button) => { button.onclick = async () => { if (!confirm("حذف هذا المرفق؟")) return; try { await api(`/paper-assessments/${id}/files/${button.dataset.paperFileDelete}/delete`, { method:"POST", body:"{}" }); toast("تم حذف المرفق"); await openPaperAssessment(id); } catch (error) { toast(error.message); } }; });
+    if (!editable) return;
+    const collectAnswers = () => [...form.querySelectorAll("[data-paper-answer]")].map((input) => ({ questionId:Number(input.dataset.paperAnswer), earnedPoints:input.value }));
+    async function saveDraft() {
+      const payload = new FormData(); payload.append("answers", JSON.stringify(collectAnswers()));
+      [...form.querySelector('[name="files[]"]')?.files || []].forEach((file) => payload.append("files[]",file));
+      return api(`/paper-assessments/${id}/save`, { method:"POST", body:payload });
+    }
+    content.querySelector("[data-paper-save]").onclick = async () => { try { await saveDraft(); toast("تم حفظ المسودة"); await openPaperAssessment(id); } catch (error) { toast(error.message); } };
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const unanswered = [...form.querySelectorAll("[data-paper-answer]")].some((input) => input.value === "");
+      if (unanswered) { toast("أدخلي درجة لكل سؤال، ويمكن أن تكون صفرًا"); return; }
+      if (!confirm("بعد التسليم ستُقفل النتيجة حتى تعيد المعلمة فتحها. هل تريدين المتابعة؟")) return;
+      const submit = form.querySelector('[type="submit"]'); submit.disabled=true; submit.textContent="جارٍ التسليم...";
+      try { await saveDraft(); const result=await api(`/paper-assessments/${id}/submit`,{method:"POST",body:"{}"}); toast(result.message||"تم التسليم"); await openPaperAssessment(id); } catch (error) { submit.disabled=false;submit.textContent="تسليم للمعلمة";toast(error.message); }
+    };
+  } catch (error) { toast(error.message); }
+}
+
 function deadlineTimestamp(value) {
   const normalized = String(value || "").replace(" ", "T");
   const hasTimezone = /(?:Z|[+-]\d\d:\d\d)$/.test(normalized);
@@ -402,7 +486,7 @@ function portfolioFileSize(bytes) {
 async function portfolio() {
   setActive("portfolio");
   const [data, gameCatalog] = await Promise.all([api("/portfolio"), api("/games/catalog").catch(() => ({ catalog: [] }))]);
-  const gamePageByKey = new Map((gameCatalog.catalog || []).map((game) => [game.gameKey, game.playPath]));
+  const gamePageByKey = new Map((gameCatalog.catalog || []).map((game) => [game.gameKey, game.playUrl || game.playPath]));
   content.innerHTML = `
     <section class="portfolio-hero">
       <div><span>📁 مساحتي الخاصة</span><h1>ملف إنجازي</h1><p>اجمعي أعمالكِ المميزة في مكان واحد، واكتبي عنوانًا واضحًا وملاحظة تساعد معلمتكِ على معرفة تفاصيل الإنجاز.</p></div>
@@ -443,9 +527,12 @@ async function portfolio() {
           const certificateLabel = duplicateCertificate ? "شهادة إتقان (مكرر)" : "شهادة إتقان";
           const kind = isGameCertificate ? certificateLabel : (file.mimeType === "application/pdf" ? "PDF" : "صورة");
           const certificateGameKey = certificateKey.split(":u", 1)[0];
-          const certificateGamePath = gamePageByKey.get(certificateGameKey);
+          const certificateGamePath = Number(file.certificateGameId) > 0 ? `/games/game-player.php?game=${Number(file.certificateGameId)}` : gamePageByKey.get(certificateGameKey);
+          const certificateParams = certificateGamePath && certificateGamePath.includes("game-player.php")
+            ? `&certificate=${encodeURIComponent(file.id)}`
+            : `?game=${encodeURIComponent(certificateGameKey)}&certificate=${encodeURIComponent(file.id)}`;
           const action = isGameCertificate && certificateGamePath
-            ? `<a class="secondary-button portfolio-certificate-link" href="${esc(certificateGamePath)}?game=${encodeURIComponent(certificateGameKey)}&certificate=${encodeURIComponent(file.id)}">عرض الشهادة</a>`
+            ? `<a class="secondary-button portfolio-certificate-link" href="${esc(certificateGamePath)}${certificateParams}">عرض الشهادة</a>`
             : isGameCertificate
               ? '<span class="portfolio-file-meta">تعذّر تحديد واجهة اللعبة لهذه الشهادة.</span>'
             : `<a class="secondary-button" href="/api/student/portfolio/${file.id}/file" target="_blank" rel="noopener">فتح ملفي</a>`;
@@ -546,12 +633,16 @@ async function games() {
         const lessonNumber = Number(game.lessonNumber);
         const lessonCode = `${formatGameNumber(unitNumber)}-${formatGameNumber(lessonNumber)}`;
         const timeMode = game.timeMode === "timed" ? `${formatGameNumber(game.timePerQuestionSeconds)} ثانية لكل سؤال` : "وقت مفتوح";
-        const playUrl = `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1`;
+        const playUrl = game.playUrl || `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1`;
+        const description = String(game.description || "").trim() || (game.sourceType === "package"
+          ? "لعبة مبرمجة مرتبطة بنتائج مدار وشهادة الإتقان."
+          : "لعبة تفاعلية بأسئلة الدرس ومستويات الصعوبة التي أعدّتها المعلمة.");
+        const sourceLabel = game.sourceType === "package" ? "لعبة مبرمجة" : "أسئلة من إعداد المعلمة";
         return `<article class="game-library-card">
           <div class="game-lesson-number">${esc(lessonCode)}</div>
-          <div class="game-library-copy"><h2>تحدي ${esc(game.lessonName)}</h2><p>ثلاثة مستويات، ${esc(timeMode)}، وتصحيح فوري مع شرح الحل في كل جولة.</p><div class="game-features"><span>✦ أسئلة متجددة</span><span>🏆 نقاط</span><span>⏱ ${esc(timeMode)}</span></div><a class="primary-button game-play-link" href="${esc(playUrl)}">ابدئي اللعب الآن 🎮</a></div>
+          <div class="game-library-copy"><h2>${esc(game.name || game.lessonName)}</h2><p>${esc(description)}</p><div class="game-features"><span>✦ ${esc(sourceLabel)}</span>${game.pointsEnabled ? `<span>🏆 ${formatGameNumber(game.pointsValue)} نقطة</span>` : ""}<span>⏱ ${esc(timeMode)}</span></div><a class="primary-button game-play-link" href="${esc(playUrl)}">ابدئي اللعب الآن 🎮</a></div>
         </article>`;
-      }).join("") : `<div class="card student-empty-state"><span>🎮</span><strong>لا توجد لعبة جاهزة حاليًا</strong><p>${gameCatalog?.migrationReady ? "ستظهر اللعبة بعد أن تكمل المعلمة بيانات الدرس وتفعّلها." : "يلزم تجهيز بنية الألعاب ثم إضافة بيانات الدرس الفعلية من حساب المعلمة."}</p></div>`}
+      }).join("") : `<div class="card student-empty-state"><span>🎮</span><strong>لا توجد لعبة جاهزة حاليًا</strong><p>${gameCatalog?.migrationReady && gameCatalog?.builderReady ? "ستظهر اللعبة بعد أن تنشرها المعلمة لفصلكِ في الفصل الدراسي الحالي." : "يلزم تجهيز بنية الألعاب ثم نشر لعبة لفصلكِ من حساب المعلمة."}</p></div>`}
       <div class="card game-history">
         <h2>آخر محاولاتي</h2>
         ${attempts.length ? attempts.slice(0, 8).map((attempt) => { const game = gameByKey.get(attempt.game_key); return `<div class="test-row"><div><h3>${game ? `تحدي ${esc(game.lessonName)}` : esc(attempt.game_key)} · ${attempt.difficulty === "easy" ? "بسيط" : attempt.difficulty === "medium" ? "متوسط" : "متقدم"}</h3><p>${new Date(attempt.played_at).toLocaleString("ar-SA")} · ${attempt.correct_count}/${attempt.question_count} صحيحة</p></div><strong>${attempt.score} نقطة</strong></div>`; }).join("") : "<p>لا توجد محاولات محفوظة بعد. ابدئي أول لعبة لكِ!</p>"}
@@ -766,11 +857,13 @@ async function calendar() {
 async function remedial() {
   setActive("remedial");
   const data=await api("/enhancements/remedial");
-  const plans=data.plans||[],resources=data.resources||[],games=data.games||[];
+  const plans=(data.plans||[]).map((plan)=>({...plan,recommended_resource_url:studentSafeResourceUrl(plan.recommended_resource_url)}));
+  const resources=(data.resources||[]).map((resource)=>({...resource,resource_url:studentSafeResourceUrl(resource.resource_url)}));
+  const games=data.games||[];
   const status=(v)=>({planned:"مخططة",in_progress:"قيد التنفيذ",completed:"مكتملة",reassessed:"تمت إعادة القياس",cancelled:"ملغاة"})[v]||v;
   content.innerHTML=`<section class="student-learning-section-hero remedial"><span>🩺</span><div><small>تعلم مخصص</small><h1>خطتي العلاجية</h1><p>أنشطة مقترحة بناءً على المهارات التي تحتاج مزيدًا من التدريب.</p></div></section>
-  <div class="student-remedial-grid">${plans.length?plans.map(plan=>`<article class="student-remedial-card"><div><span>${status(plan.status)}</span><small>${plan.due_date?`الموعد: ${studentDate(plan.due_date)}`:"بدون موعد"}</small></div><h2>${esc(plan.skill_name||plan.title)}</h2><p>${esc(plan.recommended_activity||plan.diagnosis||"تدريب متدرج مع تغذية راجعة")}</p><div class="student-remedial-progress"><label><span>قبل العلاج ${Number(plan.before_percent||0)}٪</span><strong>الهدف ${Number(plan.target_percent||70)}٪</strong></label><div><i style="width:${Math.max(0,Math.min(100,Number(plan.after_percent??plan.before_percent??0)))}%"></i></div></div>${plan.recommended_resource_url?`<a href="${esc(plan.recommended_resource_url)}">ابدئي النشاط</a>`:""}</article>`).join(""):`<div class="student-empty-state"><span>🌟</span><strong>لا توجد خطة علاجية الآن</strong><p>هذا يعني أنه لا توجد خطة نشطة مسجلة لكِ حاليًا.</p></div>`}</div>
-  <section class="student-section-card"><header><div><small>موارد مساندة</small><h2>أنشطة وألعاب مقترحة</h2></div></header><div class="student-resource-grid">${resources.length?resources.map(r=>`<article><span>${r.resource_type==="game"?"🎮":"📚"}</span><div><h3>${esc(r.title)}</h3><p>${esc(r.description||"")}</p><small>${esc(r.skill_name||"مهارة عامة")}</small></div><a href="${esc(r.resource_url)}">فتح</a></article>`).join(""):`<p>لا توجد موارد إضافية.</p>`}</div></section>
+  <div class="student-remedial-grid">${plans.length?plans.map(plan=>`<article class="student-remedial-card"><div><span>${status(plan.status)}</span><small>${plan.due_date?`الموعد: ${studentDate(plan.due_date)}`:"بدون موعد"}</small></div><h2>${esc(plan.skill_name||plan.title)}</h2><p>${esc(plan.recommended_activity||plan.diagnosis||"تدريب متدرج مع تغذية راجعة")}</p><div class="student-remedial-progress"><label><span>قبل العلاج ${Number(plan.before_percent||0)}٪</span><strong>الهدف ${Number(plan.target_percent||70)}٪</strong></label><div><i style="width:${Math.max(0,Math.min(100,Number(plan.after_percent??plan.before_percent??0)))}%"></i></div></div>${plan.recommended_resource_url?`<a href="${esc(plan.recommended_resource_url)}" rel="noopener noreferrer">ابدئي النشاط</a>`:""}</article>`).join(""):`<div class="student-empty-state"><span>🌟</span><strong>لا توجد خطة علاجية الآن</strong><p>هذا يعني أنه لا توجد خطة نشطة مسجلة لكِ حاليًا.</p></div>`}</div>
+  <section class="student-section-card"><header><div><small>موارد مساندة</small><h2>أنشطة وألعاب مقترحة</h2></div></header><div class="student-resource-grid">${resources.length?resources.map(r=>`<article><span>${r.resource_type==="game"?"🎮":"📚"}</span><div><h3>${esc(r.title)}</h3><p>${esc(r.description||"")}</p><small>${esc(r.skill_name||"مهارة عامة")}</small></div>${r.resource_url?`<a href="${esc(r.resource_url)}" rel="noopener noreferrer">فتح</a>`:""}</article>`).join(""):`<p>لا توجد موارد إضافية.</p>`}</div></section>
   <section class="student-section-card"><header><div><small>تقدمي في الألعاب</small><h2>آخر محاولات الألعاب</h2></div></header>${games.length?`<div class="table-wrap"><table><thead><tr><th>اللعبة</th><th>المستوى</th><th>الدقة</th><th>النقاط</th><th>التاريخ</th></tr></thead><tbody>${games.map(g=>`<tr><td>${g.game_key==="percentage-challenge"?"تحدي النسبة المئوية":esc(g.game_key)}</td><td>${esc(g.difficulty)}</td><td>${Number(g.accuracy||0)}٪</td><td>${Number(g.score||0)}</td><td>${studentDate(g.played_at)}</td></tr>`).join("")}</tbody></table></div>`:`<p>لم تسجلي محاولات ألعاب بعد.</p>`}</section>`;
 }
 
@@ -779,7 +872,7 @@ async function help() {
   content.innerHTML=`<section class="student-learning-section-hero help"><span>❓</span><div><small>دليل مدار</small><h1>مركز المساعدة</h1><p>شرح سريع لأهم أقسام حساب الطالبة.</p></div></section><div class="student-help-grid">${[["📝","اختباراتي","ادخلي الاختبار المنشور وأرسلي الإجابات قبل انتهاء الوقت."],["📊","نتائجي","شاهدي درجاتكِ والمهارات التي أتقنتِها والمهارات التي تحتاج تدريبًا."],["🩺","خطتي العلاجية","اتبعي النشاط المقترح ثم أعيدي القياس عندما تحدد المعلمة اختبارًا قصيرًا."],["🎮","الألعاب","نتائج ألعابكِ تُحفظ في حسابكِ وتساعد على متابعة التدريب."],["📁","ملف إنجازي","ارفعي الواجبات والمشروعات لتراجعها المعلمة."],["🔐","حسابي","غيّري كلمة المرور المؤقتة ولا تشاركيها مع أي شخص."]].map(([i,t,d])=>`<article><span>${i}</span><h2>${t}</h2><p>${d}</p></article>`).join("")}</div><section class="student-section-card"><h2>الخصوصية</h2><p>لا يستطيع أي مستخدم رؤية كلمة مروركِ. تُعرض بياناتكِ للمعلمة المسؤولة وولي الأمر المرتبط وفق الصلاحيات.</p><p><a href="/privacy.html" target="_blank">سياسة الخصوصية</a> · <a href="/terms.html" target="_blank">شروط الاستخدام</a></p></section>`;
 }
 
-const views = { home, tests, games, strategies, library, "knowledge-exchange": knowledgeExchange, portfolio, points, results, learning, calendar, remedial, help, account };
+const views = { home, tests, "paper-assessments": paperAssessments, games, strategies, library, "knowledge-exchange": knowledgeExchange, portfolio, points, results, learning, calendar, remedial, help, account };
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.onclick = () => {
     if (Number(me?.must_change_password) === 1 && button.dataset.view !== "account") {

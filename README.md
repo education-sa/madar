@@ -42,7 +42,7 @@ php -S 127.0.0.1:8080 router.php
 
 6. افتحي `http://127.0.0.1:8080`.
 
-إذا كانت قاعدة البيانات منشأة من نسخة سابقة، استوردي مرة واحدة ملف `database/migration_20260716_teacher_tools.sql` لإضافة سجل المتابعة، ثم `database/migration_20260717_madar_points.sql` لإضافة تصنيفات وتفاصيل «نقاط مدار»، ثم `database/migration_20260717_student_portfolio.sql` لإضافة «ملف إنجازي». تحاول الواجهة تجهيز هذه التحديثات تلقائيًا أيضًا عند توفر صلاحية تعديل الجداول لمستخدم قاعدة البيانات.
+إذا كانت قاعدة البيانات منشأة من نسخة سابقة، استوردي ملفات الترحيل المطلوبة بالترتيب الموضح في `DEPLOYMENT.md`، وانتهي بملف `database/migration_20260809_security_integrity.sql`. في الإنتاج لا يحتاج مستخدم التطبيق صلاحيات تعديل الجداول بعد اكتمال الترحيلات.
 
 يجب أن يكون المجلد `storage/private/student-portfolios` قابلًا للكتابة من PHP. تُحفظ الملفات داخله بأسماء عشوائية، ويُمنع فتحه مباشرة؛ عرض الملفات يتم فقط من خلال حساب الطالبة أو معلمتها.
 
@@ -93,13 +93,13 @@ php scripts/daily_backup.php
 ### فحص نسخة قبل الاستعادة
 
 ```bash
-php scripts/restore_backup.php --file=/path/to/project/backups/file.sql --confirm=استعادة-مدار --dry-run
+php scripts/restore_backup.php --file=/path/to/madar-backups/file.sql --confirm=استعادة-مدار --dry-run
 ```
 
 ### الاستعادة
 
 ```bash
-php scripts/restore_backup.php --file=/path/to/project/backups/file.sql --confirm=استعادة-مدار
+php scripts/restore_backup.php --file=/path/to/madar-backups/file.sql --confirm=استعادة-مدار
 ```
 
 الاستعادة متاحة من Terminal فقط، وتُنشئ نسخة أمان تلقائية قبل تعديل قاعدة البيانات.

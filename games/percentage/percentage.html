@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#35136f" />
+  <title>لعبة النسبة المئوية التفاعلية | منصة مدار</title>
+  <link rel="stylesheet" href="percentage.css?v=20260808_game_v9" />
+</head>
+<body data-game-key="percentage-challenge">
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <!-- هيدر اللعبة العلوي -->
+  <header class="game-header">
+    <a class="game-brand" id="gameHomeLink" href="/student/" aria-label="العودة إلى منصة مدار">
+      <img class="brand-logo" src="/assets/print/madar-official-logo-transparent.png" alt="شعار مدار الرسمي">
+      <span><strong>مدار</strong><small>منصة الرياضيات التفاعلية</small></span>
+    </a>
+    <div class="header-actions">
+      <span class="player-chip" id="playerChip">وضع الزائرة</span>
+      <button class="sound-button" id="soundButton" type="button" aria-pressed="true" aria-label="صوت اللعبة">🔊</button>
+      <a class="back-link" id="gameBackLink" href="/student/">العودة إلى مدار <span>←</span></a>
+    </div>
+  </header>
+
+  <!-- جسم اللعبة الأساسي -->
+  <main class="game-shell">
+    <!-- 1. شاشة البداية والإعدادات (بدون إدخال يدوي - تؤخذ تلقائياً من الموقع) -->
+    <section class="screen setup-screen active" id="setupScreen">
+      <div class="setup-copy">
+        <span class="eyebrow" id="setupLessonMeta">الوحدة — · الدرس —</span>
+        <h1>تحدي <em id="setupLessonName">—</em></h1>
+        <p>تدرّبي على مهارات الدرس في جولة هادئة ومركّزة، واحصلي بعد إتمامها على <strong>شهادة إتقان باسمكِ</strong> عند توفرها من المنصة.</p>
+
+        <div class="setup-panel">
+          <h2>اختاري مستوى التحدي</h2>
+          <div class="level-options" role="radiogroup" aria-label="مستوى اللعبة">
+            <button class="level-card selected" type="button" data-level="easy" role="radio" aria-checked="true">
+              <span class="level-icon">🌱</span><strong>بسيط</strong><small>نسب مباشرة وأرقام سهلة</small>
+            </button>
+            <button class="level-card" type="button" data-level="medium" role="radio" aria-checked="false">
+              <span class="level-icon">🚀</span><strong>متوسط</strong><small>خصومات وتسوق وزيادة مئوية</small>
+            </button>
+            <button class="level-card" type="button" data-level="hard" role="radio" aria-checked="false">
+              <span class="level-icon">💎</span><strong>متقدم</strong><small>تغير مئوي ونسب عكسية مركبة</small>
+            </button>
+          </div>
+
+          <div class="round-options">
+            <span>عدد الأسئلة:</span>
+            <div role="radiogroup">
+              <button type="button" data-rounds="5" role="radio" aria-checked="false">5 أسئلة</button>
+              <button class="selected" type="button" data-rounds="10" role="radio" aria-checked="true">10 أسئلة</button>
+              <button type="button" data-rounds="15" role="radio" aria-checked="false">15 سؤالاً</button>
+            </div>
+          </div>
+
+          <div class="setup-actions">
+            <button class="start-button" id="startButton" type="button">ابدئي التحدي</button>
+            <a class="setup-back-link" id="setupBackLink" href="/student/">العودة إلى الألعاب التفاعلية <span aria-hidden="true">←</span></a>
+          </div>
+          <p class="best-score" id="bestScoreText">أفضل نتيجة محلياً: 0 نقطة</p>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- 2. شاشة اللعب والأسئلة -->
+    <section class="screen play-screen" id="playScreen" aria-live="polite">
+      <div class="play-topbar">
+        <div class="progress-copy">
+          <span id="questionCounter">السؤال 1 من 10</span>
+          <strong id="levelLabel">المستوى السهل</strong>
+          <small class="play-lesson-meta" id="playLessonMeta">الوحدة — · الدرس —</small>
+        </div>
+        <div class="progress-track" aria-hidden="true"><span id="progressBar"></span></div>
+        <button class="quit-button" id="quitButton" type="button">إنهاء الجولة</button>
+      </div>
+
+      <div class="stats-row" aria-label="إحصاءات اللعب">
+        <article><span>النقاط</span><strong id="scoreValue">0</strong></article>
+        <article class="timer-stat" id="timerStat"><span id="timerLabel">الوقت المتبقي</span><strong id="timerValue">25</strong><i class="timer-ring" id="timerRing"></i></article>
+        <article><span>السلسلة</span><strong><b id="streakValue">0</b> 🔥</strong></article>
+      </div>
+
+      <article class="question-card" id="questionCard">
+        <div class="question-meta">
+          <span id="questionSkill">جارٍ تجهيز المهارة…</span>
+          <span id="questionPoints">+100 نقطة</span>
+        </div>
+        
+        <h2 id="questionText">جارٍ تجهيز السؤال...</h2>
+        <p class="question-hint" id="questionHint">اختاري الإجابة الصحيحة من بين الخيارات التالية:</p>
+        
+        <div class="answer-grid" id="answerGrid"></div>
+
+        <div class="feedback" id="feedback" hidden>
+          <div class="feedback-heading">
+            <span id="feedbackIcon">✓</span>
+            <strong id="feedbackTitle">إجابة صحيحة!</strong>
+          </div>
+          <p id="feedbackExplanation"></p>
+          <button id="nextButton" type="button">السؤال التالي <span>←</span></button>
+        </div>
+      </article>
+    </section>
+
+    <!-- 3. شاشة النتائج وتوليد الشهادة -->
+    <section class="screen result-screen" id="resultScreen">
+      <div class="confetti" id="confetti" aria-hidden="true"></div>
+      <span class="result-badge" id="resultBadge">🏆</span>
+      <h1 id="resultTitle">مبارك الإنجاز والتفوق!</h1>
+      <p id="resultMessage">لقد أنهيتِ لعبة النسبة المئوية بنجاح رائع.</p>
+      
+      <div class="result-score">
+        <span>مجموع نقاطكِ</span>
+        <strong id="finalScore">0</strong>
+      </div>
+      
+      <div class="result-grid">
+        <article><span>الإجابات الصحيحة</span><strong id="correctResult">0 / 10</strong></article>
+        <article><span>نسبة الدقة</span><strong id="accuracyResult">0%</strong></article>
+        <article><span>أفضل تتابع</span><strong id="streakResult">0 🔥</strong></article>
+        <article><span>الوقت المستغرق</span><strong id="durationResult">0 ثانية</strong></article>
+      </div>
+      
+      <p class="save-status" id="saveStatus">اكتملت اللعبة بنجاح! جاهزة لاستخراج شهادتكِ الشرفية.</p>
+
+      <!-- زر إظهار الشهادة -->
+      <div class="result-cert-box">
+        <button class="start-button cert-main-btn" id="showCertButton" type="button" hidden>
+          عرض شهادة الإتقان
+        </button>
+      </div>
+
+      <div class="result-actions">
+        <button class="start-button" id="replayButton" type="button">العبي جولة جديدة ↻</button>
+        <button class="secondary-action" id="backToHomeButton" type="button">العودة إلى مدار</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- نفس مكوّن شهادة الإتقان يُحقن من محرك الألعاب المشترك. -->
+  <div id="sharedCertificateMount" data-madar-certificate></div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="interactive-game-runtime.js?v=20260808_multi_game_v2"></script>
+  <script src="percentage.js?v=20260808_multi_game_v2"></script>
+</body>
+</html>

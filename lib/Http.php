@@ -94,5 +94,18 @@ final class Http
         $pageSize = min(100, max(1, (int) ($_GET['pageSize'] ?? 10)));
         return [$page, $pageSize, ($page - 1) * $pageSize];
     }
-}
 
+    public static function rateLimit(string $scope,int $limit=5,int $windowSeconds=3600): void
+    {
+        $limit=max(1,min(500,$limit));$windowSeconds=max(10,min(86400,$windowSeconds));
+        $ip=mb_substr((string)($_SERVER['REMOTE_ADDR']??'unknown'),0,45);
+        $identityHash=hash('sha256','public-action|'.$scope);
+        $cutoff=(new DateTimeImmutable('now'))->modify('-'.$windowSeconds.' seconds')->format('Y-m-d H:i:s');
+        $pdo=Database::connection();
+        $statement=$pdo->prepare('SELECT COUNT(*) FROM auth_login_attempts WHERE identity_hash=? AND ip_address=? AND attempted_at>=?');
+        $statement->execute([$identityHash,$ip,$cutoff]);
+        if((int)$statement->fetchColumn()>=$limit)self::json(['error'=>'طلبات كثيرة من هذا الاتصال. انتظري قليلًا ثم حاولي مجددًا.'],429);
+        $pdo->prepare('INSERT INTO auth_login_attempts(identity_hash,ip_address) VALUES(?,?)')->execute([$identityHash,$ip]);
+        if(random_int(1,100)===1)$pdo->exec('DELETE FROM auth_login_attempts WHERE attempted_at<DATE_SUB(NOW(),INTERVAL 1 DAY)');
+    }
+}

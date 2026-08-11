@@ -910,17 +910,22 @@ function teacher_question_bank_unpack_upload(string $path,string $extension): ar
     if (!class_exists('ZipArchive')) Http::json(['error'=>'الخادم يحتاج إضافة PHP Zip لفتح الملف المضغوط.'],500);
     $zip=new ZipArchive();
     if ($zip->open($path)!==true) Http::json(['error'=>'الملف المضغوط غير صالح.'],422);
-    $entry='';
+    if($zip->numFiles>50){$zip->close();Http::json(['error'=>'الملف المضغوط يحتوي عددًا كبيرًا من الملفات. الحد الأقصى 50 ملفًا.'],422);}
+    $entry='';$entryStat=null;$maxUncompressed=20*1024*1024;
     for($index=0;$index<$zip->numFiles;$index++) {
-        $name=(string)($zip->statIndex($index)['name']??'');
+        $stat=$zip->statIndex($index);$name=(string)($stat['name']??'');
         if (str_starts_with($name,'__MACOSX/')||str_starts_with(basename($name),'._')) continue;
-        if (mb_strtolower(pathinfo($name,PATHINFO_EXTENSION))==='xlsx') {$entry=$name;break;}
+        $size=(int)($stat['size']??0);$compressed=(int)($stat['comp_size']??0);
+        if($size>$maxUncompressed||($size>0&&($compressed<=0||$size/max(1,$compressed)>100))){$zip->close();Http::json(['error'=>'الملف المضغوط غير آمن أو حجمه بعد الفك أكبر من المسموح.'],422);}
+        if (mb_strtolower(pathinfo($name,PATHINFO_EXTENSION))==='xlsx') {$entry=$name;$entryStat=$stat;break;}
     }
     if ($entry==='') {$zip->close();Http::json(['error'=>'لم أجد ملف XLSX داخل الملف المضغوط.'],422);}
-    $contents=$zip->getFromName($entry);$zip->close();
-    if ($contents===false) Http::json(['error'=>'تعذّر استخراج ملف Excel من الملف المضغوط.'],422);
     $temp=tempnam(sys_get_temp_dir(),'madar-qb-xlsx-');
-    if ($temp===false||file_put_contents($temp,$contents)===false) Http::json(['error'=>'تعذّر تجهيز ملف Excel للاستيراد.'],500);
+    if ($temp===false){$zip->close();Http::json(['error'=>'تعذّر تجهيز ملف Excel للاستيراد.'],500);}
+    $input=$zip->getStream($entry);$output=@fopen($temp,'wb');
+    if(!$input||!$output){if(is_resource($input))fclose($input);if(is_resource($output))fclose($output);$zip->close();@unlink($temp);Http::json(['error'=>'تعذّر استخراج ملف Excel من الملف المضغوط.'],422);}
+    $written=stream_copy_to_stream($input,$output,$maxUncompressed+1);fclose($input);fclose($output);$zip->close();
+    if($written===false||$written>$maxUncompressed||$written!==(int)($entryStat['size']??$written)){@unlink($temp);Http::json(['error'=>'حجم ملف Excel بعد الفك غير صالح.'],422);}
     return ['path'=>$temp,'extension'=>'xlsx','cleanup'=>$temp];
 }
 
@@ -1006,6 +1011,7 @@ function teacher_question_bank_context_from_filename(string $filename): array
 function teacher_question_bank_import(int $teacherId): never
 {
     if (!isset($_FILES['file'])||!is_uploaded_file((string)($_FILES['file']['tmp_name']??''))) Http::json(['error'=>'اختاري ملف Excel صالحًا.'],422);
+    if((int)($_FILES['file']['size']??0)>20*1024*1024)Http::json(['error'=>'حجم ملف بنك الأسئلة يتجاوز الحد الأقصى 20 ميجابايت.'],422);
     $originalName=(string)($_FILES['file']['name']??'question-bank.xlsx');
     $extension=mb_strtolower(pathinfo($originalName,PATHINFO_EXTENSION));
     if (!in_array($extension,['xlsx','csv','txt','zip'],true)) Http::json(['error'=>'الصيغ المدعومة هي XLSX وCSV وملف ZIP يحتوي XLSX.'],422);

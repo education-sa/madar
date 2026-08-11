@@ -6,6 +6,8 @@ require_once __DIR__ . '/teacher_followup.php';
 require_once __DIR__ . '/teacher_weekly_followup.php';
 require_once __DIR__ . '/teacher_tests.php';
 require_once __DIR__ . '/teacher_analysis.php';
+require_once __DIR__ . '/teacher_skill_attachments.php';
+require_once __DIR__ . '/paper_assessments.php';
 require_once __DIR__ . '/teacher_school_settings.php';
 require_once __DIR__ . '/parent_portal.php';
 
@@ -46,6 +48,11 @@ function handle_teacher_routes(string $method, array $segments): never
         'question-bank' => 'question_bank.manage',
         'ai' => 'ai_question_bank.manage',
         'analysis' => in_array($method, ['GET','HEAD'], true) ? 'analytics.view' : 'analytics.manage',
+        'attachments' => match ($segments[1] ?? '') {
+            'analysis' => in_array($method, ['GET','HEAD'], true) ? 'analytics.view' : 'analytics.manage',
+            'manual', 'paper' => in_array($method, ['GET','HEAD'], true) ? 'analytics.view' : 'grades.manage',
+            default => 'files.manage',
+        },
         'learning-styles' => in_array($method, ['GET','HEAD'], true) ? 'analytics.view' : 'analytics.manage',
         'reports' => 'export.use',
         'school-settings', 'interactive-games' => 'school_settings.manage',
@@ -105,6 +112,10 @@ function handle_teacher_routes(string $method, array $segments): never
     if ($resource === 'analysis') {
         teacher_analysis_routes($method, array_slice($segments, 1), $teacherId);
     }
+    if ($resource === 'attachments') {
+        if (($segments[1] ?? '') === 'paper') teacher_paper_assessment_routes($method, array_slice($segments, 2), $teacherId);
+        teacher_attachments_routes($method, array_slice($segments, 1), $teacherId);
+    }
     if ($resource === 'learning-styles') {
         teacher_learning_style_routes($method, array_slice($segments, 1), $teacherId);
     }
@@ -118,6 +129,9 @@ function handle_teacher_routes(string $method, array $segments): never
         teacher_school_settings_routes($method, array_slice($segments, 1), $teacherId);
     }
     if ($resource === 'interactive-games') {
+        if (($segments[1] ?? '') === 'builder') {
+            teacher_interactive_game_builder_routes($method, array_slice($segments, 2), $teacherId);
+        }
         teacher_interactive_games_routes($method, array_slice($segments, 1), $teacherId);
     }
     if ($resource === 'privacy') { platform_privacy_routes('teacher',$teacherId,$method); }
@@ -224,6 +238,16 @@ function teacher_data_routes(string $method, array $segments, int $teacherId): n
         if ($method === 'DELETE') {
             $studentCount=(int)(fetch_one('SELECT COUNT(*) AS n FROM students WHERE class_id=?',[$id])['n']??0);
             if ($studentCount>0) Http::json(['error'=>'لا يمكن حذف فصل يحتوي طالبات. انقلي الطالبات إلى فصل آخر أولًا.'],409);
+            if (function_exists('teacher_attachments_schema_ready') && teacher_attachments_schema_ready()) {
+                $attachmentCount=(int)(fetch_one('SELECT COUNT(*) AS n FROM teacher_analysis_attachments WHERE class_id=? AND teacher_id=? AND deleted_at IS NULL',[$id,$teacherId])['n']??0);
+                if ($attachmentCount>0) Http::json(['error'=>'لا يمكن حذف فصل يحتوي مرفقات تحليل. احذفي مرفقاته أولًا.'],409);
+                execute_sql('DELETE FROM teacher_analysis_attachments WHERE class_id=? AND teacher_id=? AND deleted_at IS NOT NULL',[$id,$teacherId]);
+            }
+            if (function_exists('teacher_skill_assessments_schema_ready') && teacher_skill_assessments_schema_ready()) {
+                $assessmentCount=(int)(fetch_one('SELECT COUNT(*) AS n FROM teacher_skill_assessments WHERE class_id=? AND teacher_id=? AND deleted_at IS NULL',[$id,$teacherId])['n']??0);
+                if ($assessmentCount>0) Http::json(['error'=>'لا يمكن حذف فصل يحتوي تقويمات مهارات محفوظة. احذفي التقويمات أولًا.'],409);
+                execute_sql('DELETE FROM teacher_skill_assessments WHERE class_id=? AND teacher_id=? AND deleted_at IS NOT NULL',[$id,$teacherId]);
+            }
             execute_sql('DELETE FROM classes WHERE id=? AND teacher_id=?', [$id,$teacherId]);
             Http::json(['ok' => true]);
         }

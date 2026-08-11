@@ -7,14 +7,20 @@ CREATE TABLE IF NOT EXISTS teacher_interactive_games (
   lesson_name VARCHAR(190) NOT NULL,
   unit_number SMALLINT UNSIGNED NOT NULL,
   lesson_number SMALLINT UNSIGNED NOT NULL,
+  stage ENUM('all','ابتدائي','متوسط','ثانوي') NOT NULL DEFAULT 'all',
+  grade_label VARCHAR(80) NOT NULL DEFAULT 'all',
+  semester ENUM('first','second') NULL DEFAULT NULL,
+  class_id BIGINT UNSIGNED NULL DEFAULT NULL,
   time_mode ENUM('open','timed') NOT NULL DEFAULT 'open',
   time_per_question_seconds SMALLINT UNSIGNED NULL DEFAULT NULL,
   certificate_portfolio_enabled TINYINT(1) NOT NULL DEFAULT 1,
-  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  is_active TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_teacher_interactive_games_teacher
     FOREIGN KEY (teacher_id) REFERENCES teachers(id),
   UNIQUE INDEX uq_teacher_interactive_games_teacher_key (teacher_id, game_key),
-  INDEX idx_teacher_interactive_games_teacher_active (teacher_id, is_active)
+  INDEX idx_teacher_interactive_games_teacher_active (teacher_id, is_active),
+  INDEX idx_teacher_interactive_games_publication
+    (teacher_id, is_active, semester, stage, grade_label, class_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

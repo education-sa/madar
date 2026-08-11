@@ -202,7 +202,7 @@ function teacher_follow_up_list(int $teacherId): never
     $stage=trim((string)($_GET['stage']??''));
     $gradeLabel=trim((string)($_GET['gradeLabel']??''));
     $classId=(int)($_GET['classId']??0);
-    $where=['c.teacher_id=?'];$whereParams=[$teacherId];
+    $where=['c.teacher_id=?','s.deleted_at IS NULL'];$whereParams=[$teacherId];
     if ($stage!=='') {$where[]='c.stage=?';$whereParams[]=$stage;}
     if ($gradeLabel!=='') {$where[]='c.grade_label=?';$whereParams[]=$gradeLabel;}
     if ($classId>0) {$where[]='c.id=?';$whereParams[]=$classId;}
@@ -214,8 +214,8 @@ function teacher_follow_up_list(int $teacherId): never
     $rows=fetch_all(
         'SELECT s.id,s.name,s.email,s.stage,s.grade_label,c.id AS class_id,c.name AS class_name,
                 f.periodic_test_score,f.participation_score,f.homework_score,f.tasks_score,f.quiz_one_score,f.quiz_two_score,f.final_exam_score,
-                p1.participation_score AS p1_participation,p1.homework_score AS p1_homework,p1.tasks_score AS p1_tasks,
-                p2.participation_score AS p2_participation,p2.homework_score AS p2_homework,p2.tasks_score AS p2_tasks,
+                p1.periodic_test_score AS p1_periodic_test,p1.participation_score AS p1_participation,p1.homework_score AS p1_homework,p1.tasks_score AS p1_tasks,
+                p2.periodic_test_score AS p2_periodic_test,p2.participation_score AS p2_participation,p2.homework_score AS p2_homework,p2.tasks_score AS p2_tasks,
                 COALESCE(a.present_count,0) AS present_count,COALESCE(a.absent_count,0) AS absent_count,
                 COALESCE(a.late_count,0) AS late_count,COALESCE(a.excused_count,0) AS excused_count
          FROM students s
@@ -251,18 +251,22 @@ function teacher_follow_up_list(int $teacherId): never
             $scores=[$item['periodicTestScore'],$item['participationScore'],$item['homeworkScore'],$item['tasksScore']];
             $item['total']=round(array_sum(array_map(static fn($value)=>(float)($value??0),$scores)),2);
         } else {
+            $periodicTestAverage=($row['p1_periodic_test']===null || $row['p2_periodic_test']===null)
+                ? null
+                : round(((float)$row['p1_periodic_test']+(float)$row['p2_periodic_test'])/2,2);
             $participationRatio=teacher_score_ratio_average([$row['p1_participation'],$row['p2_participation']],[$firstSettings['participation_max'],$secondSettings['participation_max']]);
             $homeworkRatio=teacher_score_ratio_average([$row['p1_homework'],$row['p2_homework']],[$firstSettings['homework_max'],$secondSettings['homework_max']]);
             $tasksRatio=teacher_score_ratio_average([$row['p1_tasks'],$row['p2_tasks']],[$firstSettings['tasks_max'],$secondSettings['tasks_max']]);
-            $quizAverage=teacher_average_available([$item['quizOneScore'],$item['quizTwoScore']]);
-            $item['quizAverage']=$quizAverage;
+            $item['periodOnePeriodicTestScore']=$row['p1_periodic_test']===null?null:(float)$row['p1_periodic_test'];
+            $item['periodTwoPeriodicTestScore']=$row['p2_periodic_test']===null?null:(float)$row['p2_periodic_test'];
+            $item['periodicTestAverage']=$periodicTestAverage;
             $item['participationRatio']=$participationRatio;
             $item['homeworkRatio']=$homeworkRatio;
             $item['tasksRatio']=$tasksRatio;
             $item['participationAverage']=round($participationRatio*(float)$settings['participation_max'],2);
             $item['homeworkAverage']=round($homeworkRatio*(float)$settings['homework_max'],2);
             $item['tasksAverage']=round($tasksRatio*(float)$settings['tasks_max'],2);
-            $item['total']=round((float)($quizAverage??0)+$item['participationAverage']+$item['homeworkAverage']+$item['tasksAverage']+(float)($item['finalExamScore']??0),2);
+            $item['total']=round((float)($periodicTestAverage??0)+$item['participationAverage']+$item['homeworkAverage']+$item['tasksAverage']+(float)($item['finalExamScore']??0),2);
         }
         $items[]=$item;
     }
@@ -306,7 +310,7 @@ function teacher_follow_up_save(int $teacherId): never
     $stage=trim((string)($data['stage']??''));
     $gradeLabel=trim((string)($data['gradeLabel']??''));
     $classId=(int)($data['classId']??0);
-    $where=['c.teacher_id=?'];$params=[$teacherId];
+    $where=['c.teacher_id=?','s.deleted_at IS NULL'];$params=[$teacherId];
     if ($stage!=='') {$where[]='c.stage=?';$params[]=$stage;}
     if ($gradeLabel!=='') {$where[]='c.grade_label=?';$params[]=$gradeLabel;}
     if ($classId>0) {$where[]='c.id=?';$params[]=$classId;}
@@ -326,8 +330,6 @@ function teacher_follow_up_save(int $teacherId): never
         } else {
             $normalizedRows[]=[
                 $studentId,
-                teacher_follow_up_score($row['quizOneScore']??null,$settings['quiz_max'],'الاختبار الفوري الأول'),
-                teacher_follow_up_score($row['quizTwoScore']??null,$settings['quiz_max'],'الاختبار الفوري الثاني'),
                 teacher_follow_up_score($row['finalExamScore']??null,$settings['final_exam_max'],'الاختبار النهائي'),
             ];
         }
@@ -340,8 +342,8 @@ function teacher_follow_up_save(int $teacherId): never
             $statement=$pdo->prepare('INSERT INTO student_follow_up (teacher_id,student_id,period_no,academic_year,semester,periodic_test_score,participation_score,homework_score,tasks_score) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE periodic_test_score=VALUES(periodic_test_score),participation_score=VALUES(participation_score),homework_score=VALUES(homework_score),tasks_score=VALUES(tasks_score)');
             foreach($normalizedRows as $row) $statement->execute([$teacherId,$row[0],$period,$academicYear,$semester,$row[1],$row[2],$row[3],$row[4]]);
         } else {
-            $statement=$pdo->prepare('INSERT INTO student_follow_up (teacher_id,student_id,period_no,academic_year,semester,quiz_one_score,quiz_two_score,final_exam_score) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE quiz_one_score=VALUES(quiz_one_score),quiz_two_score=VALUES(quiz_two_score),final_exam_score=VALUES(final_exam_score)');
-            foreach($normalizedRows as $row) $statement->execute([$teacherId,$row[0],$period,$academicYear,$semester,$row[1],$row[2],$row[3]]);
+            $statement=$pdo->prepare('INSERT INTO student_follow_up (teacher_id,student_id,period_no,academic_year,semester,final_exam_score) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE final_exam_score=VALUES(final_exam_score)');
+            foreach($normalizedRows as $row) $statement->execute([$teacherId,$row[0],$period,$academicYear,$semester,$row[1]]);
         }
     });
     Activity::log('teacher',$teacherId,'حفظ سجل المتابعة',"الفترة {$period} · {$academicYear} · ".($semester==='second'?'الترم الثاني':'الترم الأول'));

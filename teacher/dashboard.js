@@ -1,3 +1,6 @@
+import { renderAnalysisDashboard } from "./analysis-dashboard.js?v=1";
+import { renderSkillAttachments } from "./skill-attachments.js?v=7";
+
 // لوحة تحكم المعلمة - منطق العرض والتنقل بين الأقسام (SPA بسيطة بدون مكتبات خارجية)
 
 const contentEl = document.getElementById("content");
@@ -19,6 +22,7 @@ const ROUTE_TITLES = {
   "tests-quiz": "الاختبارات القصيرة",
   "question-bank": "بنك الأسئلة الذكي",
   "analysis-panel": "تحليل النتائج",
+  attachments: "المهارات والمرفقات",
   "analysis-student": "تحليل لكل طالبة",
   "analysis-class": "تحليل الفصل العام",
   "analysis-skill": "تحليل كل مهارة",
@@ -49,16 +53,31 @@ let allSkills = [];
 let csrfToken = "";
 
 let schoolSettings = null;
-let interactiveGamesState = { migrationReady: false, games: [] };
+let interactiveGamesState = { publicationReady: true, games: [], builderReady: false, builderGames: [] };
 const ACADEMIC_GRADES = {
   "ابتدائي": ["رابع ابتدائي", "خامس ابتدائي", "سادس ابتدائي"],
   "متوسط": ["أول متوسط", "ثاني متوسط", "ثالث متوسط"],
   "ثانوي": ["أول ثانوي", "ثاني ثانوي", "ثالث ثانوي"],
 };
+const GAME_TARGET_STAGES = ["all", "ابتدائي", "متوسط", "ثانوي"];
+const ACADEMIC_ALL_FILTER_KINDS = new Set(["games", "competitions", "strategies", "library", "knowledgeExchange", "analysis", "studentFiles", "remedialPlans"]);
+
+function gameTargetGradeOptions(stage, selected = "all") {
+  const grades = stage === "all" ? [] : (ACADEMIC_GRADES[stage] || []);
+  return ["all", ...grades].map((grade) => `<option value="${escapeHtml(grade)}" ${grade === selected ? "selected" : ""}>${grade === "all" ? "الجميع" : escapeHtml(grade)}</option>`).join("");
+}
 const academicSelections = {
   followUp: JSON.parse(sessionStorage.getItem("madarAcademicFollowUp") || "null") || {},
   tests: JSON.parse(sessionStorage.getItem("madarAcademicTests") || "null") || {},
   games: JSON.parse(sessionStorage.getItem("madarAcademicGames") || "null") || {},
+  competitions: JSON.parse(sessionStorage.getItem("madarAcademicCompetitions") || "null") || {},
+  strategies: JSON.parse(sessionStorage.getItem("madarAcademicStrategies") || "null") || {},
+  library: JSON.parse(sessionStorage.getItem("madarAcademicLibrary") || "null") || {},
+  knowledgeExchange: JSON.parse(sessionStorage.getItem("madarAcademicKnowledgeExchange") || "null") || {},
+  analysis: JSON.parse(sessionStorage.getItem("madarAcademicAnalysis") || "null") || {},
+  studentFiles: JSON.parse(sessionStorage.getItem("madarAcademicStudentFiles") || "null") || {},
+  remedialPlans: JSON.parse(sessionStorage.getItem("madarAcademicRemedialPlans") || "null") || {},
+  attachments: JSON.parse(sessionStorage.getItem("madarAcademicAttachments") || "null") || {},
 };
 let recentCreatedTestId = Number(sessionStorage.getItem("madarRecentCreatedTestId") || 0);
 let recentCreatedTestType = sessionStorage.getItem("madarRecentCreatedTestType") || "";
@@ -86,13 +105,36 @@ function actualAcademicGradeLabel(kind) {
   return selectedAcademicClass(kind)?.grade_label || academicSelections[kind]?.gradeLabel || "";
 }
 
+function academicItemMatches(kind, item = {}) {
+  const selection = normalizeAcademicSelection(kind);
+  const selectedClass = selectedAcademicClass(kind);
+  const itemClassId = Number(item.classId ?? item.class_id ?? 0);
+  const itemStage = String(item.stage || item.level || "").trim();
+  const itemGrade = String(item.gradeLabel || item.grade_label || "").trim();
+  if (selectedClass && itemClassId !== Number(selectedClass.id)) return false;
+  if (selection.stage !== "all" && itemStage && itemStage !== selection.stage) return false;
+  if (selection.gradeLabel !== "all" && itemGrade
+      && normalizeGradeKey(itemStage || selection.stage, itemGrade) !== normalizeGradeKey(selection.stage, selection.gradeLabel)) return false;
+  return true;
+}
+
 async function loadSchoolSettings(force = false) {
   if (!schoolSettings || force) schoolSettings = await api("/school-settings");
   return schoolSettings;
 }
 
 async function loadInteractiveGames() {
-  interactiveGamesState = await api("/interactive-games");
+  const [legacy, builder] = await Promise.all([
+    api("/interactive-games"),
+    api("/interactive-games/builder/library").catch((error) => ({ migrationReady: false, games: [], error: error.message })),
+  ]);
+  interactiveGamesState = {
+    ...legacy,
+    builderReady: builder.migrationReady === true,
+    builderMigration: builder.migration || "migration_20260810_interactive_game_builder.sql",
+    builderGames: Array.isArray(builder.games) ? builder.games : [],
+    builderError: builder.error || "",
+  };
   if (!Array.isArray(interactiveGamesState.games)) interactiveGamesState.games = [];
   return interactiveGamesState;
 }
@@ -102,7 +144,12 @@ function normalizedAcademicYear(value) {
 }
 
 function academicClasses(selection) {
-  const matching = allClasses.filter((item) => (!selection.stage || item.level === selection.stage) && (!selection.gradeLabel || normalizeGradeKey(item.level, item.grade_label) === selection.gradeLabel));
+  const matching = allClasses.filter((item) => {
+    const stageMatches = !selection.stage || selection.stage === "all" || item.level === selection.stage;
+    const gradeMatches = !selection.gradeLabel || selection.gradeLabel === "all"
+      || normalizeGradeKey(item.level, item.grade_label) === selection.gradeLabel;
+    return stageMatches && gradeMatches;
+  });
   const selectedYear = normalizedAcademicYear(schoolSettings?.academicYear);
   if (!selectedYear) return matching;
   const sameYear = matching.filter((item) => normalizedAcademicYear(item.academic_year) === selectedYear);
@@ -111,16 +158,36 @@ function academicClasses(selection) {
 
 function normalizeAcademicSelection(kind) {
   const selection = academicSelections[kind];
+  const allowAll = ACADEMIC_ALL_FILTER_KINDS.has(kind);
   const firstClass = allClasses[0];
   if (!selection.stage) selection.stage = firstClass?.level || "ابتدائي";
+  if (allowAll && selection.stage === "all") {
+    selection.gradeLabel = "all";
+    selection.classId = "";
+  }
   const grades = ACADEMIC_GRADES[selection.stage] || [];
-  if (!grades.includes(selection.gradeLabel)) {
+  const allowedGrades = allowAll ? ["all", ...grades] : grades;
+  if (!allowedGrades.includes(selection.gradeLabel)) {
     const classGrade = normalizeGradeKey(selection.stage, allClasses.find((item) => item.level === selection.stage)?.grade_label);
     selection.gradeLabel = grades.includes(classGrade) ? classGrade : (grades[0] || "");
   }
   const classes = academicClasses(selection);
-  if (!classes.some((item) => String(item.id) === String(selection.classId))) selection.classId = classes[0]?.id ? String(classes[0].id) : "";
-  const storageKey = { followUp: "madarAcademicFollowUp", tests: "madarAcademicTests", games: "madarAcademicGames" }[kind];
+  if (!classes.some((item) => String(item.id) === String(selection.classId))) {
+    selection.classId = allowAll ? "" : (classes[0]?.id ? String(classes[0].id) : "");
+  }
+  const storageKey = {
+    followUp: "madarAcademicFollowUp",
+    tests: "madarAcademicTests",
+    games: "madarAcademicGames",
+    competitions: "madarAcademicCompetitions",
+    strategies: "madarAcademicStrategies",
+    library: "madarAcademicLibrary",
+    knowledgeExchange: "madarAcademicKnowledgeExchange",
+    analysis: "madarAcademicAnalysis",
+    studentFiles: "madarAcademicStudentFiles",
+    remedialPlans: "madarAcademicRemedialPlans",
+    attachments: "madarAcademicAttachments",
+  }[kind];
   if (storageKey) sessionStorage.setItem(storageKey, JSON.stringify(selection));
   return selection;
 }
@@ -213,14 +280,17 @@ function academicClassLabel(item, index) {
 
 function academicSelectorHtml(kind) {
   const selection = normalizeAcademicSelection(kind);
+  const allowAll = ACADEMIC_ALL_FILTER_KINDS.has(kind);
   const grades = ACADEMIC_GRADES[selection.stage] || [];
   const classes = academicClasses(selection);
-  const semesterLabel = schoolSettings?.semesterLabel || "الترم الأول";
+  const semesterLabel = schoolSettings?.semesterLabel || "—";
+  const stageValues = allowAll ? ["all", ...Object.keys(ACADEMIC_GRADES)] : Object.keys(ACADEMIC_GRADES);
+  const gradeValues = allowAll ? ["all", ...grades] : grades;
   return `<section class="academic-filter" data-academic-kind="${kind}">
     <div class="academic-filter-fields">
-      <label>المرحلة<select data-academic-stage>${Object.keys(ACADEMIC_GRADES).map((value) => `<option value="${value}" ${selection.stage === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
-      <label>الصف<select data-academic-grade>${grades.map((value) => `<option value="${value}" ${selection.gradeLabel === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
-      <label>الفصل<select data-academic-class>${classes.length ? classes.map((item, index) => `<option value="${item.id}" ${String(selection.classId) === String(item.id) ? "selected" : ""}>${academicClassLabel(item, index)}</option>`).join("") : '<option value="">لا يوجد فصل مسجل لهذا الصف</option>'}</select></label>
+      <label>المرحلة<select data-academic-stage>${stageValues.map((value) => `<option value="${value}" ${selection.stage === value ? "selected" : ""}>${value === "all" ? "الجميع" : value}</option>`).join("")}</select></label>
+      <label>الصف<select data-academic-grade>${gradeValues.map((value) => `<option value="${value}" ${selection.gradeLabel === value ? "selected" : ""}>${value === "all" ? "الجميع" : value}</option>`).join("")}</select></label>
+      <label>الفصل<select data-academic-class>${allowAll ? `<option value="" ${selection.classId ? "" : "selected"}>الجميع</option>` : ""}${classes.length ? classes.map((item, index) => `<option value="${item.id}" ${String(selection.classId) === String(item.id) ? "selected" : ""}>${academicClassLabel(item, index)}</option>`).join("") : (allowAll ? "" : '<option value="">لا يوجد فصل مسجل لهذا الصف</option>')}</select></label>
     </div>
     <div class="semester-indicator"><strong>${escapeHtml(semesterLabel)}</strong></div>
   </section>`;
@@ -232,7 +302,7 @@ function bindAcademicSelector(kind, onChange) {
   const selection = academicSelections[kind];
   root.querySelector("[data-academic-stage]").onchange = (event) => {
     selection.stage = event.target.value;
-    selection.gradeLabel = (ACADEMIC_GRADES[selection.stage] || [])[0] || "";
+    selection.gradeLabel = ACADEMIC_ALL_FILTER_KINDS.has(kind) ? "all" : ((ACADEMIC_GRADES[selection.stage] || [])[0] || "");
     selection.classId = "";
     normalizeAcademicSelection(kind);
     onChange();
@@ -310,6 +380,17 @@ async function api(path, options = {}) {
 
 function escapeHtml(str = "") {
   return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function safeResourceUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    if (raw.startsWith("/") && !raw.startsWith("//")) return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    return parsed.href;
+  } catch (_) { return ""; }
 }
 
 const MADAR_MATH_ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
@@ -1404,12 +1485,14 @@ function openStudentFileReview(file) {
 }
 
 async function renderStudentFiles() {
-  const data = await api("/student-files");
+  const [data] = await Promise.all([api("/student-files"), loadSchoolSettings()]);
+  const files = (data.files || []).filter((file) => academicItemMatches("studentFiles", file));
   contentEl.innerHTML = `
+    ${academicSelectorHtml("studentFiles")}
     <section class="student-files-hero">
       <div class="student-files-hero-icon" aria-hidden="true">📁</div>
       <div><span>إدارة الطالبات</span><h3>ملفات الطالبات</h3><p>هنا تظهر الواجبات وأوراق العمل والمهام والمشاريع وصور الإنجاز التي ترفعها الطالبات من حساباتهن.</p></div>
-      <strong>${data.files.length} ملف</strong>
+      <strong>${files.length} ملف</strong>
     </section>
     <div class="card">
       <div class="toolbar">
@@ -1417,7 +1500,7 @@ async function renderStudentFiles() {
         <select id="studentFilesCategory"><option value="">كل أنواع الأعمال</option>${Object.entries(PORTFOLIO_CATEGORY_META).map(([key, item]) => `<option value="${key}">${item.label}</option>`).join("")}</select>
       </div>
       <div id="studentFilesWrap">
-        ${data.files.length ? `<div class="table-wrap"><table id="studentFilesTable"><thead><tr><th>الطالبة والفصل</th><th>عنوان الملف ونوعه</th><th>تاريخ الرفع</th><th>الحالة</th><th>المعاينة والتنزيل</th><th>المراجعة</th></tr></thead><tbody>${data.files.map((file) => {
+        ${files.length ? `<div class="table-wrap"><table id="studentFilesTable"><thead><tr><th>الطالبة والفصل</th><th>عنوان الملف ونوعه</th><th>تاريخ الرفع</th><th>الحالة</th><th>المعاينة والتنزيل</th><th>المراجعة</th></tr></thead><tbody>${files.map((file) => {
           const meta = PORTFOLIO_CATEGORY_META[file.category] || PORTFOLIO_CATEGORY_META.other;
           const search = `${file.studentName} ${file.studentEmail} ${file.title} ${file.note} ${file.className}`.toLocaleLowerCase("ar");
           const certificateKey = String(file.certificateKey || file.certificate_key || "").trim();
@@ -1437,7 +1520,8 @@ async function renderStudentFiles() {
       </div>
     </div>`;
 
-  if (!data.files.length) return;
+  bindAcademicSelector("studentFiles", renderStudentFiles);
+  if (!files.length) return;
   const searchInput = document.getElementById("studentFilesSearch");
   const categoryInput = document.getElementById("studentFilesCategory");
   const rows = [...document.querySelectorAll("[data-student-file]")];
@@ -1455,8 +1539,8 @@ async function renderStudentFiles() {
   }
   searchInput.oninput = filterFiles;
   categoryInput.onchange = filterFiles;
-  document.querySelectorAll("[data-preview-file]").forEach(button=>button.onclick=()=>openStudentFilePreview(data.files.find(file=>file.id===Number(button.dataset.previewFile))));
-  document.querySelectorAll("[data-review-file]").forEach(button=>button.onclick=()=>openStudentFileReview(data.files.find(file=>file.id===Number(button.dataset.reviewFile))));
+  document.querySelectorAll("[data-preview-file]").forEach(button=>button.onclick=()=>openStudentFilePreview(files.find(file=>file.id===Number(button.dataset.previewFile))));
+  document.querySelectorAll("[data-review-file]").forEach(button=>button.onclick=()=>openStudentFileReview(files.find(file=>file.id===Number(button.dataset.reviewFile))));
 }
 
 // ========================================================================== 
@@ -1480,6 +1564,62 @@ function scoreInput(studentId, field, value, max) {
 
 function maxSetting(name, label, value) {
   return `<label class="score-setting">${label}<input class="max-input" type="number" min="0.5" max="1000" step="0.5" data-max-setting="${name}" value="${escapeHtml(value)}" /></label>`;
+}
+
+function followUpPrintPeriodLabel(period) {
+  return Number(period) === 1 ? "الفترة الأولى" : Number(period) === 2 ? "الفترة الثانية" : "النهائي";
+}
+
+function followUpPrintPeriodHtml(data, period) {
+  const finalPeriod = Number(period) === 3;
+  const headers = finalPeriod
+    ? ["البريد الإلكتروني", "اسم الطالبة", "متوسط الاختبارين", "متوسط المشاركة", "متوسط الواجبات", "متوسط المهام", "الاختبار النهائي", "المجموع"]
+    : ["البريد الإلكتروني", "اسم الطالبة", "الاختبار الفتري", "المشاركة", "الواجبات", "المهام", "المجموع"];
+  const rows = (data.rows || []).map((row) => finalPeriod
+    ? [row.email, row.name, row.periodicTestAverage, row.participationAverage, row.homeworkAverage, row.tasksAverage, row.finalExamScore, row.total]
+    : [row.email, row.name, row.periodicTestScore, row.participationScore, row.homeworkScore, row.tasksScore, row.total]
+  ).map((row) => row.map((value, index) => index < 2 ? escapeHtml(value || "—") : escapeHtml(cleanScore(value))));
+  return `<section class="follow-up-print-section">
+    <h2>${escapeHtml(followUpPrintPeriodLabel(period))}</h2>
+    ${rows.length ? analysisPrintTable(headers, rows, "follow-up-grades-print-table") : '<div class="print-note">لا توجد طالبات مسجلات ضمن الاختيار الحالي.</div>'}
+  </section>`;
+}
+
+async function printFollowUpPeriods(periods) {
+  const popup = window.open("", "_blank");
+  if (!popup) return toast("اسمحي بالنوافذ المنبثقة حتى تفتح معاينة الطباعة.", "error");
+  popup.document.write('<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>جارٍ تجهيز الطباعة...</title></head><body style="font-family:Tahoma;padding:30px;text-align:center">جارٍ تجهيز سجل الدرجات...</body></html>');
+  popup.document.close();
+  closeModal();
+  try {
+    const query = academicQuery("followUp");
+    const reports = await Promise.all(periods.map((period) => api(`/follow-up?period=${period}&${query}`)));
+    const title = periods.length === 3 ? "سجل الدرجات — جميع الفترات" : `سجل درجات ${followUpPrintPeriodLabel(periods[0])}`;
+    const bodyHtml = reports.map((data, index) => followUpPrintPeriodHtml(data, periods[index])).join("");
+    const selection = normalizeAcademicSelection("followUp");
+    await openAnalysisPrint({ title, classId: selection.classId, bodyHtml, orientation: "landscape", popupWindow: popup });
+  } catch (error) {
+    popup.close();
+    toast(error.message || "تعذّر تجهيز سجل الدرجات للطباعة.", "error");
+  }
+}
+
+function openFollowUpPrintMenu() {
+  openModal(`
+    <h3>طباعة سجل الدرجات</h3>
+    <p class="tracking-note">اختاري الفترة المطلوب طباعتها وفق المرحلة والصف والفصل والترم المحددة حاليًا.</p>
+    <div class="form-grid">
+      <button class="btn btn-outline" type="button" data-follow-up-print-period="1">طباعة الفترة الأولى</button>
+      <button class="btn btn-outline" type="button" data-follow-up-print-period="2">طباعة الفترة الثانية</button>
+      <button class="btn btn-outline" type="button" data-follow-up-print-period="3">طباعة النهائي</button>
+      <button class="btn btn-primary" type="button" data-follow-up-print-period="all">طباعة الجميع</button>
+    </div>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelFollowUpPrint" type="button">إلغاء</button></div>
+  `);
+  document.querySelectorAll("[data-follow-up-print-period]").forEach((button) => {
+    button.onclick = () => printFollowUpPeriods(button.dataset.followUpPrintPeriod === "all" ? [1, 2, 3] : [Number(button.dataset.followUpPrintPeriod)]);
+  });
+  document.getElementById("cancelFollowUpPrint").onclick = closeModal;
 }
 
 async function renderFollowUp() {
@@ -1516,10 +1656,11 @@ async function renderFollowUp() {
         ${academicSelectorHtml("followUp")}
         <div class="toolbar follow-up-period-toolbar">
           <div class="tabs" style="margin:0">
-            ${[1, 2, 3].map((period) => `<button class="tab-btn ${followUpPeriod === period ? "active" : ""}" data-follow-period="${period}">${period === 1 ? "الفترة الأولى" : period === 2 ? "الفترة الثانية" : "الفترة الثالثة"}</button>`).join("")}
+            ${[1, 2, 3].map((period) => `<button class="tab-btn ${followUpPeriod === period ? "active" : ""}" data-follow-period="${period}">${period === 1 ? "الفترة الأولى" : period === 2 ? "الفترة الثانية" : "النهائي"}</button>`).join("")}
           </div>
           <div class="spacer"></div>
           <span class="follow-up-grade-note">جدول الدرجات محفوظ لكل ترم على حدة</span>
+          <button class="btn btn-outline btn-sm" id="printFollowUpGrades" type="button">🖨️ طباعة</button>
         </div>
         <div id="followUpContent"><div class="empty-state">جارٍ تحميل جدول الدرجات...</div></div>
       `}
@@ -1549,6 +1690,7 @@ async function renderFollowUp() {
       renderFollowUp();
     };
   });
+  document.getElementById("printFollowUpGrades").onclick = openFollowUpPrintMenu;
   await loadFollowUpPeriod();
   document.getElementById("followUpSearch").oninput = (event) => {
     const query = event.target.value.trim().toLocaleLowerCase("ar");
@@ -1556,6 +1698,24 @@ async function renderFollowUp() {
       row.hidden = query !== "" && !row.dataset.search.includes(query);
     });
   };
+}
+
+async function renderAttachments() {
+  await prepareAcademicSelection("attachments");
+  try { await loadSchoolSettings(); } catch (_) {}
+  await renderSkillAttachments({
+    root: contentEl,
+    academicSelectorHtml,
+    bindAcademicSelector,
+    getAcademicQuery: academicQuery,
+    rerender: renderAttachments,
+    api,
+    escapeHtml,
+    formatDate,
+    openPrint: openAnalysisPrint,
+    printTable: analysisPrintTable,
+    toast,
+  });
 }
 
 async function loadFollowUpPeriod() {
@@ -1572,7 +1732,6 @@ async function loadFollowUpPeriod() {
         maxSetting("tasksMax", "الدرجة الكاملة للمهام", settings.tasksMax),
       ].join("")
     : [
-        maxSetting("quizMax", "الدرجة الكاملة لكل اختبار فوري", settings.quizMax),
         maxSetting("participationMax", "الدرجة الكاملة لمتوسط المشاركة", settings.participationMax),
         maxSetting("homeworkMax", "الدرجة الكاملة لمتوسط الواجبات", settings.homeworkMax),
         maxSetting("tasksMax", "الدرجة الكاملة لمتوسط المهام", settings.tasksMax),
@@ -1595,9 +1754,7 @@ async function loadFollowUpPeriod() {
     return `<tr data-student-id="${row.id}" data-search="${searchText}">
       <td>${escapeHtml(row.email)}</td>
       <td>${escapeHtml(row.name)}</td>
-      <td>${scoreInput(row.id, "quizOneScore", row.quizOneScore, settings.quizMax)}</td>
-      <td>${scoreInput(row.id, "quizTwoScore", row.quizTwoScore, settings.quizMax)}</td>
-      <td><span class="tracking-derived" data-derived="quiz">${cleanScore(row.quizAverage)}</span></td>
+      <td><span class="tracking-derived" data-derived="periodic-tests" data-value="${row.periodicTestAverage === null || row.periodicTestAverage === undefined ? "" : Number(row.periodicTestAverage)}">${cleanScore(row.periodicTestAverage)}</span></td>
       <td><span class="tracking-derived" data-derived="participation" data-ratio="${Number(row.participationRatio || 0)}">${cleanScore(row.participationAverage)}</span></td>
       <td><span class="tracking-derived" data-derived="homework" data-ratio="${Number(row.homeworkRatio || 0)}">${cleanScore(row.homeworkAverage)}</span></td>
       <td><span class="tracking-derived" data-derived="tasks" data-ratio="${Number(row.tasksRatio || 0)}">${cleanScore(row.tasksAverage)}</span></td>
@@ -1608,11 +1765,11 @@ async function loadFollowUpPeriod() {
 
   target.innerHTML = `
     <p class="tracking-note">حددي الدرجة الكاملة لكل بند، ثم أدخلي درجات الطالبات واحفظي السجل.</p>
-    ${followUpPeriod === 3 ? '<p class="tracking-note">متوسطات المشاركة والواجبات والمهام تُحسب تلقائيًا من الفترتين الأولى والثانية مع مراعاة الدرجة الكاملة في كل فترة.</p>' : ""}
+    ${followUpPeriod === 3 ? '<p class="tracking-note">متوسط الاختبارين يُحسب تلقائيًا من درجة الاختبار الفتري في الفترة الأولى ودرجة الاختبار الفتري في الفترة الثانية. ومتوسطات المشاركة والواجبات والمهام تُحسب من الفترتين نفسيهما.</p>' : ""}
     <div class="score-settings">${settingsHtml}</div>
     ${data.rows.length ? `<div class="table-wrap"><table id="followUpTable"><thead><tr>${followUpPeriod < 3
       ? "<th>البريد الإلكتروني</th><th>اسم الطالبة</th><th>الاختبار الفتري</th><th>المشاركة</th><th>الواجبات</th><th>المهام</th><th>المجموع</th>"
-      : "<th>البريد الإلكتروني</th><th>اسم الطالبة</th><th>اختبار فوري 1</th><th>اختبار فوري 2</th><th>متوسط الاختبارين</th><th>متوسط المشاركة</th><th>متوسط الواجبات</th><th>متوسط المهام</th><th>الاختبار النهائي</th><th>المجموع</th>"
+      : "<th>البريد الإلكتروني</th><th>اسم الطالبة</th><th>متوسط الاختبارين</th><th>متوسط المشاركة</th><th>متوسط الواجبات</th><th>متوسط المهام</th><th>الاختبار النهائي</th><th>المجموع</th>"
     }</tr></thead><tbody>${rowsHtml}</tbody></table></div>` : '<div class="empty-state">لا توجد طالبات في فصولك بعد.</div>'}
     <div class="modal-actions"><button class="btn btn-primary" id="saveFollowUp" ${data.rows.length ? "" : "disabled"}>حفظ سجل الفترة</button></div>
   `;
@@ -1636,7 +1793,7 @@ function currentMax(name) {
 function updateFollowUpMaximums() {
   const mapping = followUpPeriod < 3
     ? { periodicTestScore: "periodicTestMax", participationScore: "participationMax", homeworkScore: "homeworkMax", tasksScore: "tasksMax" }
-    : { quizOneScore: "quizMax", quizTwoScore: "quizMax", finalExamScore: "finalExamMax" };
+    : { finalExamScore: "finalExamMax" };
   Object.entries(mapping).forEach(([field, maxName]) => {
     document.querySelectorAll(`[data-score="${field}"]`).forEach((input) => { input.max = currentMax(maxName); });
   });
@@ -1653,9 +1810,8 @@ function recalculateFollowUpRow(row) {
   if (followUpPeriod < 3) {
     ["periodicTestScore", "participationScore", "homeworkScore", "tasksScore"].forEach((field) => { total += numericInput(row, field) || 0; });
   } else {
-    const quizValues = [numericInput(row, "quizOneScore"), numericInput(row, "quizTwoScore")].filter((value) => value !== null);
-    const quizAverage = quizValues.length ? quizValues.reduce((sum, value) => sum + value, 0) / quizValues.length : 0;
-    row.querySelector('[data-derived="quiz"]').textContent = cleanScore(quizValues.length ? quizAverage : null);
+    const periodicTestsElement = row.querySelector('[data-derived="periodic-tests"]');
+    const periodicTestAverage = periodicTestsElement?.dataset.value === "" ? 0 : Number(periodicTestsElement?.dataset.value || 0);
     const derivedMaxes = { participation: "participationMax", homework: "homeworkMax", tasks: "tasksMax" };
     let derivedTotal = 0;
     Object.entries(derivedMaxes).forEach(([key, maxName]) => {
@@ -1664,7 +1820,7 @@ function recalculateFollowUpRow(row) {
       element.textContent = cleanScore(value);
       derivedTotal += value;
     });
-    total = quizAverage + derivedTotal + (numericInput(row, "finalExamScore") || 0);
+    total = periodicTestAverage + derivedTotal + (numericInput(row, "finalExamScore") || 0);
   }
   row.querySelector(".tracking-total").textContent = cleanScore(total);
 }
@@ -1676,7 +1832,7 @@ async function saveFollowUpPeriod() {
   document.querySelectorAll(".max-input").forEach((input) => { settings[input.dataset.maxSetting] = Number(input.value); });
   const fields = followUpPeriod < 3
     ? ["periodicTestScore", "participationScore", "homeworkScore", "tasksScore"]
-    : ["quizOneScore", "quizTwoScore", "finalExamScore"];
+    : ["finalExamScore"];
   const rows = [...document.querySelectorAll("#followUpTable tbody tr")].map((row) => {
     const original = followUpRowsById.get(Number(row.dataset.studentId)) || {};
     const record = { studentId: Number(row.dataset.studentId) };
@@ -2141,8 +2297,8 @@ function analysisPrintTable(headers, rows, className = "") {
   return `<div class="print-table-wrap"><table class="${escapeHtml(className)}"><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
-async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientation = "portrait" }) {
-  const popup = window.open("", "_blank");
+async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientation = "portrait", popupWindow = null }) {
+  const popup = popupWindow || window.open("", "_blank");
   if (!popup) {
     toast("اسمحي بالنوافذ المنبثقة حتى تفتح معاينة الطباعة.", "error");
     return;
@@ -2224,6 +2380,7 @@ async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientati
     .mastery-good { color: #0b7a4b; font-weight: 700; }
     .mastery-mid { color: #8a5a00; font-weight: 700; }
     .mastery-low { color: #b3261e; font-weight: 700; }
+    .follow-up-print-section + .follow-up-print-section { break-before: page; page-break-before: always; }
     .official-footer { position: absolute; right: 8mm; left: 8mm; bottom: 6mm; display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; border-top: 1px solid #cfc7d5; padding-top: 2.5mm; font-size: 9pt; direction: rtl; }
     .official-footer span:first-child { text-align: right; }
     .official-footer span:last-child { text-align: left; }
@@ -2270,26 +2427,19 @@ async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientati
 }
 
 async function renderAnalysisPanel() {
-  contentEl.innerHTML = `
-    <section class="analysis-panel-root">
-      <div class="student-panel-tabs" role="tablist" aria-label="أقسام تحليل النتائج">
-        <button class="tab-btn ${analysisPanelMode === "student" ? "active" : ""}" data-analysis-panel="student">تحليل كل طالبة وسجل الدرجات</button>
-        <button class="tab-btn ${analysisPanelMode === "class" ? "active" : ""}" data-analysis-panel="class">تحليل الفصل العام</button>
-        <button class="tab-btn ${analysisPanelMode === "skill" ? "active" : ""}" data-analysis-panel="skill">تحليل أسئلة الاختبار والمهارات</button>
-      </div>
-      <div id="analysisPanelContent"></div>
-    </section>
-  `;
-  document.querySelectorAll("[data-analysis-panel]").forEach((button) => {
-    button.onclick = () => {
-      analysisPanelMode = button.dataset.analysisPanel;
-      renderAnalysisPanel();
-    };
+  try { await loadSchoolSettings(); } catch (_) {}
+  await renderAnalysisDashboard({
+    root: contentEl,
+    academicSelectorHtml,
+    bindAcademicSelector,
+    getAcademicQuery: academicQuery,
+    api,
+    escapeHtml,
+    formatDate,
+    openPrint: openAnalysisPrint,
+    printTable: analysisPrintTable,
+    toast,
   });
-  const target = document.getElementById("analysisPanelContent");
-  if (analysisPanelMode === "class") await renderAnalysisClass(target);
-  else if (analysisPanelMode === "skill") await renderAnalysisSkill(target);
-  else await renderAnalysisStudent(target);
 }
 
 async function renderAnalysisStudent(target = contentEl) {
@@ -2930,7 +3080,7 @@ const QUESTION_BANK_TERMS = [
   { value: "الترم الثاني", label: "الترم الثاني" },
 ];
 const QUESTION_DESIGN_MODES = {
-  quick: { icon: "⚡", title: "توليد سريع", description: "أسئلة سريعة ومتوازنة للدرس", count: 5, difficulty: "medium", types: ["mcq", "true_false"] },
+  quick: { icon: "⚡", title: "توليد سريع", description: "إنشاء اختبار سريع من المهارات المعتمدة", count: 5, difficulty: "medium", types: ["mcq", "true_false"] },
   diagnostic: { icon: "🩺", title: "تشخيصي", description: "قياس المهارات السابقة والفجوات", count: 10, difficulty: "medium", types: ["mcq", "true_false"] },
   periodic: { icon: "🗓️", title: "فتري", description: "أسئلة مناسبة لاختبار الفترة", count: 15, difficulty: "medium", types: ["mcq", "true_false", "short_answer"] },
   professional: { icon: "🧩", title: "احترافي", description: "تصميم سؤال يدوي كامل التفاصيل", manual: true },
@@ -3139,16 +3289,19 @@ function questionBankDiagnosticTargetClasses() {
   return matchingClasses[selectedIndex] ? [matchingClasses[selectedIndex]] : [];
 }
 
-function questionBankDiagnosticWorkspaceHtml(mode) {
+function questionBankDiagnosticWorkspaceHtml(mode, modeKey = "diagnostic") {
   const skills = questionBankSkillsForSelection().filter((skill) => questionBankSkillHasTerm(skill));
   const units = questionBankUnitsForSkills(skills);
   const targetClasses = questionBankDiagnosticTargetClasses();
   const targetLabel = questionBankSelection.classValue === "all"
     ? "كل الفصول المسجلة لهذا الصف"
     : questionBankClassLabel();
-  return `<div class="question-bank-inline-workspace" id="questionDesignWorkspace" data-mode="diagnostic">
+  const initialTestType = modeKey === "quick" ? "quiz" : "pre_diagnostic";
+  const initialTitle = `${TEST_TYPE_LABELS[initialTestType]} - ${questionBankSelection.gradeLabel}`;
+  const workspaceTitle = modeKey === "quick" ? "توليد سريع حسب المهارات" : "اختبار تشخيصي حسب المهارات";
+  return `<div class="question-bank-inline-workspace" id="questionDesignWorkspace" data-mode="${modeKey}">
     <div class="question-bank-workspace-head">
-      <div><span class="question-bank-mode-icon">${mode.icon}</span><div><h3>اختبار تشخيصي حسب المهارات</h3><p>يأخذ سؤالًا عشوائيًا واحدًا من الأسئلة المعتمدة لكل مهارة، دون استخدام الذكاء الاصطناعي. وقد يظهر لكل طالبة بديل مختلف من المهارة نفسها.</p></div></div>
+      <div><span class="question-bank-mode-icon">${mode.icon}</span><div><h3>${workspaceTitle}</h3><p>يأخذ سؤالًا عشوائيًا واحدًا من الأسئلة المعتمدة لكل مهارة، دون استخدام الذكاء الاصطناعي. وقد يظهر لكل طالبة بديل مختلف من المهارة نفسها.</p></div></div>
       <span class="question-bank-context-badge">${escapeHtml(questionBankSelection.stage)} · ${escapeHtml(questionBankSelection.gradeLabel)} · ${escapeHtml(questionBankClassLabel())} · ${escapeHtml(questionBankSelection.termLabel)}</span>
     </div>
     <div id="questionDesignInlineMsg"></div>
@@ -3163,12 +3316,12 @@ function questionBankDiagnosticWorkspaceHtml(mode) {
       <div class="question-bank-skills-grid">${questionBankSkillCheckboxesHtml(skills)}</div>
     </section>
     <div class="form-grid question-bank-generation-settings">
-      <label class="field diagnostic-test-title-field">اسم الاختبار<input id="diagnosticBankTitle" value="تشخيصي قبلي - ${escapeHtml(questionBankSelection.gradeLabel)}" data-auto-title="تشخيصي قبلي - ${escapeHtml(questionBankSelection.gradeLabel)}" placeholder="مثال: الاختبار التشخيصي للمهارات الأساسية"></label>
+      <label class="field diagnostic-test-title-field">اسم الاختبار<input id="diagnosticBankTitle" value="${escapeHtml(initialTitle)}" data-auto-title="${escapeHtml(initialTitle)}" placeholder="مثال: اختبار المهارات الأساسية"></label>
       <label class="field">نوع الاختبار
         <select id="diagnosticBankTestType">
-          <option value="pre_diagnostic">تشخيصي قبلي</option>
+          <option value="pre_diagnostic" ${initialTestType === "pre_diagnostic" ? "selected" : ""}>تشخيصي قبلي</option>
           <option value="post_diagnostic">تشخيصي بعدي</option>
-          <option value="quiz">اختبار قصير</option>
+          <option value="quiz" ${initialTestType === "quiz" ? "selected" : ""}>اختبار قصير</option>
         </select>
       </label>
       <div class="field diagnostic-duration-field"><span>المدة بالدقائق</span><div class="diagnostic-duration-row"><input id="diagnosticBankDuration" type="number" min="1" max="240" value="20"><label class="diagnostic-no-time-option"><input id="diagnosticBankNoTime" type="checkbox"> بدون وقت</label></div></div>
@@ -3211,7 +3364,7 @@ function questionBankProfessionalWorkspaceHtml(mode) {
 
 function questionBankDesignWorkspaceHtml(modeKey) {
   const mode = QUESTION_DESIGN_MODES[modeKey] || QUESTION_DESIGN_MODES.quick;
-  if (modeKey === "diagnostic") return questionBankDiagnosticWorkspaceHtml(mode);
+  if (["quick", "diagnostic"].includes(modeKey)) return questionBankDiagnosticWorkspaceHtml(mode, modeKey);
   return mode.manual ? questionBankProfessionalWorkspaceHtml(mode) : questionBankAutomaticWorkspaceHtml(modeKey, mode);
 }
 
@@ -3265,7 +3418,7 @@ function setQuestionBankInlineMessage(message, type = "error") {
 function bindQuestionBankDesignWorkspace() {
   const workspace = document.getElementById("questionDesignWorkspace");
   if (!workspace) return;
-  if (workspace.dataset.mode === "diagnostic") {
+  if (["quick", "diagnostic"].includes(workspace.dataset.mode)) {
     const skillBoxes = [...workspace.querySelectorAll("[data-question-bank-skill]")];
     const skillOptions = [...workspace.querySelectorAll(".question-bank-skill-option")];
     const unitButtons = [...workspace.querySelectorAll("[data-diagnostic-unit]")];
@@ -3353,7 +3506,7 @@ function previewDiagnosticTestFromSkills() {
   const testType = diagnosticBankTestTypeValue();
   const durationMinutes = diagnosticBankDurationValue();
   const targetClasses = questionBankDiagnosticTargetClasses();
-  if (!selected.ids.length) return setQuestionBankInlineMessage("حددي مهارة واحدة على الأقل للاختبار التشخيصي.");
+  if (!selected.ids.length) return setQuestionBankInlineMessage("حددي مهارة واحدة على الأقل للاختبار.");
   if (!title) return setQuestionBankInlineMessage("اكتبي اسم الاختبار.");
   if (!targetClasses.length) return setQuestionBankInlineMessage("الفصل المختار من أعلى الصفحة غير مسجل لهذا الصف.");
   openModal(`
@@ -3375,7 +3528,7 @@ async function createDiagnosticTestFromSkills() {
   const targetClasses = questionBankDiagnosticTargetClasses();
   const classIds = targetClasses.map((item) => Number(item.id)).filter(Boolean);
   const durationMinutes = diagnosticBankDurationValue();
-  if (!skillIds.length) return setQuestionBankInlineMessage("حددي مهارة واحدة على الأقل للاختبار التشخيصي.");
+  if (!skillIds.length) return setQuestionBankInlineMessage("حددي مهارة واحدة على الأقل للاختبار.");
   if (!title) return setQuestionBankInlineMessage("اكتبي اسم الاختبار.");
   if (!classIds.length) return setQuestionBankInlineMessage("الفصل المختار من أعلى الصفحة غير مسجل لهذا الصف.");
   const button = document.getElementById("sendDiagnosticToTests");
@@ -4186,7 +4339,8 @@ function openStrategiesPanel() {
   navigate("strategies-panel");
 }
 
-function renderStrategiesPanel() {
+async function renderStrategiesPanel() {
+  try { await loadSchoolSettings(); } catch (_) {}
   contentEl.innerHTML = `
     <div class="student-panel-tabs" role="tablist" aria-label="أقسام الاستراتيجيات">
       <button class="tab-btn active" type="button" aria-selected="true">الصف المقلوب</button>
@@ -4203,7 +4357,8 @@ function openLibraryPanel(mode = "videos") {
   navigate("library-panel");
 }
 
-function renderLibraryPanel() {
+async function renderLibraryPanel() {
+  try { await loadSchoolSettings(); } catch (_) {}
   contentEl.innerHTML = `
     <div class="student-panel-tabs" role="tablist" aria-label="أقسام الموارد المكتبية">
       <button class="tab-btn ${libraryPanelMode === "videos" ? "active" : ""}" data-library-panel="videos">الفيديوهات</button>
@@ -4229,7 +4384,7 @@ const KNOWLEDGE_META = {
 };
 
 async function renderKnowledgeExchange() {
-  const data = await api("/knowledge-exchange");
+  const [data] = await Promise.all([api("/knowledge-exchange"), loadSchoolSettings()]);
   const meta = KNOWLEDGE_META[knowledgeExchangeMode];
   const resources = data.resources.filter((item) => item.category === knowledgeExchangeMode);
   contentEl.innerHTML = `
@@ -4237,6 +4392,7 @@ async function renderKnowledgeExchange() {
       <span aria-hidden="true">🤝</span>
       <div><small>مشاركة المحتوى مع الطالبات</small><h2>تبادل المعرفة</h2><p>أضيفي أوراق العمل والملخصات وروابط الفيديو لتظهر مباشرة في حسابات طالباتكِ.</p></div>
     </section>
+    ${academicSelectorHtml("knowledgeExchange")}
     <div class="student-panel-tabs knowledge-tabs" role="tablist" aria-label="أقسام تبادل المعرفة">
       ${Object.entries(KNOWLEDGE_META).map(([key, item]) => `<button class="tab-btn ${knowledgeExchangeMode === key ? "active" : ""}" type="button" data-knowledge-mode="${key}"><span aria-hidden="true">${item.icon}</span> ${item.label}</button>`).join("")}
     </div>
@@ -4261,6 +4417,10 @@ async function renderKnowledgeExchange() {
         }).join("") : `<div class="empty-state"><div class="ic">${meta.icon}</div>لم تُضف ${meta.label} بعد.</div>`}</div>
       </section>
     </div>`;
+
+  bindAcademicSelector("knowledgeExchange", () => {
+    renderKnowledgeExchange().catch((error) => { contentEl.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`; });
+  });
 
   document.querySelectorAll("[data-knowledge-mode]").forEach((button) => {
     button.onclick = () => {
@@ -4448,17 +4608,69 @@ function renderEducationalContent(key, target = contentEl) {
   if (key === "interactive-games") {
     const gameAcademicContext = academicSelectorHtml("games");
     const formatGameNumber = (value) => new Intl.NumberFormat("ar-SA", { useGrouping: false }).format(value);
-    const games = Array.isArray(interactiveGamesState.games) ? interactiveGamesState.games : [];
+    const allInteractiveGames = Array.isArray(interactiveGamesState.games) ? interactiveGamesState.games : [];
+    const gamesSelection = normalizeAcademicSelection("games");
+    const selectedGamesClass = selectedAcademicClass("games");
+    const selectedGameStage = String(selectedGamesClass?.level || gamesSelection.stage || "").trim();
+    const selectedGameGrade = gamesSelection.gradeLabel === "all" && !selectedGamesClass
+      ? "all"
+      : normalizeGradeKey(selectedGameStage, actualAcademicGradeLabel("games"));
+    const allBuilderGames = Array.isArray(interactiveGamesState.builderGames) ? interactiveGamesState.builderGames : [];
+    const builderGameKeys = new Set(allBuilderGames.map((game) => game.gameKey));
+    const games = allInteractiveGames.filter((game) => !builderGameKeys.has(game.gameKey)).filter((game) => {
+      const gameStage = String(game.stage || "all").trim();
+      const gameGrade = String(game.gradeLabel || "all").trim();
+      const stageMatches = selectedGameStage === "all" || gameStage === "all" || gameStage === selectedGameStage;
+      const gradeMatches = selectedGameGrade === "all" || gameGrade === "all"
+        || normalizeGradeKey(gameStage === "all" ? selectedGameStage : gameStage, gameGrade) === selectedGameGrade;
+      return stageMatches && gradeMatches;
+    });
+    const builderGames = allBuilderGames.filter((game) => {
+      const gameStage = String(game.stage || "all").trim();
+      const gameGrade = String(game.gradeLabel || "all").trim();
+      const stageMatches = selectedGameStage === "all" || gameStage === "all" || gameStage === selectedGameStage;
+      const gradeMatches = selectedGameGrade === "all" || gameGrade === "all"
+        || normalizeGradeKey(gameStage === "all" ? selectedGameStage : gameStage, gameGrade) === selectedGameGrade;
+      return stageMatches && gradeMatches;
+    });
+    const publicationReady = interactiveGamesState.publicationReady !== false;
+    const publicationMissingColumns = Array.isArray(interactiveGamesState.publicationMissingColumns) ? interactiveGamesState.publicationMissingColumns : [];
+    const gameIsPublished = (game) => game?.isActive === true || Number(game?.isActive) === 1;
+    const gameSemester = (game) => {
+      const semester = String(game?.semester || schoolSettings?.currentSemester || "").trim();
+      return ["first", "second"].includes(semester) ? semester : "";
+    };
+    const publicationDisabled = publicationReady ? "" : "disabled";
+    const publicationNotice = publicationReady ? "" : `<div class="form-error game-publication-notice">يلزم تشغيل ملف <b dir="ltr">migration_20260808_interactive_game_publication.sql</b> مرة واحدة لتفعيل نشر الألعاب.${publicationMissingColumns.length ? ` الأعمدة الناقصة: ${escapeHtml(publicationMissingColumns.join("، "))}.` : ""}</div>`;
+    const builderReady = interactiveGamesState.builderReady === true;
+    const builderNotice = builderReady ? "" : `<div class="form-error game-builder-migration-notice">يلزم تشغيل ملف <b dir="ltr">${escapeHtml(interactiveGamesState.builderMigration || "migration_20260810_interactive_game_builder.sql")}</b> مرة واحدة لتفعيل إنشاء واستيراد الألعاب. تم إنشاء الملف فقط ولم يتم تشغيله.</div>`;
     target.innerHTML = `
+      <section class="game-builder-shell">
+        <div class="game-builder-heading"><div><span>استديو ألعاب مدار</span><h2>أنشئي لعبة أو استوردي حزمة مبرمجة</h2><p>القوالب والشهادة والنقاط والنتائج تعمل من نظام مشترك، وتبقى كل نسخة محفوظة مع نتائجها.</p></div><div class="game-builder-create-actions"><button class="btn btn-primary" id="createTemplateGame" type="button" ${builderReady ? "" : "disabled"}>إنشاء لعبة من قالب</button><button class="btn btn-secondary" id="importProgrammedGame" type="button" ${builderReady ? "" : "disabled"}>استيراد لعبة مبرمجة ZIP</button></div></div>
+        ${builderNotice}
+        <div class="game-builder-grid">
+          ${builderGames.map((game) => {
+            const statusLabel = game.status === "published" ? "منشورة" : game.status === "disabled" ? "موقوفة" : "مسودة";
+            const sourceLabel = game.sourceType === "package" ? "حزمة مبرمجة" : game.templateType === "multiple_choice" ? "اختيار من متعدد" : game.templateType === "true_false" ? "صح أو خطأ" : game.templateType === "matching" ? "مطابقة" : "ترتيب";
+            const ready = game.validationStatus === "ready";
+            const unitLesson = game.unitNumber && game.lessonNumber ? `${formatGameNumber(game.unitNumber)}-${formatGameNumber(game.lessonNumber)}` : "—";
+            return `<article class="game-builder-card" data-builder-game="${game.id}">
+              <div class="game-builder-cover">${game.coverUrl ? `<img src="${escapeHtml(game.coverUrl)}" alt="غلاف ${escapeHtml(game.name)}">` : `<strong>${escapeHtml(unitLesson)}</strong>`}</div>
+              <div class="game-builder-card-body"><div class="game-builder-card-top"><span class="game-builder-status is-${escapeHtml(game.status)}">${statusLabel}</span><small>الإصدار ${formatGameNumber(game.versionNumber || 1)}</small></div><h3>${escapeHtml(game.name)}</h3><p>${escapeHtml(game.description || game.lessonName)}</p><div class="game-builder-meta"><span>${escapeHtml(sourceLabel)}</span><span>${escapeHtml(game.lessonName || "—")}</span><span>${escapeHtml(game.subjectName || "—")}</span><span>${escapeHtml(game.stage === "all" ? "كل المراحل" : game.stage)}</span><span>${game.timeMode === "timed" ? `${formatGameNumber(game.timePerQuestionSeconds)} ثانية` : "وقت مفتوح"}</span><span>${(game.difficulties || []).map((level) => level === "easy" ? "بسيط" : level === "hard" ? "متقدم" : "متوسط").join("، ") || "—"}</span><span>${formatGameNumber(game.publicationCount || 0)} فصل</span></div>${ready ? "" : `<div class="game-builder-warning">تحتاج تهيئة: ${escapeHtml(game.validationMessage || "لم يتم العثور على اتصال MadarGameBridge داخل الحزمة.")}</div>`}<div class="game-builder-card-actions"><a class="btn btn-primary btn-sm" href="${escapeHtml(game.previewUrl)}" target="_blank" rel="noopener">معاينة</a><button class="btn btn-secondary btn-sm" type="button" data-builder-publish="${game.id}" ${ready ? "" : "disabled"}>${game.status === "published" ? "تعديل النشر" : "نشر"}</button><button class="btn btn-outline btn-sm" type="button" data-builder-edit="${game.id}">${game.sourceType === "package" ? "رفع إصدار" : "تعديل"}</button><button class="btn btn-outline btn-sm" type="button" data-builder-copy="${game.id}">نسخ</button><button class="btn btn-outline btn-sm" type="button" data-builder-status="${game.id}" data-status="${game.status === "disabled" ? "draft" : "disabled"}">${game.status === "disabled" ? "إعادة التفعيل" : "إيقاف"}</button><button class="btn btn-danger btn-sm" type="button" data-builder-delete="${game.id}">أرشفة</button></div></div>
+            </article>`;
+          }).join("") || (builderReady ? '<div class="game-builder-empty"><strong>لا توجد ألعاب منشأة بعد</strong><p>ابدئي بقالب جاهز أو استوردي ZIP يحتوي game.json.</p></div>' : "")}
+        </div>
+      </section>
       <section class="games-library-grid" aria-label="الألعاب التفاعلية المتاحة">
         ${gameAcademicContext}
-        ${interactiveGamesState.migrationReady ? "" : '<div class="form-error game-migration-notice">يلزم تشغيل Migration الألعاب التفاعلية بعد مراجعته حتى يمكن حفظ بيانات كل لعبة بصورة مستقلة.</div>'}
+        ${publicationNotice}
         ${games.map((game) => {
           const unitNumber = Number(game.unitNumber);
           const lessonNumber = Number(game.lessonNumber);
           const configured = Boolean(game.configured) && Number.isInteger(unitNumber) && unitNumber > 0 && Number.isInteger(lessonNumber) && lessonNumber > 0 && String(game.lessonName || "").trim() !== "";
           const lessonMeta = configured ? `${formatGameNumber(unitNumber)}-${formatGameNumber(lessonNumber)}` : "—";
           const timeMode = game.timeMode === "timed" ? "timed" : "open";
+          const isPublished = gameIsPublished(game);
           const playUrl = `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1&from=teacher`;
           const studentUrl = `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1`;
           return `<article class="card teacher-game-card" data-game-card="${escapeHtml(game.gameKey)}">
@@ -4466,7 +4678,8 @@ function renderEducationalContent(key, target = contentEl) {
             <div class="teacher-game-copy">
               <h3>${configured ? `تحدي ${escapeHtml(game.lessonName)}` : "إعداد درس اللعبة غير مكتمل"}</h3>
               <p>${configured ? "لعبة تفاعلية متدرجة مع تصحيح فوري وحفظ المحاولات والنتائج في حساب الطالبة." : "أكملي رقم الوحدة ورقم الدرس واسم الدرس قبل إتاحة الشهادة للطالبات."}</p>
-              <div class="teacher-game-features" aria-label="مميزات اللعبة"><span>✦ أسئلة متجددة</span><span>🏆 نقاط ومستويات</span><span>${timeMode === "timed" ? `⏱ ${formatGameNumber(game.timePerQuestionSeconds)} ثانية` : "⌁ وقت مفتوح"}</span></div>
+              <div class="teacher-game-publication-row"><span class="teacher-game-publication-status${isPublished ? " is-published" : " is-unpublished"}" role="status">${isPublished ? "منشورة" : "غير منشورة"}</span></div>
+              <div class="teacher-game-features" aria-label="مميزات اللعبة"><span>✦ أسئلة متجددة</span><span>🏆 نقاط ومستويات</span><span>🎓 ${game.stage === "all" ? "جميع المراحل" : escapeHtml(game.stage)} · ${game.gradeLabel === "all" ? "جميع الصفوف" : escapeHtml(game.gradeLabel)}</span><span>${timeMode === "timed" ? `⏱ ${formatGameNumber(game.timePerQuestionSeconds)} ثانية` : "⌁ وقت مفتوح"}</span></div>
               <div class="teacher-game-actions">
                 <a class="btn btn-primary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">فتح اللعبة</a>
                 <button class="btn btn-secondary" type="button" data-copy-game-link="${escapeHtml(studentUrl)}">نسخ رابط اللعبة</button>
@@ -4475,9 +4688,22 @@ function renderEducationalContent(key, target = contentEl) {
               </div>
             </div>
           </article>`;
-        }).join("") || '<div class="empty-state">لا توجد ألعاب تفاعلية مسجلة في النظام.</div>'}
+        }).join("") || '<div class="empty-state">لا توجد ألعاب مناسبة للمرحلة والصف المحددين.</div>'}
       </section>`;
     bindAcademicSelector("games", () => renderGamesPanel());
+    document.getElementById("createTemplateGame")?.addEventListener("click", () => openInteractiveTemplateEditor());
+    document.getElementById("importProgrammedGame")?.addEventListener("click", () => openInteractivePackageImporter());
+    target.querySelectorAll("[data-builder-edit]").forEach((button) => { button.onclick = async () => {
+      const game = allBuilderGames.find((item) => Number(item.id) === Number(button.dataset.builderEdit));
+      if (game?.sourceType === "package") openInteractivePackageImporter(Number(game.id));
+      else openInteractiveTemplateEditor(Number(button.dataset.builderEdit));
+    }; });
+    target.querySelectorAll("[data-builder-publish]").forEach((button) => { button.onclick = () => openInteractiveGamePublication(Number(button.dataset.builderPublish)); });
+    target.querySelectorAll("[data-builder-copy]").forEach((button) => { button.onclick = () => openInteractiveGameCopy(Number(button.dataset.builderCopy)); });
+    target.querySelectorAll("[data-builder-status]").forEach((button) => { button.onclick = async () => {
+      try { await api(`/interactive-games/builder/library/${button.dataset.builderStatus}/status`, { method: "POST", body: JSON.stringify({ status: button.dataset.status }) }); toast(button.dataset.status === "disabled" ? "تم إيقاف اللعبة مع بقاء النتائج." : "أعيدت اللعبة إلى المسودة."); await refreshGames(); } catch (error) { toast(error.message); }
+    }; });
+    target.querySelectorAll("[data-builder-delete]").forEach((button) => { button.onclick = () => confirmAction("أرشفة اللعبة؟ ستتوقف عن الظهور مع الاحتفاظ بجميع النتائج والإصدارات.", async () => { await api(`/interactive-games/builder/library/${button.dataset.builderDelete}`, { method: "DELETE", body: "{}" }); toast("تمت أرشفة اللعبة دون حذف نتائجها."); await refreshGames(); }); });
     target.querySelectorAll("[data-copy-game-link]").forEach((copyButton) => { copyButton.onclick = async () => {
       const url = new URL(copyButton.dataset.copyGameLink, window.location.origin).href;
       try { await navigator.clipboard.writeText(url); toast("تم نسخ رابط اللعبة."); }
@@ -4536,51 +4762,264 @@ function renderEducationalContent(key, target = contentEl) {
 
     target.querySelectorAll("[data-configure-game]").forEach((button) => { button.onclick = () => {
       const game = games.find((item) => item.gameKey === button.dataset.configureGame);
-      if (!interactiveGamesState.migrationReady) {
-        toast("شغّلي Migration الألعاب بعد مراجعته أولًا.");
-        return;
-      }
+      const initialStage = GAME_TARGET_STAGES.includes(game.stage) ? game.stage : "all";
+      const allowedInitialGrades = initialStage === "all" ? [] : (ACADEMIC_GRADES[initialStage] || []);
+      const initialGrade = game.gradeLabel === "all" || allowedInitialGrades.includes(game.gradeLabel) ? game.gradeLabel : "all";
+      const initialSemester = gameSemester(game);
+      const existingClassId = Number(game.classId);
+      const gameClassId = Number.isInteger(existingClassId) && existingClassId > 0 ? existingClassId : null;
+      const initialAudience = gameClassId ? String(gameClassId) : initialStage === "all" ? "all" : "scope";
+      const gameAudienceOptions = `<option value="" disabled>اختاري نطاق النشر</option><option value="scope" ${initialAudience === "scope" ? "selected" : ""}>كل فصول المرحلة والصف المحددين</option><option value="all" ${initialAudience === "all" ? "selected" : ""}>جميع الطالبات — نشر عام</option>${allClasses.map((item) => `<option value="${item.id}" ${String(item.id) === initialAudience ? "selected" : ""}>${escapeHtml(item.stage || item.level || "")} · ${escapeHtml(item.grade_label || item.gradeLabel || "")} · ${escapeHtml(item.name || "")}</option>`).join("")}`;
       openModal(`
         <form class="game-config-dialog" id="gameConfigForm">
           <h3>إعداد بيانات اللعبة</h3>
-          <p>أدخلي بيانات الدرس الفعلية المرتبطة بهذه اللعبة.</p>
+          <p>أدخلي بيانات الدرس الفعلية وحددي الترم المرتبط بهذه اللعبة.</p>
           <div id="gameConfigMessage"></div>
           <label class="field">اسم الدرس<input id="gameLessonName" maxlength="190" value="${escapeHtml(game.lessonName || "")}" required /></label>
           <div class="form-grid two"><label class="field">رقم الوحدة<input id="gameUnitNumber" type="number" min="1" max="999" value="${game.unitNumber || ""}" required /></label><label class="field">رقم الدرس<input id="gameLessonNumber" type="number" min="1" max="999" value="${game.lessonNumber || ""}" required /></label></div>
+          <div class="form-grid two"><label class="field">المرحلة<select id="gameTargetStage" required>${GAME_TARGET_STAGES.map((stage) => `<option value="${stage}" ${stage === initialStage ? "selected" : ""}>${stage === "all" ? "الجميع" : stage}</option>`).join("")}</select></label><label class="field">الصف<select id="gameTargetGrade" required>${gameTargetGradeOptions(initialStage, initialGrade)}</select></label></div>
+          <label class="field">نطاق النشر<select id="gameTargetClass" required>${gameAudienceOptions}</select></label>
+          <label class="field">الترم<select id="gameSemester" required ${publicationDisabled}><option value="" ${initialSemester ? "" : "selected"} disabled>اختاري الترم</option><option value="first" ${initialSemester === "first" ? "selected" : ""}>الترم الأول</option><option value="second" ${initialSemester === "second" ? "selected" : ""}>الترم الثاني</option></select></label>
           <label class="check-row"><input id="gameCertificatePortfolio" type="checkbox" ${!game.exists || game.certificatePortfolioEnabled ? "checked" : ""}> السماح بإرسال الشهادة إلى ملف الإنجاز</label>
-          <div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelGameConfig">إلغاء</button><button class="btn btn-primary" type="submit" id="saveGameConfig">حفظ الإعداد</button></div>
+          <div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelGameConfig">إلغاء</button><button class="btn ${gameIsPublished(game) ? "btn-outline" : "btn-secondary"}" type="button" id="publishGameConfig" ${publicationDisabled}>${gameIsPublished(game) ? "إيقاف النشر" : "نشر اللعبة"}</button><button class="btn btn-primary" type="submit" id="saveGameConfig">حفظ الإعداد</button></div>
         </form>
       `, "game-config-modal");
       document.getElementById("cancelGameConfig").onclick = closeModal;
-      document.getElementById("gameConfigForm").onsubmit = async (event) => {
-        event.preventDefault();
+      document.getElementById("gameTargetStage").onchange = (event) => {
+        document.getElementById("gameTargetGrade").innerHTML = gameTargetGradeOptions(event.target.value, "all");
+        document.getElementById("gameTargetClass").value = event.target.value === "all" ? "all" : "scope";
+      };
+      document.getElementById("gameTargetGrade").onchange = () => { document.getElementById("gameTargetClass").value = "scope"; };
+      document.getElementById("gameTargetClass").onchange = (event) => {
+        if (event.target.value === "all") {
+          document.getElementById("gameTargetStage").value = "all";
+          document.getElementById("gameTargetGrade").innerHTML = gameTargetGradeOptions("all", "all");
+          return;
+        }
+        const selectedClass = allClasses.find((item) => String(item.id) === event.target.value);
+        if (!selectedClass) return;
+        const stage = selectedClass.stage || selectedClass.level || "";
+        const grade = selectedClass.grade_label || selectedClass.gradeLabel || "all";
+        document.getElementById("gameTargetStage").value = stage;
+        document.getElementById("gameTargetGrade").innerHTML = gameTargetGradeOptions(stage, grade);
+      };
+      const configForm = document.getElementById("gameConfigForm");
+      const saveGameConfig = async (publish = false) => {
+        if (!configForm.reportValidity()) return;
         const saveButton = document.getElementById("saveGameConfig");
+        const publishButton = document.getElementById("publishGameConfig");
         saveButton.disabled = true;
+        if (publishButton) publishButton.disabled = true;
         try {
+          const audience = document.getElementById("gameTargetClass").value;
+          const selectedClassId = /^\d+$/.test(audience) ? Number(audience) : null;
+          const publishThroughAudienceRoute = publish && (audience === "all" || selectedClassId !== null);
           await api(`/interactive-games/${encodeURIComponent(game.gameKey)}`, { method: "PUT", body: JSON.stringify({
             lessonName: document.getElementById("gameLessonName").value.trim(),
             unitNumber: Number(document.getElementById("gameUnitNumber").value),
             lessonNumber: Number(document.getElementById("gameLessonNumber").value),
+            stage: document.getElementById("gameTargetStage").value,
+            gradeLabel: document.getElementById("gameTargetGrade").value,
+            semester: document.getElementById("gameSemester").value,
+            classId: selectedClassId,
             timeMode: game.timeMode === "timed" ? "timed" : "open",
             timePerQuestionSeconds: game.timePerQuestionSeconds,
             certificatePortfolioEnabled: document.getElementById("gameCertificatePortfolio").checked,
-            isActive: true,
+            isActive: publishThroughAudienceRoute ? false : (publish ? true : gameIsPublished(game)),
           }) });
+          if (publishThroughAudienceRoute) {
+            await api(`/interactive-games/${encodeURIComponent(game.gameKey)}/publication`, { method: "PUT", body: JSON.stringify({
+              isActive: true,
+              semester: document.getElementById("gameSemester").value,
+              publishAll: audience === "all",
+              classId: selectedClassId,
+            }) });
+          }
           closeModal();
-          toast("تم حفظ بيانات اللعبة الفعلية.");
+          toast(publish ? "تم حفظ الإعداد ونشر اللعبة." : "تم حفظ بيانات اللعبة الفعلية.");
           await refreshGames();
         } catch (error) {
           document.getElementById("gameConfigMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
           saveButton.disabled = false;
+          if (publishButton && publicationReady) publishButton.disabled = false;
+        }
+      };
+      configForm.onsubmit = (event) => {
+        event.preventDefault();
+        saveGameConfig(false);
+      };
+      const publishButton = document.getElementById("publishGameConfig");
+      if (publishButton) publishButton.onclick = async () => {
+        if (!gameIsPublished(game)) {
+          saveGameConfig(true);
+          return;
+        }
+        publishButton.disabled = true;
+        try {
+          await api(`/interactive-games/${encodeURIComponent(game.gameKey)}/publication`, { method: "PUT", body: JSON.stringify({ isActive: false }) });
+          closeModal();
+          toast("تم إيقاف نشر اللعبة.");
+          await refreshGames();
+        } catch (error) {
+          document.getElementById("gameConfigMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+          publishButton.disabled = false;
         }
       };
     }; });
     return;
   }
+  const academicKind = {
+    competitions: "competitions",
+    "flipped-classroom": "strategies",
+    videos: "library",
+    training: "library",
+  }[key];
+  const selector = academicKind ? academicSelectorHtml(academicKind) : "";
   target.innerHTML = `
+    ${selector}
     <div class="card educational-ready-card">
       <div class="empty-state"><div class="ic" aria-hidden="true">${section.icon}</div><h3>قسم ${escapeHtml(section.title)} جاهز</h3><p>${escapeHtml(section.hint)}</p></div>
     </div>`;
+  if (academicKind) {
+    const rerender = academicKind === "competitions" ? renderGamesPanel
+      : academicKind === "strategies" ? renderStrategiesPanel
+      : renderLibraryPanel;
+    bindAcademicSelector(academicKind, rerender);
+  }
+}
+
+function interactiveGameSkillChecks(selected = [], stage = "all", grade = "all") {
+  const chosen = new Set((selected || []).map(Number));
+  const skills = allSkills.filter((skill) => (stage === "all" || skill.stage === stage)
+    && (grade === "all" || normalizeGradeKey(stage, skill.grade_label) === normalizeGradeKey(stage, grade)));
+  return skills.length ? skills.map((skill) => `<label class="game-builder-skill"><input type="checkbox" name="builderSkill" value="${skill.id}" ${chosen.has(Number(skill.id)) ? "checked" : ""}><span>${escapeHtml(skill.name)}</span></label>`).join("") : '<p class="game-builder-no-skills">لا توجد مهارات مطابقة للمرحلة والصف المحددين.</p>';
+}
+
+function interactiveGameQuestionSeed(type) {
+  if (type === "matching") return { type, prompt: "", options: [{ left: "", right: "" }, { left: "", right: "" }], correctAnswer: [], explanation: "", points: 1, difficulty: "medium" };
+  if (type === "ordering") return { type, prompt: "", options: ["", ""], correctAnswer: [], explanation: "", points: 1, difficulty: "medium" };
+  return { type, prompt: "", options: type === "true_false" ? ["صح", "خطأ"] : ["", ""], correctAnswer: type === "true_false" ? true : 0, explanation: "", points: 1, difficulty: "medium" };
+}
+
+async function openInteractiveTemplateEditor(gameId = null) {
+  let game = null;
+  if (gameId) {
+    try { game = (await api(`/interactive-games/builder/library/${gameId}`)).game; }
+    catch (error) { toast(error.message); return; }
+  }
+  let templateType = game?.templateType || "multiple_choice";
+  let questions = Array.isArray(game?.questions) && game.questions.length ? game.questions.map((item) => ({ ...item, options: structuredClone(item.options || []) })) : [interactiveGameQuestionSeed(templateType)];
+  const selectedSkills = game?.skillIds || [];
+  const initialStage = game?.stage || "all";
+  const initialGrade = game?.gradeLabel || "all";
+  openModal(`
+    <form class="game-builder-form" id="interactiveTemplateForm">
+      <div class="game-builder-modal-head"><div><span>${game ? "إصدار جديد" : "لعبة جديدة"}</span><h3>${game ? `تعديل ${escapeHtml(game.name)}` : "إنشاء لعبة من قالب"}</h3><p>كل حفظ بعد الإنشاء ينتج إصدارًا جديدًا، وتبقى النتائج القديمة مرتبطة بإصدارها.</p></div><button class="btn btn-outline btn-sm" type="button" id="cancelInteractiveTemplate">إغلاق</button></div>
+      <div id="interactiveTemplateMessage"></div>
+      <section class="game-builder-form-section"><h4>نوع القالب وبيانات اللعبة</h4><div class="game-template-types">${[
+        ["multiple_choice", "اختيار من متعدد"], ["true_false", "صح أو خطأ"], ["matching", "المطابقة والتوصيل"], ["ordering", "ترتيب الخطوات"],
+      ].map(([value, label]) => `<label><input type="radio" name="interactiveTemplateType" value="${value}" ${templateType === value ? "checked" : ""} ${game ? "disabled" : ""}><span>${label}</span></label>`).join("")}</div>
+      <div class="form-grid two"><label class="field">اسم اللعبة<input id="builderGameName" maxlength="190" value="${escapeHtml(game?.name || "")}" required></label><label class="field">معرّف اللعبة بالإنجليزية<input id="builderGameKey" dir="ltr" pattern="[a-z0-9][a-z0-9-]{1,99}" value="${escapeHtml(game?.gameKey || "")}" ${game ? "readonly" : ""} required placeholder="fractions-challenge"></label></div><label class="field">الوصف<textarea id="builderGameDescription" maxlength="2000">${escapeHtml(game?.description || "")}</textarea></label></section>
+      <section class="game-builder-form-section"><h4>الربط الدراسي</h4><div class="form-grid three"><label class="field">المرحلة<select id="builderGameStage">${GAME_TARGET_STAGES.map((stage) => `<option value="${stage}" ${stage === initialStage ? "selected" : ""}>${stage === "all" ? "الجميع" : stage}</option>`).join("")}</select></label><label class="field">الصف<select id="builderGameGrade">${gameTargetGradeOptions(initialStage, initialGrade)}</select></label><label class="field">الفصل الدراسي<select id="builderGameSemester"><option value="first" ${(game?.semester || schoolSettings?.currentSemester) !== "second" ? "selected" : ""}>الترم الأول</option><option value="second" ${(game?.semester || schoolSettings?.currentSemester) === "second" ? "selected" : ""}>الترم الثاني</option></select></label><label class="field">المادة<input id="builderGameSubject" maxlength="190" value="${escapeHtml(game?.subjectName || schoolSettings?.subjectName || "")}" required></label><label class="field">رقم الوحدة<input id="builderGameUnit" type="number" min="1" max="999" value="${game?.unitNumber || ""}" required></label><label class="field">رقم الدرس<input id="builderGameLesson" type="number" min="1" max="999" value="${game?.lessonNumber || ""}" required></label><label class="field full-span">اسم الدرس<input id="builderGameLessonName" maxlength="190" value="${escapeHtml(game?.lessonName || "")}" required></label></div><div><strong class="game-builder-field-title">المهارات</strong><div class="game-builder-skills" id="builderGameSkills">${interactiveGameSkillChecks(selectedSkills, initialStage, initialGrade)}</div></div></section>
+      <section class="game-builder-form-section"><h4>إعداد الجولة</h4><div class="form-grid three"><label class="field">عدد الأسئلة في الجولة<input id="builderGameQuestionCount" type="number" min="1" max="200" value="${game?.questionCount || 10}" required></label><label class="field">الوقت<select id="builderGameTimeMode"><option value="open" ${game?.timeMode !== "timed" ? "selected" : ""}>وقت مفتوح</option><option value="timed" ${game?.timeMode === "timed" ? "selected" : ""}>مؤقت لكل سؤال</option></select></label><label class="field" id="builderTimeSecondsField" ${game?.timeMode === "timed" ? "" : "hidden"}>ثواني السؤال<input id="builderGameTimeSeconds" type="number" min="1" max="600" value="${game?.timePerQuestionSeconds || 30}"></label></div><div class="game-builder-check-row"><span>المستويات:</span>${[["easy", "بسيط"], ["medium", "متوسط"], ["hard", "متقدم"]].map(([value, label]) => `<label><input name="builderDifficulty" type="checkbox" value="${value}" ${(game?.difficulties || ["easy", "medium", "hard"]).includes(value) ? "checked" : ""}> ${label}</label>`).join("")}</div><div class="game-builder-check-row"><label><input id="builderGameCertificate" type="checkbox" ${game?.certificateEnabled === false ? "" : "checked"}> السماح بشهادة الإتقان</label><label><input id="builderGamePoints" type="checkbox" ${game?.pointsEnabled ? "checked" : ""}> إضافة نقاط عند الإكمال</label><label id="builderPointsValueField" ${game?.pointsEnabled ? "" : "hidden"}>عدد النقاط <input id="builderGamePointsValue" type="number" min="1" max="1000" value="${game?.pointsValue || 1}"></label></div><label class="field">صورة الغلاف — اختيارية<input id="builderGameCover" type="file" accept="image/png,image/jpeg,image/webp"></label></section>
+      <section class="game-builder-form-section"><div class="game-builder-questions-head"><div><h4>أسئلة اللعبة</h4><p>يمكن تعديل الأسئلة وحذفها وترتيبها. لا تُحفظ أي إجابة وهمية.</p></div><button class="btn btn-secondary btn-sm" id="addBuilderQuestion" type="button">إضافة سؤال</button></div><div id="builderQuestions"></div></section>
+      <section class="game-builder-inline-preview" id="interactiveTemplatePreview" hidden></section>
+      <div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelInteractiveTemplateBottom">إلغاء</button><button class="btn btn-secondary" type="button" id="previewInteractiveTemplate">معاينة قبل الحفظ</button><button class="btn btn-primary" type="submit" id="saveInteractiveTemplate">${game ? "حفظ إصدار جديد" : "حفظ كمسودة"}</button></div>
+    </form>`, "game-builder-modal");
+  const renderQuestions = () => {
+    const root = document.getElementById("builderQuestions");
+    root.innerHTML = questions.map((question, index) => {
+      let answers = "";
+      if (templateType === "multiple_choice") answers = `<div class="game-builder-options">${question.options.map((option, optionIndex) => `<label><input type="radio" name="builderCorrect${index}" value="${optionIndex}" ${Number(question.correctAnswer) === optionIndex ? "checked" : ""}><input data-q-option="${index}" data-option-index="${optionIndex}" value="${escapeHtml(option)}" required placeholder="الخيار ${optionIndex + 1}"><button type="button" data-remove-option="${index}" data-option-index="${optionIndex}" ${question.options.length <= 2 ? "disabled" : ""}>×</button></label>`).join("")}</div><button class="btn btn-outline btn-sm" type="button" data-add-option="${index}" ${question.options.length >= 8 ? "disabled" : ""}>إضافة خيار</button>`;
+      else if (templateType === "true_false") answers = `<label class="field">الإجابة الصحيحة<select data-q-correct-bool="${index}"><option value="true" ${question.correctAnswer !== false ? "selected" : ""}>صح</option><option value="false" ${question.correctAnswer === false ? "selected" : ""}>خطأ</option></select></label>`;
+      else if (templateType === "matching") answers = `<div class="game-builder-pairs">${question.options.map((pair, pairIndex) => `<div><input data-pair-left="${index}" data-option-index="${pairIndex}" value="${escapeHtml(pair.left || "")}" required placeholder="الطرف الأول"><span>↔</span><input data-pair-right="${index}" data-option-index="${pairIndex}" value="${escapeHtml(pair.right || "")}" required placeholder="المطابقة الصحيحة"><button type="button" data-remove-option="${index}" data-option-index="${pairIndex}" ${question.options.length <= 2 ? "disabled" : ""}>×</button></div>`).join("")}</div><button class="btn btn-outline btn-sm" type="button" data-add-option="${index}" ${question.options.length >= 12 ? "disabled" : ""}>إضافة زوج</button>`;
+      else answers = `<div class="game-builder-steps">${question.options.map((step, stepIndex) => `<label><strong>${stepIndex + 1}</strong><input data-q-option="${index}" data-option-index="${stepIndex}" value="${escapeHtml(step)}" required placeholder="الخطوة الصحيحة"><button type="button" data-remove-option="${index}" data-option-index="${stepIndex}" ${question.options.length <= 2 ? "disabled" : ""}>×</button></label>`).join("")}</div><button class="btn btn-outline btn-sm" type="button" data-add-option="${index}" ${question.options.length >= 12 ? "disabled" : ""}>إضافة خطوة</button>`;
+      return `<article class="game-builder-question"><header><strong>السؤال ${index + 1}</strong><div><button type="button" data-move-question="${index}" data-direction="up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-move-question="${index}" data-direction="down" ${index === questions.length - 1 ? "disabled" : ""}>↓</button><button type="button" data-delete-question="${index}" ${questions.length === 1 ? "disabled" : ""}>حذف</button></div></header><label class="field">نص السؤال<textarea data-q-field="prompt" data-q-index="${index}" required>${escapeHtml(question.prompt || "")}</textarea></label>${answers}<div class="form-grid three"><label class="field">شرح الإجابة<input data-q-field="explanation" data-q-index="${index}" value="${escapeHtml(question.explanation || "")}"></label><label class="field">درجة السؤال<input data-q-field="points" data-q-index="${index}" type="number" min="1" max="1000" value="${question.points || 1}" required></label><label class="field">المستوى<select data-q-field="difficulty" data-q-index="${index}">${[["easy", "بسيط"], ["medium", "متوسط"], ["hard", "متقدم"]].map(([value, label]) => `<option value="${value}" ${question.difficulty === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div></article>`;
+    }).join("");
+    root.querySelectorAll("[data-q-field]").forEach((input) => input.oninput = () => { const value = input.dataset.qField === "points" ? Number(input.value) : input.value; questions[Number(input.dataset.qIndex)][input.dataset.qField] = value; });
+    root.querySelectorAll("[data-q-option]").forEach((input) => input.oninput = () => { questions[Number(input.dataset.qOption)].options[Number(input.dataset.optionIndex)] = input.value; });
+    root.querySelectorAll("[data-pair-left]").forEach((input) => input.oninput = () => { questions[Number(input.dataset.pairLeft)].options[Number(input.dataset.optionIndex)].left = input.value; });
+    root.querySelectorAll("[data-pair-right]").forEach((input) => input.oninput = () => { questions[Number(input.dataset.pairRight)].options[Number(input.dataset.optionIndex)].right = input.value; });
+    root.querySelectorAll("[name^=builderCorrect]").forEach((input) => input.onchange = () => { questions[Number(input.name.replace("builderCorrect", ""))].correctAnswer = Number(input.value); });
+    root.querySelectorAll("[data-q-correct-bool]").forEach((input) => input.onchange = () => { questions[Number(input.dataset.qCorrectBool)].correctAnswer = input.value === "true"; });
+    root.querySelectorAll("[data-add-option]").forEach((button) => button.onclick = () => { const item = questions[Number(button.dataset.addOption)]; item.options.push(templateType === "matching" ? { left: "", right: "" } : ""); renderQuestions(); });
+    root.querySelectorAll("[data-remove-option]").forEach((button) => button.onclick = () => { const item = questions[Number(button.dataset.removeOption)]; const removed = Number(button.dataset.optionIndex); item.options.splice(removed, 1); if (templateType === "multiple_choice") item.correctAnswer = Math.min(Number(item.correctAnswer) || 0, item.options.length - 1); renderQuestions(); });
+    root.querySelectorAll("[data-delete-question]").forEach((button) => button.onclick = () => { questions.splice(Number(button.dataset.deleteQuestion), 1); renderQuestions(); });
+    root.querySelectorAll("[data-move-question]").forEach((button) => button.onclick = () => { const index = Number(button.dataset.moveQuestion); const target = button.dataset.direction === "up" ? index - 1 : index + 1; [questions[index], questions[target]] = [questions[target], questions[index]]; renderQuestions(); });
+  };
+  renderQuestions();
+  document.getElementById("addBuilderQuestion").onclick = () => { questions.push(interactiveGameQuestionSeed(templateType)); renderQuestions(); };
+  document.querySelectorAll("[name=interactiveTemplateType]").forEach((input) => input.onchange = () => { templateType = input.value; questions = [interactiveGameQuestionSeed(templateType)]; renderQuestions(); });
+  const updateSkills = () => { document.getElementById("builderGameSkills").innerHTML = interactiveGameSkillChecks([], document.getElementById("builderGameStage").value, document.getElementById("builderGameGrade").value); };
+  document.getElementById("builderGameStage").onchange = (event) => { document.getElementById("builderGameGrade").innerHTML = gameTargetGradeOptions(event.target.value, "all"); updateSkills(); };
+  document.getElementById("builderGameGrade").onchange = updateSkills;
+  document.getElementById("builderGameTimeMode").onchange = (event) => { document.getElementById("builderTimeSecondsField").hidden = event.target.value !== "timed"; };
+  document.getElementById("builderGamePoints").onchange = (event) => { document.getElementById("builderPointsValueField").hidden = !event.target.checked; };
+  document.getElementById("cancelInteractiveTemplate").onclick = closeModal;
+  document.getElementById("cancelInteractiveTemplateBottom").onclick = closeModal;
+  document.getElementById("previewInteractiveTemplate").onclick = () => {
+    const preview = document.getElementById("interactiveTemplatePreview");
+    const optionLines = (question) => templateType === "matching"
+      ? question.options.map((pair) => `${pair.left || "—"} ↔ ${pair.right || "—"}`)
+      : templateType === "true_false" ? ["صح", "خطأ"] : question.options;
+    preview.innerHTML = `<div class="game-builder-preview-head"><span>معاينة غير محفوظة</span><h4>${escapeHtml(document.getElementById("builderGameName").value.trim() || "اسم اللعبة")}</h4><p>${escapeHtml(document.getElementById("builderGameLessonName").value.trim() || "اسم الدرس غير مكتمل")}</p></div><div class="game-builder-preview-list">${questions.map((question, index) => `<article><small>السؤال ${index + 1} · ${question.difficulty === "easy" ? "بسيط" : question.difficulty === "hard" ? "متقدم" : "متوسط"}</small><strong>${escapeHtml(question.prompt || "نص السؤال غير مكتمل")}</strong><div>${optionLines(question).map((option, optionIndex) => `<span>${optionIndex + 1}. ${escapeHtml(String(option || "—"))}</span>`).join("")}</div></article>`).join("")}</div>`;
+    preview.hidden = false;
+    preview.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  document.getElementById("interactiveTemplateForm").onsubmit = async (event) => {
+    event.preventDefault(); const form = event.currentTarget; if (!form.reportValidity()) return;
+    const saveButton = document.getElementById("saveInteractiveTemplate"); saveButton.disabled = true;
+    const payload = {
+      gameKey: document.getElementById("builderGameKey").value.trim(), name: document.getElementById("builderGameName").value.trim(), description: document.getElementById("builderGameDescription").value.trim(), templateType,
+      stage: document.getElementById("builderGameStage").value, gradeLabel: document.getElementById("builderGameGrade").value, semester: document.getElementById("builderGameSemester").value,
+      subjectName: document.getElementById("builderGameSubject").value.trim(), unitNumber: Number(document.getElementById("builderGameUnit").value), lessonNumber: Number(document.getElementById("builderGameLesson").value), lessonName: document.getElementById("builderGameLessonName").value.trim(),
+      skillIds: [...document.querySelectorAll("[name=builderSkill]:checked")].map((input) => Number(input.value)), questionCount: Number(document.getElementById("builderGameQuestionCount").value), difficulties: [...document.querySelectorAll("[name=builderDifficulty]:checked")].map((input) => input.value),
+      timeMode: document.getElementById("builderGameTimeMode").value, timePerQuestionSeconds: Number(document.getElementById("builderGameTimeSeconds").value), certificateEnabled: document.getElementById("builderGameCertificate").checked, pointsEnabled: document.getElementById("builderGamePoints").checked, pointsValue: Number(document.getElementById("builderGamePointsValue").value), questions,
+    };
+    try {
+      const response = await api(game ? `/interactive-games/builder/library/${game.id}` : "/interactive-games/builder/create", { method: game ? "PUT" : "POST", body: JSON.stringify(payload) });
+      const cover = document.getElementById("builderGameCover").files[0];
+      let coverWarning = "";
+      if (cover) { const data = new FormData(); data.append("cover", cover); try { await api(`/interactive-games/builder/library/${response.game.id}/cover`, { method: "POST", body: data }); } catch (error) { coverWarning = ` تم حفظ اللعبة، لكن تعذّر حفظ الغلاف: ${error.message}`; } }
+      closeModal(); toast((game ? "تم حفظ إصدار جديد مع بقاء النتائج السابقة." : "تم حفظ اللعبة كمسودة.") + coverWarning); await loadInteractiveGames(); renderGamesPanel();
+    } catch (error) { document.getElementById("interactiveTemplateMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`; saveButton.disabled = false; }
+  };
+}
+
+async function openInteractivePackageImporter(updateGameId = null) {
+  let game = null;
+  if (updateGameId) { try { game = (await api(`/interactive-games/builder/library/${updateGameId}`)).game; } catch (error) { toast(error.message); return; } }
+  const stage = game?.stage || "all", grade = game?.gradeLabel || "all";
+  openModal(`<form class="game-builder-form" id="interactivePackageForm"><div class="game-builder-modal-head"><div><span>حزمة مبرمجة</span><h3>${game ? `رفع إصدار جديد لـ ${escapeHtml(game.name)}` : "استيراد لعبة مبرمجة ZIP"}</h3><p>يجب أن يحتوي ZIP على game.json وواجهة madar-game-bridge-v1. لن تصل اللعبة إلى Cookies أو CSRF.</p></div><button class="btn btn-outline btn-sm" type="button" id="cancelPackageImport">إغلاق</button></div><div id="interactivePackageMessage"></div><section class="game-builder-form-section"><label class="game-package-drop">ملف ZIP<input id="packageZip" type="file" accept=".zip,application/zip" required><span>اختاري حزمة اللعبة — الحد الأقصى 20 MB</span></label><p class="safe-note">الأنواع المسموحة: HTML وCSS وJavaScript وJSON والصور والأصوات والخطوط المحلية. تُرفض PHP والملفات التنفيذية والروابط الخارجية والمسارات الضارة.</p></section><section class="game-builder-form-section"><h4>بيانات اللعبة الدراسية</h4><div class="form-grid two"><label class="field">اسم اللعبة<input id="packageGameName" maxlength="190" value="${escapeHtml(game?.name || "")}" placeholder="يؤخذ من game.json إذا تُرك فارغًا"></label><label class="field">المادة<input id="packageSubject" maxlength="190" value="${escapeHtml(game?.subjectName || schoolSettings?.subjectName || "")}" required></label></div><label class="field">الوصف<textarea id="packageDescription" maxlength="2000">${escapeHtml(game?.description || "")}</textarea></label><div class="form-grid three"><label class="field">المرحلة<select id="packageStage">${GAME_TARGET_STAGES.map((item) => `<option value="${item}" ${item === stage ? "selected" : ""}>${item === "all" ? "الجميع" : item}</option>`).join("")}</select></label><label class="field">الصف<select id="packageGrade">${gameTargetGradeOptions(stage, grade)}</select></label><label class="field">الفصل الدراسي<select id="packageSemester"><option value="first" ${(game?.semester || schoolSettings?.currentSemester) !== "second" ? "selected" : ""}>الترم الأول</option><option value="second" ${(game?.semester || schoolSettings?.currentSemester) === "second" ? "selected" : ""}>الترم الثاني</option></select></label><label class="field">رقم الوحدة<input id="packageUnit" type="number" min="1" max="999" value="${game?.unitNumber || ""}" required></label><label class="field">رقم الدرس<input id="packageLesson" type="number" min="1" max="999" value="${game?.lessonNumber || ""}" required></label><label class="field">اسم الدرس<input id="packageLessonName" maxlength="190" value="${escapeHtml(game?.lessonName || "")}" required></label></div><div class="game-builder-skills" id="packageSkills">${interactiveGameSkillChecks(game?.skillIds || [], stage, grade)}</div></section><section class="game-builder-form-section"><h4>إعداد الجولة</h4><div class="form-grid three"><label class="field">عدد الأسئلة<input id="packageQuestionCount" type="number" min="1" max="200" value="${game?.questionCount || 10}" required></label><label class="field">الوقت<select id="packageTimeMode"><option value="open" ${game?.timeMode !== "timed" ? "selected" : ""}>وقت مفتوح</option><option value="timed" ${game?.timeMode === "timed" ? "selected" : ""}>مؤقت</option></select></label><label class="field" id="packageSecondsField" ${game?.timeMode === "timed" ? "" : "hidden"}>ثواني السؤال<input id="packageSeconds" type="number" min="1" max="600" value="${game?.timePerQuestionSeconds || 30}"></label></div><div class="game-builder-check-row"><span>المستويات:</span>${[["easy", "بسيط"], ["medium", "متوسط"], ["hard", "متقدم"]].map(([value, label]) => `<label><input name="packageDifficulty" type="checkbox" value="${value}" ${(game?.difficulties || ["easy", "medium", "hard"]).includes(value) ? "checked" : ""}> ${label}</label>`).join("")}</div><div class="game-builder-check-row"><label><input id="packageCertificate" type="checkbox" ${game?.certificateEnabled === false ? "" : "checked"}> السماح بالشهادة</label><label><input id="packagePoints" type="checkbox" ${game?.pointsEnabled ? "checked" : ""}> إضافة نقاط</label><label id="packagePointsField" ${game?.pointsEnabled ? "" : "hidden"}>النقاط <input id="packagePointsValue" type="number" min="1" max="1000" value="${game?.pointsValue || 1}"></label></div><label class="field">صورة الغلاف — اختيارية<input id="packageCover" type="file" accept="image/png,image/jpeg,image/webp"></label></section><div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelPackageImportBottom">إلغاء</button><button class="btn btn-primary" type="submit" id="runPackageImport">فحص واستيراد ZIP</button></div></form>`, "game-builder-modal");
+  const refreshSkills = () => { document.getElementById("packageSkills").innerHTML = interactiveGameSkillChecks([], document.getElementById("packageStage").value, document.getElementById("packageGrade").value); };
+  document.getElementById("packageStage").onchange = (event) => { document.getElementById("packageGrade").innerHTML = gameTargetGradeOptions(event.target.value, "all"); refreshSkills(); };
+  document.getElementById("packageGrade").onchange = refreshSkills;
+  document.getElementById("packageTimeMode").onchange = (event) => { document.getElementById("packageSecondsField").hidden = event.target.value !== "timed"; };
+  document.getElementById("packagePoints").onchange = (event) => { document.getElementById("packagePointsField").hidden = !event.target.checked; };
+  document.getElementById("cancelPackageImport").onclick = closeModal; document.getElementById("cancelPackageImportBottom").onclick = closeModal;
+  document.getElementById("interactivePackageForm").onsubmit = async (event) => {
+    event.preventDefault(); if (!event.currentTarget.reportValidity()) return; const button = document.getElementById("runPackageImport"); button.disabled = true; button.textContent = "جارٍ الفحص الأمني…";
+    const data = new FormData(); data.append("package", document.getElementById("packageZip").files[0]); if (updateGameId) data.append("updateGameId", String(updateGameId));
+    const fields = { name: "packageGameName", description: "packageDescription", subjectName: "packageSubject", stage: "packageStage", gradeLabel: "packageGrade", semester: "packageSemester", unitNumber: "packageUnit", lessonNumber: "packageLesson", lessonName: "packageLessonName", questionCount: "packageQuestionCount", timeMode: "packageTimeMode", timePerQuestionSeconds: "packageSeconds", pointsValue: "packagePointsValue" };
+    Object.entries(fields).forEach(([key, id]) => data.append(key, document.getElementById(id).value)); data.append("certificateEnabled", String(document.getElementById("packageCertificate").checked)); data.append("pointsEnabled", String(document.getElementById("packagePoints").checked));
+    document.querySelectorAll("[name=packageDifficulty]:checked").forEach((input) => data.append("difficulties[]", input.value)); document.querySelectorAll("#packageSkills [name=builderSkill]:checked").forEach((input) => data.append("skillIds[]", input.value));
+    try { const response = await api("/interactive-games/builder/import", { method: "POST", body: data }); const cover = document.getElementById("packageCover").files[0]; let coverWarning = ""; if (cover) { const coverData = new FormData(); coverData.append("cover", cover); try { await api(`/interactive-games/builder/library/${response.game.id}/cover`, { method: "POST", body: coverData }); } catch (error) { coverWarning = ` تم حفظ الحزمة، لكن تعذّر حفظ الغلاف: ${error.message}`; } } closeModal(); toast((response.needsSetup ? "تم الاستيراد، لكن الحزمة تحتاج تهيئة MadarGameBridge قبل النشر." : "تم فحص الحزمة واستيرادها كمسودة.") + coverWarning); await loadInteractiveGames(); renderGamesPanel(); }
+    catch (error) { document.getElementById("interactivePackageMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`; button.disabled = false; button.textContent = "فحص واستيراد ZIP"; }
+  };
+}
+
+async function openInteractiveGamePublication(gameId) {
+  let game; try { game = (await api(`/interactive-games/builder/library/${gameId}`)).game; } catch (error) { toast(error.message); return; }
+  const selected = new Set((game.classIds || []).map(Number)); const matchingClasses = allClasses.filter((item) => game.stage === "all" || item.level === game.stage).filter((item) => game.gradeLabel === "all" || normalizeGradeKey(item.level, item.grade_label) === normalizeGradeKey(item.level, game.gradeLabel));
+  openModal(`<form id="interactivePublicationForm"><h3>نشر ${escapeHtml(game.name)}</h3><p class="modal-note">اختاري فصلًا واحدًا أو أكثر. يتم التحقق من ملكية الفصول في الخادم.</p><div id="interactivePublicationMessage"></div><label class="field">الفصل الدراسي<select id="interactivePublicationSemester"><option value="first" ${game.semester !== "second" ? "selected" : ""}>الترم الأول</option><option value="second" ${game.semester === "second" ? "selected" : ""}>الترم الثاني</option></select></label><div class="game-publication-classes">${matchingClasses.map((item) => `<label><input type="checkbox" name="interactivePublicationClass" value="${item.id}" ${selected.has(Number(item.id)) ? "checked" : ""}><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.level)} · ${escapeHtml(item.grade_label)}</small></span></label>`).join("") || '<p>لا توجد فصول مطابقة لمرحلة وصف اللعبة.</p>'}</div><div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelInteractivePublication">إلغاء</button><button class="btn btn-primary" type="submit" id="saveInteractivePublication">نشر اللعبة</button></div></form>`, "game-publication-modal");
+  document.getElementById("cancelInteractivePublication").onclick = closeModal;
+  document.getElementById("interactivePublicationForm").onsubmit = async (event) => { event.preventDefault(); const classIds = [...document.querySelectorAll("[name=interactivePublicationClass]:checked")].map((input) => Number(input.value)); if (!classIds.length) { document.getElementById("interactivePublicationMessage").innerHTML = '<div class="form-error">اختاري فصلًا واحدًا على الأقل.</div>'; return; } const button = document.getElementById("saveInteractivePublication"); button.disabled = true; try { await api(`/interactive-games/builder/library/${gameId}/publish`, { method: "POST", body: JSON.stringify({ semester: document.getElementById("interactivePublicationSemester").value, classIds }) }); closeModal(); toast("تم نشر اللعبة للفصول المحددة."); await loadInteractiveGames(); renderGamesPanel(); } catch (error) { document.getElementById("interactivePublicationMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`; button.disabled = false; } };
+}
+
+async function openInteractiveGameCopy(gameId) {
+  const source = interactiveGamesState.builderGames.find((item) => Number(item.id) === gameId); if (!source) return;
+  openModal(`<form id="interactiveGameCopyForm"><h3>نسخ اللعبة</h3><p class="modal-note">تُنشأ لعبة جديدة كمسودة، وتبقى اللعبة الأصلية ونتائجها دون تغيير.</p><div id="interactiveGameCopyMessage"></div><label class="field">اسم النسخة<input id="interactiveCopyName" value="نسخة من ${escapeHtml(source.name)}" required></label><label class="field">معرّف جديد بالإنجليزية<input id="interactiveCopyKey" dir="ltr" pattern="[a-z0-9][a-z0-9-]{1,99}" value="${escapeHtml(source.gameKey)}-copy" required></label><div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelInteractiveCopy">إلغاء</button><button class="btn btn-primary" type="submit">إنشاء النسخة</button></div></form>`);
+  document.getElementById("cancelInteractiveCopy").onclick = closeModal; document.getElementById("interactiveGameCopyForm").onsubmit = async (event) => { event.preventDefault(); try { await api(`/interactive-games/builder/library/${gameId}/copy`, { method: "POST", body: JSON.stringify({ name: document.getElementById("interactiveCopyName").value.trim(), gameKey: document.getElementById("interactiveCopyKey").value.trim() }) }); closeModal(); toast("تم إنشاء نسخة جديدة كمسودة."); await loadInteractiveGames(); renderGamesPanel(); } catch (error) { document.getElementById("interactiveGameCopyMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`; } };
 }
 
 
@@ -4636,13 +5075,14 @@ function statusLabel(status) {
 }
 
 async function renderRemedialPlans() {
-  const [plansData, studentsData] = await Promise.all([api("/enhancements/remedial"), api("/students?pageSize=200")]);
-  const plans = plansData.items || [];
-  const students = studentsData.items || [];
+  const [plansData, studentsData] = await Promise.all([api("/enhancements/remedial"), api("/students?pageSize=200"), loadSchoolSettings()]);
+  const plans = (plansData.items || []).filter((plan) => academicItemMatches("remedialPlans", plan)).map((plan) => ({ ...plan, recommended_resource_url: safeResourceUrl(plan.recommended_resource_url) }));
+  const students = (studentsData.items || []).filter((student) => academicItemMatches("remedialPlans", student));
   const active = plans.filter((p) => ["planned", "in_progress"].includes(p.status)).length;
   const reassessed = plans.filter((p) => p.status === "reassessed").length;
   const improved = plans.filter((p) => Number(p.after_percent || 0) > Number(p.before_percent || 0)).length;
   contentEl.innerHTML = `
+    ${academicSelectorHtml("remedialPlans")}
     <div class="enhancement-grid">
       <article class="enhancement-card"><small>الخطط النشطة</small><strong>${active}</strong></article>
       <article class="enhancement-card"><small>أعيد قياسها</small><strong>${reassessed}</strong></article>
@@ -4654,11 +5094,12 @@ async function renderRemedialPlans() {
       <div class="toolbar"><select id="remedialStudentFilter"><option value="">كل الطالبات</option>${students.map((s) => `<option value="${s.id}">${escapeHtml(s.name)} · ${escapeHtml(s.class_name || "")}</option>`).join("")}</select><select id="remedialStatusFilter"><option value="">كل الحالات</option><option value="planned">مخططة</option><option value="in_progress">قيد التنفيذ</option><option value="completed">مكتملة</option><option value="reassessed">أعيد قياسها</option><option value="cancelled">ملغاة</option></select></div>
       <div id="remedialTable"></div>
     </section>`;
+  bindAcademicSelector("remedialPlans", renderRemedialPlans);
   const draw = () => {
     const sid = document.getElementById("remedialStudentFilter").value;
     const status = document.getElementById("remedialStatusFilter").value;
     const filtered = plans.filter((p) => (!sid || String(p.student_id) === sid) && (!status || p.status === status));
-    document.getElementById("remedialTable").innerHTML = filtered.length ? `<div class="table-wrap"><table><thead><tr><th>الطالبة</th><th>المهارة</th><th>قبل</th><th>الهدف</th><th>بعد</th><th>النشاط المقترح</th><th>الموعد</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>${filtered.map((p) => `<tr><td><button class="link-button student-link" data-remedial-student="${p.student_id}">${escapeHtml(p.student_name)}</button><small class="cell-sub">${escapeHtml(p.class_name || "")}</small></td><td>${escapeHtml(p.skill_name || p.title)}</td><td>${Number(p.before_percent || 0)}٪</td><td>${Number(p.target_percent || 70)}٪</td><td>${p.after_percent === null ? "—" : `${Number(p.after_percent)}٪`}</td><td style="min-width:260px">${escapeHtml(p.recommended_activity || "—")}${p.recommended_resource_url ? `<br><a href="${escapeHtml(p.recommended_resource_url)}" target="_blank">فتح المورد المقترح</a>` : ""}</td><td>${escapeHtml(p.due_date || "—")}</td><td><span class="remedial-status remedial-${escapeHtml(p.status)}">${escapeHtml(statusLabel(p.status))}</span></td><td><button class="btn btn-outline btn-sm" data-edit-plan="${p.id}">تحديث</button></td></tr>`).join("")}</tbody></table></div>` : '<div class="empty-state">لا توجد خطط مطابقة.</div>';
+    document.getElementById("remedialTable").innerHTML = filtered.length ? `<div class="table-wrap"><table><thead><tr><th>الطالبة</th><th>المهارة</th><th>قبل</th><th>الهدف</th><th>بعد</th><th>النشاط المقترح</th><th>الموعد</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>${filtered.map((p) => `<tr><td><button class="link-button student-link" data-remedial-student="${p.student_id}">${escapeHtml(p.student_name)}</button><small class="cell-sub">${escapeHtml(p.class_name || "")}</small></td><td>${escapeHtml(p.skill_name || p.title)}</td><td>${Number(p.before_percent || 0)}٪</td><td>${Number(p.target_percent || 70)}٪</td><td>${p.after_percent === null ? "—" : `${Number(p.after_percent)}٪`}</td><td style="min-width:260px">${escapeHtml(p.recommended_activity || "—")}${p.recommended_resource_url ? `<br><a href="${escapeHtml(p.recommended_resource_url)}" target="_blank" rel="noopener noreferrer">فتح المورد المقترح</a>` : ""}</td><td>${escapeHtml(p.due_date || "—")}</td><td><span class="remedial-status remedial-${escapeHtml(p.status)}">${escapeHtml(statusLabel(p.status))}</span></td><td><button class="btn btn-outline btn-sm" data-edit-plan="${p.id}">تحديث</button></td></tr>`).join("")}</tbody></table></div>` : '<div class="empty-state">لا توجد خطط مطابقة.</div>';
     document.querySelectorAll("[data-remedial-student]").forEach((b) => b.onclick = () => openStudentProfile(Number(b.dataset.remedialStudent)));
     document.querySelectorAll("[data-edit-plan]").forEach((b) => {
       const plan = plans.find((p) => String(p.id) === b.dataset.editPlan);
@@ -4799,6 +5240,7 @@ const ROUTES = {
   "tests-quiz": () => openTestsPanel("quiz"),
   "question-bank": renderQuestionBank,
   "analysis-panel": renderAnalysisPanel,
+  attachments: renderAttachments,
   "analysis-student": () => openAnalysisPanel("student"),
   "analysis-class": () => openAnalysisPanel("class"),
   "analysis-skill": () => openAnalysisPanel("skill"),

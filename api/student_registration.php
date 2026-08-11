@@ -60,6 +60,7 @@ function student_registration_options(): never
 
 function student_register_request(): never
 {
+    Http::rateLimit('student-register',8,3600);
     ensure_student_registration_schema();
     $data = Http::input();
     Http::requireFields($data, ['name','email','password','classId']);

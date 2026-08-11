@@ -5,6 +5,9 @@ uploads/*
 storage/private/student-portfolios/*
 !storage/private/student-portfolios/.gitignore
 !storage/private/student-portfolios/.htaccess
+backups/*
+!backups/.htaccess
+*.bak_visibility
 .DS_Store
 
 # Local secrets and temporary files

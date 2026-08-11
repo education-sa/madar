@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/paper_assessments.php';
+
 function handle_student_routes(string $method,array $segments): never
 {
     $resource=$segments[0]??'';
@@ -15,7 +17,7 @@ function handle_student_routes(string $method,array $segments): never
     if (!in_array($method,['GET','HEAD'],true)) Auth::verifyCsrf();
     $studentPermission=match($resource) {
         'dashboard' => 'dashboard.view',
-        'tests' => 'student.tests.use',
+        'tests', 'paper-assessments' => 'student.tests.use',
         'games' => 'student.games.use',
         'learning-style', 'password' => 'student.profile.use',
         'results' => 'student.results.view',
@@ -28,6 +30,7 @@ function handle_student_routes(string $method,array $segments): never
     $studentId=(int)$student['id'];
     if ($resource==='dashboard'&&$method==='GET') student_dashboard($studentId);
     if ($resource==='tests') student_tests_routes($method,array_slice($segments,1),$studentId);
+    if ($resource==='paper-assessments') student_paper_assessment_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='games') student_games_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='learning-style') student_learning_style_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='password'&&$method==='PUT') student_change_password($studentId);
@@ -44,13 +47,32 @@ function student_games_routes(string $method,array $segments,int $studentId): ne
 {
     ensure_platform_enhancement_schema();
     $action=$segments[0]??'';
+    if ($action==='runs') student_interactive_game_builder_routes($method,$segments,$studentId);
     if ($action==='catalog' && $method==='GET') {
         [$student,$settings]=student_game_context($studentId);
+        $legacyGames=interactive_games_for_teacher(
+            (int)$student['teacher_id'],
+            true,
+            (string)$student['stage_label'],
+            (string)$student['grade_label'],
+            (int)$student['class_id'],
+            (string)($settings['current_semester']??'')
+        );
+        $builderGames=interactive_game_builder_student_catalog(
+            (int)$student['teacher_id'],
+            (int)$student['class_id'],
+            (string)($settings['current_semester']??'')
+        );
+        $gamesByKey=[];
+        foreach([...$legacyGames,...$builderGames] as $game) $gamesByKey[(string)$game['gameKey']]=$game;
         Http::json([
-            'games'=>interactive_games_for_teacher((int)$student['teacher_id'],true),
-            'catalog'=>array_values(interactive_game_catalog()),
+            'games'=>array_values($gamesByKey),
+            'catalog'=>array_values($gamesByKey),
             'context'=>student_game_academic_context($student,$settings),
-            'migrationReady'=>interactive_games_table_exists(),
+            'migrationReady'=>interactive_games_schema_ready(),
+            'builderReady'=>interactive_game_builder_schema_ready(),
+            'builderMigration'=>INTERACTIVE_GAME_BUILDER_MIGRATION,
+            'missingColumns'=>interactive_games_missing_columns(),
         ]);
     }
     if ($action==='config' && $method==='GET') {
@@ -61,42 +83,31 @@ function student_games_routes(string $method,array $segments,int $studentId): ne
         if ($method==='POST') student_game_save_certificate_route($studentId);
         Http::json(['error'=>'الطريقة غير مسموحة.'],405);
     }
+    if ($action==='sessions') {
+        if ($method==='POST' && count($segments)===1) student_game_session_start($studentId);
+        if ($method==='POST' && count($segments)===3 && ($segments[2]??'')==='answers') student_game_session_answer($studentId,(string)$segments[1]);
+        Http::json(['error'=>'مسار جلسة اللعبة غير موجود.'],404);
+    }
     if ($action!=='attempts') Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
     if ($method==='GET') {
-        Http::json(fetch_all('SELECT id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds,played_at FROM game_attempts WHERE student_id=? ORDER BY played_at DESC LIMIT 30',[$studentId]));
+        $sql=interactive_game_builder_schema_ready()
+            ? "SELECT id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds,played_at FROM game_attempts WHERE student_id=? AND (run_status='completed' OR run_status IS NULL) ORDER BY played_at DESC LIMIT 30"
+            : 'SELECT id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds,played_at FROM game_attempts WHERE student_id=? ORDER BY played_at DESC LIMIT 30';
+        Http::json(fetch_all($sql,[$studentId]));
     }
     if ($method!=='POST') Http::json(['error'=>'الطريقة غير مسموحة.'],405);
 
-    $data=Http::input();
-    Http::requireFields($data,['gameKey','difficulty','score','questionCount','correctCount','bestStreak','durationSeconds']);
-    $gameKey=interactive_game_key($data['gameKey']);
-    $difficulty=(string)$data['difficulty'];
-    $score=(int)$data['score'];
-    $questionCount=(int)$data['questionCount'];
-    $correctCount=(int)$data['correctCount'];
-    $bestStreak=(int)$data['bestStreak'];
-    $durationSeconds=(int)$data['durationSeconds'];
-
-    if (!in_array($difficulty,['easy','medium','hard'],true)) {
-        Http::json(['error'=>'بيانات اللعبة غير صالحة.'],422);
-    }
-    if (!in_array($questionCount,[5,10,15],true) || $correctCount<0 || $correctCount>$questionCount || $bestStreak<0 || $bestStreak>$correctCount) {
-        Http::json(['error'=>'نتيجة المحاولة غير صالحة.'],422);
-    }
-    if ($score<0 || $score>100000 || $durationSeconds<1 || $durationSeconds>86400) {
-        Http::json(['error'=>'قيمة النقاط أو الوقت غير صالحة.'],422);
-    }
-
-    [$student,$settings,$game]=student_game_context($studentId,$gameKey);
-    if (!interactive_game_is_configured($game) || !(bool)($game['is_active']??false)) {
-        Http::json(['error'=>'إعدادات هذه اللعبة غير مكتملة أو أنها غير مفعّلة حاليًا.'],422);
-    }
-
+    $data=Http::input();Http::requireFields($data,['sessionId']);$sessionId=(string)$data['sessionId'];
+    $run=student_game_session_completed($studentId,$sessionId);
+    $gameKey=interactive_game_key($run['gameKey']);$difficulty=(string)$run['difficulty'];$score=(int)$run['score'];
+    $questionCount=count($run['questions']);$correctCount=(int)$run['correct'];$bestStreak=(int)$run['bestStreak'];
+    $durationSeconds=max(1,min(86400,time()-(int)$run['startedAt']));$snapshot=(array)$run['snapshot'];
     $accuracy=round(($correctCount/$questionCount)*100,2);
-    execute_sql('INSERT INTO game_attempts (student_id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds) VALUES (?,?,?,?,?,?,?,?,?)',[$studentId,$gameKey,$difficulty,$score,$questionCount,$correctCount,$bestStreak,$accuracy,$durationSeconds]);
+    execute_sql('INSERT INTO game_attempts (student_id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds,game_snapshot_json) VALUES (?,?,?,?,?,?,?,?,?,?)',[$studentId,$gameKey,$difficulty,$score,$questionCount,$correctCount,$bestStreak,$accuracy,$durationSeconds,json_encode($snapshot,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES)]);
     $attemptId=(int)Database::connection()->lastInsertId();
+    student_game_session_mark_saved($sessionId,$attemptId);
     execute_sql('UPDATE students SET last_active=NOW() WHERE id=?',[$studentId]);
-    $activityName=interactive_game_is_configured($game) ? trim((string)$game['lesson_name']) : $gameKey;
+    $game=(array)($snapshot['game']??[]);$activityName=interactive_game_is_configured($game) ? trim((string)$game['lesson_name']) : $gameKey;
     Activity::log('student',$studentId,'إكمال لعبة',$activityName.' - '.$accuracy.'%');
     $certificate=student_game_certificate_after_attempt(
         $studentId,
@@ -107,7 +118,8 @@ function student_games_routes(string $method,array $segments,int $studentId): ne
         $accuracy,
         $correctCount,
         $questionCount,
-        $durationSeconds
+        $durationSeconds,
+        $snapshot
     );
     $certificateMessage=$certificate===null
         ? 'لن تصدر شهادة الإتقان قبل أن تستكمل المعلمة رقم الوحدة ورقم الدرس واسم الدرس في إعدادات اللعبة.'
@@ -125,6 +137,15 @@ function student_games_routes(string $method,array $segments,int $studentId): ne
 function student_game_config(int $studentId,string $gameKey): array
 {
     [$student,$settings,$game]=student_game_context($studentId,$gameKey);
+    if ($game && !interactive_game_targets_student(
+        $game,
+        (string)$student['stage_label'],
+        (string)$student['grade_label'],
+        (int)$student['class_id'],
+        (string)($settings['current_semester']??'')
+    )) {
+        Http::json(['error'=>'هذه اللعبة غير مخصصة لترمكِ أو مرحلتكِ أو صفكِ أو فصلكِ.'],403);
+    }
     return array_merge(
         interactive_game_json($gameKey,$game),
         student_game_academic_context($student,$settings)
@@ -135,7 +156,7 @@ function student_game_context(int $studentId,?string $gameKey=null): array
 {
     ensure_teacher_school_settings_schema();
     $student=fetch_one(
-        'SELECT s.id,s.name AS student_name,c.teacher_id,c.stage AS stage_label,c.grade_label,c.name AS class_name,c.academic_year AS class_academic_year,t.name AS teacher_account_name
+        'SELECT s.id,s.name AS student_name,c.id AS class_id,c.teacher_id,c.stage AS stage_label,c.grade_label,c.name AS class_name,c.academic_year AS class_academic_year,t.name AS teacher_account_name
          FROM students s JOIN classes c ON c.id=s.class_id JOIN teachers t ON t.id=c.teacher_id WHERE s.id=?',
         [$studentId]
     );
@@ -202,6 +223,8 @@ function student_game_certificate_payload(array $student,array $settings,array $
         'studentId'=>(int)$student['id'],
         'studentName'=>trim((string)($student['student_name']??'')),
         'gameKey'=>$gameKey,
+        'gameId'=>isset($game['id'])&&is_numeric($game['id'])?(int)$game['id']:null,
+        'gameVersionId'=>isset($game['published_version_id'])&&is_numeric($game['published_version_id'])?(int)$game['published_version_id']:(isset($game['game_version_id'])?(int)$game['game_version_id']:null),
         'unitNumber'=>(int)$game['unit_number'],
         'lessonNumber'=>(int)$game['lesson_number'],
         'lessonName'=>trim((string)$game['lesson_name']),
@@ -224,9 +247,10 @@ function student_game_certificate_payload(array $student,array $settings,array $
     ];
 }
 
-function student_game_certificate_after_attempt(int $studentId,int $attemptId,string $gameKey,string $difficulty,int $score,float $accuracy,int $correctCount,int $questionCount,int $durationSeconds): ?array
+function student_game_certificate_after_attempt(int $studentId,int $attemptId,string $gameKey,string $difficulty,int $score,float $accuracy,int $correctCount,int $questionCount,int $durationSeconds,?array $snapshot=null): ?array
 {
-    [$student,$settings,$game]=student_game_context($studentId,$gameKey);
+    if($snapshot){$student=(array)($snapshot['student']??[]);$settings=(array)($snapshot['settings']??[]);$game=(array)($snapshot['game']??[]);}
+    else{[$student,$settings,$game]=student_game_context($studentId,$gameKey);}
     if (!interactive_game_is_configured($game)) return null;
     $payload=student_game_certificate_payload($student,$settings,$game,$attemptId,$gameKey,$difficulty,$score,$accuracy,$correctCount,$questionCount,$durationSeconds);
     $payload['certificateKey']=student_game_certificate_key($gameKey,$game,$attemptId);
@@ -244,17 +268,20 @@ function student_game_save_certificate_route(int $studentId): never
         Http::json(['error'=>'محاولة اللعبة غير صالحة.'],422);
     }
     $attempt=fetch_one(
-        'SELECT id,game_key,difficulty,score,question_count,correct_count,accuracy,duration_seconds FROM game_attempts WHERE id=? AND student_id=? LIMIT 1',
+        'SELECT id,game_key,difficulty,score,question_count,correct_count,accuracy,duration_seconds,game_snapshot_json FROM game_attempts WHERE id=? AND student_id=? LIMIT 1',
         [(int)$attemptId,$studentId]
     );
     if (!$attempt) Http::json(['error'=>'محاولة اللعبة غير موجودة ضمن حسابكِ.'],404);
 
     $gameKey=interactive_game_key($attempt['game_key']);
-    [$student,$settings,$game]=student_game_context($studentId,$gameKey);
+    [$currentStudent,$currentSettings,$currentGame]=student_game_context($studentId,$gameKey);
+    $snapshot=json_decode((string)($attempt['game_snapshot_json']??''),true);
+    if(is_array($snapshot)){$student=(array)($snapshot['student']??[]);$settings=(array)($snapshot['settings']??[]);$game=(array)($snapshot['game']??[]);}
+    else{[$student,$settings,$game]=[$currentStudent,$currentSettings,$currentGame];}
     if (!interactive_game_is_configured($game)) {
         Http::json(['error'=>'أكملي إعدادات اللعبة قبل إرسال شهادة الإتقان إلى ملف الإنجاز.'],422);
     }
-    if (!(bool)$game['certificate_portfolio_enabled']) {
+    if (!(bool)($currentGame['certificate_portfolio_enabled']??false) || !(bool)($game['certificate_portfolio_enabled']??false)) {
         Http::json(['error'=>'إرسال شهادة هذه اللعبة إلى ملف الإنجاز غير مفعّل حاليًا.'],422);
     }
 
@@ -424,10 +451,10 @@ function student_change_password(int $studentId): never
 function student_dashboard(int $studentId): never
 {
     ensure_teacher_tools_schema();
-    $student=fetch_one('SELECT s.id,s.name,s.stage,s.grade_label,s.learning_style,s.progress_percent,c.name AS class_name FROM students s LEFT JOIN classes c ON c.id=s.class_id WHERE s.id=?',[$studentId]);
+    $student=fetch_one("SELECT s.id,s.name,s.stage,s.grade_label,s.learning_style,COALESCE((SELECT AVG(a.percentage) FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE a.student_id=s.id AND a.status='graded' AND t.show_result=1),0) AS progress_percent,c.name AS class_name FROM students s LEFT JOIN classes c ON c.id=s.class_id WHERE s.id=?",[$studentId]);
     $available=(int)(fetch_one("SELECT COUNT(*) AS n FROM tests t JOIN students s ON s.class_id=t.class_id WHERE s.id=? AND t.status='published' AND (t.start_at IS NULL OR t.start_at<=NOW()) AND (t.end_at IS NULL OR t.end_at>=NOW()) AND ((SELECT COUNT(*) FROM test_attempts a WHERE a.test_id=t.id AND a.student_id=s.id)<t.max_attempts OR EXISTS(SELECT 1 FROM test_attempts a2 WHERE a2.test_id=t.id AND a2.student_id=s.id AND a2.status='in_progress'))",[$studentId])['n']??0);
     $completed=(int)(fetch_one("SELECT COUNT(*) AS n FROM test_attempts WHERE student_id=? AND status IN ('submitted','graded')",[$studentId])['n']??0);
-    $recent=fetch_all("SELECT t.id,t.title,t.test_type,a.percentage,a.submitted_at FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE a.student_id=? AND a.status='graded' ORDER BY a.submitted_at DESC LIMIT 5",[$studentId]);
+    $recent=fetch_all("SELECT t.id,t.title,t.test_type,a.percentage,a.submitted_at FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE a.student_id=? AND a.status='graded' AND t.show_result=1 ORDER BY a.submitted_at DESC LIMIT 5",[$studentId]);
     $skills=fetch_all('SELECT sk.name,ss.mastery_percent FROM student_skills ss JOIN skills sk ON sk.id=ss.skill_id WHERE ss.student_id=? ORDER BY ss.mastery_percent DESC LIMIT 8',[$studentId]);
     $totalPoints=(int)(fetch_one('SELECT COALESCE(SUM(points),0) AS total FROM motivational_points WHERE student_id=?',[$studentId])['total']??0);
     Http::json(compact('student','available','completed','recent','skills','totalPoints'));
@@ -601,17 +628,19 @@ function student_submit_test(int $studentId,array $test): never
         $pdo->prepare("UPDATE students SET progress_percent=(SELECT COALESCE(AVG(percentage),0) FROM test_attempts WHERE student_id=? AND status='graded'),last_active=NOW() WHERE id=?")->execute([$studentId,$studentId]);
         return ['attemptId'=>$attemptId,'score'=>$score,'totalPoints'=>$total,'percentage'=>$percent,'showResult'=>(bool)$test['show_result'],'reviewPending'=>$reviewPending];
     });
-    $result['skillResults']=attempt_skill_results($attemptId);
+    $skillResults=attempt_skill_results($attemptId);
     Activity::log('student',$studentId,'تسليم اختبار',"الاختبار رقم {$test['id']}");
     $notification=fetch_one('SELECT t.teacher_id,t.title,s.name AS student_name FROM tests t JOIN students s ON s.id=? WHERE t.id=?',[$studentId,$test['id']]);
     if($notification) execute_sql('INSERT INTO notifications (teacher_id,title,body) VALUES (?,?,?)',[$notification['teacher_id'],'نتيجة اختبار جديدة',$notification['student_name'].' سلّمت اختبار '.$notification['title'].' بنسبة '.$result['percentage'].'%']);
+    if((bool)$result['showResult'])$result['skillResults']=$skillResults;
+    else{$result=['attemptId'=>$attemptId,'showResult'=>false,'reviewPending'=>$result['reviewPending']];}
     Http::json($result,201);
 }
 
 function student_results(int $studentId): never
 {
     ensure_diagnostic_bank_schema();
-    $rows=fetch_all('SELECT a.id,t.title,t.test_type AS type,a.score,a.total_points,a.percentage,a.submitted_at FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE a.student_id=? AND a.status=\'graded\' ORDER BY a.submitted_at DESC',[$studentId]);
+    $rows=fetch_all('SELECT a.id,t.title,t.test_type AS type,a.score,a.total_points,a.percentage,a.submitted_at FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE a.student_id=? AND a.status=\'graded\' AND t.show_result=1 ORDER BY a.submitted_at DESC',[$studentId]);
     foreach($rows as &$row)$row['skillResults']=attempt_skill_results((int)$row['id']);
     unset($row);
     Http::json($rows);

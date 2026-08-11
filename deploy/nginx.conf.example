@@ -4,8 +4,15 @@ server {
     root /var/www/madar;
     index index.html index.php;
 
-    location ~ ^/(?:config|lib|database|scripts|deploy|storage|owner/protected)/ { return 404; }
+    location ~ ^/(?:config|lib|database|scripts|deploy|backups|storage|owner/protected)/ { return 404; }
     location ~ ^/(?:\.env|\.git|server\.js|package(?:-lock)?\.json) { return 404; }
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
     location /api/ {
         try_files $uri /api/index.php?$query_string;

@@ -14,6 +14,13 @@ function ensure_platform_enhancement_schema(): void
     Rbac::ensureSchema();
     ensure_parent_portal_schema();
     $pdo = Database::connection();
+    $allowRuntimeSchema=filter_var(env_value('ALLOW_RUNTIME_SCHEMA_CHANGES','false'),FILTER_VALIDATE_BOOLEAN);
+    $requiredTables=['remedial_plans','game_attempts','learning_resource_links','calendar_events','parent_private_messages','password_reset_requests','privacy_consents','system_backup_history','system_error_log'];
+    $placeholders=implode(',',array_fill(0,count($requiredTables),'?'));
+    $present=fetch_all("SELECT table_name AS schema_table_name FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ({$placeholders})",$requiredTables);
+    $presentNames=array_fill_keys(array_map(static fn(array $row):string=>(string)$row['schema_table_name'],$present),true);
+    $missingTables=array_values(array_filter($requiredTables,static fn(string $table):bool=>!isset($presentNames[$table])));
+    if($missingTables&&!$allowRuntimeSchema)throw new RuntimeException('قاعدة البيانات تحتاج ترحيل v11. الجداول الناقصة: '.implode(', ',$missingTables));
     $statements = [
         "CREATE TABLE IF NOT EXISTS remedial_plans (
           id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -167,12 +174,13 @@ function ensure_platform_enhancement_schema(): void
           INDEX idx_system_error_status (resolved_at,severity,created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
     ];
-    foreach ($statements as $sql) {
+    if($missingTables)foreach ($statements as $sql) {
         try { $pdo->exec($sql); } catch (Throwable $error) { error_log('[enhancement-schema] '.$error->getMessage()); throw $error; }
     }
     platform_enhancement_add_column('notifications','severity',"ENUM('info','success','warning','danger') NOT NULL DEFAULT 'info' AFTER body");
     platform_enhancement_add_column('notifications','route','VARCHAR(190) NULL AFTER severity');
     platform_enhancement_add_column('notifications','dedupe_key','VARCHAR(190) NULL AFTER route');
+    platform_enhancement_add_column('game_attempts','game_snapshot_json','LONGTEXT NULL AFTER duration_seconds');
     platform_enhancement_add_index('notifications','idx_notifications_teacher_read','teacher_id,is_read,created_at');
     platform_enhancement_add_unique_index('notifications','uq_notifications_dedupe','teacher_id,dedupe_key');
     platform_enhancement_seed_resources();
@@ -182,19 +190,26 @@ function ensure_platform_enhancement_schema(): void
 function platform_enhancement_add_column(string $table,string $column,string $definition): void
 {
     $exists=fetch_one('SELECT 1 AS ok FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=? LIMIT 1',[$table,$column]);
-    if (!$exists) Database::connection()->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` {$definition}");
+    if (!$exists) {
+        if(!filter_var(env_value('ALLOW_RUNTIME_SCHEMA_CHANGES','false'),FILTER_VALIDATE_BOOLEAN))throw new RuntimeException("قاعدة البيانات تحتاج ترحيلًا لإضافة {$table}.{$column}.");
+        Database::connection()->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` {$definition}");
+    }
 }
 
 function platform_enhancement_add_index(string $table,string $index,string $columns): void
 {
     $exists=fetch_one('SELECT 1 AS ok FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name=? LIMIT 1',[$table,$index]);
-    if (!$exists) Database::connection()->exec("ALTER TABLE `{$table}` ADD INDEX `{$index}` ({$columns})");
+    if (!$exists) {
+        if(!filter_var(env_value('ALLOW_RUNTIME_SCHEMA_CHANGES','false'),FILTER_VALIDATE_BOOLEAN))throw new RuntimeException("قاعدة البيانات تحتاج ترحيلًا لإضافة الفهرس {$index}.");
+        Database::connection()->exec("ALTER TABLE `{$table}` ADD INDEX `{$index}` ({$columns})");
+    }
 }
 
 function platform_enhancement_add_unique_index(string $table,string $index,string $columns): void
 {
     $exists=fetch_one('SELECT 1 AS ok FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name=? LIMIT 1',[$table,$index]);
     if (!$exists) {
+        if(!filter_var(env_value('ALLOW_RUNTIME_SCHEMA_CHANGES','false'),FILTER_VALIDATE_BOOLEAN))throw new RuntimeException("قاعدة البيانات تحتاج ترحيلًا لإضافة الفهرس {$index}.");
         try { Database::connection()->exec("ALTER TABLE `{$table}` ADD UNIQUE INDEX `{$index}` ({$columns})"); }
         catch (Throwable $error) { error_log('[enhancement-index] '.$error->getMessage()); }
     }
@@ -217,6 +232,19 @@ function platform_enhancement_date(string $value,bool $required=true): ?string
     }
     try { return (new DateTimeImmutable($value))->format('Y-m-d H:i:s'); }
     catch (Throwable) { Http::json(['error'=>'صيغة التاريخ أو الوقت غير صالحة.'],422); }
+}
+
+function platform_safe_resource_url(mixed $value): ?string
+{
+    $url=trim((string)$value);
+    if($url==='')return null;
+    if(mb_strlen($url)>2048)Http::json(['error'=>'رابط المورد طويل جدًا.'],422);
+    if(str_starts_with($url,'/')&&!str_starts_with($url,'//'))return $url;
+    $parts=parse_url($url);$scheme=strtolower((string)($parts['scheme']??''));
+    if(!filter_var($url,FILTER_VALIDATE_URL)||!in_array($scheme,['http','https'],true)||trim((string)($parts['host']??''))===''){
+        Http::json(['error'=>'رابط المورد يجب أن يكون داخليًا أو يبدأ بـ http أو https.'],422);
+    }
+    return $url;
 }
 
 
@@ -337,14 +365,14 @@ function teacher_remedial_routes(string $method,array $segments,int $teacherId):
         $where=['r.teacher_id=?'];$params=[$teacherId];
         if ($studentId){$where[]='r.student_id=?';$params[]=$studentId;}
         if ($status!==''){$where[]='r.status=?';$params[]=$status;}
-        $rows=fetch_all("SELECT r.*,s.name AS student_name,c.name AS class_name,sk.name AS skill_name,t.title AS source_test_title,rt.title AS reassessment_title FROM remedial_plans r JOIN students s ON s.id=r.student_id JOIN classes c ON c.id=s.class_id LEFT JOIN skills sk ON sk.id=r.skill_id LEFT JOIN tests t ON t.id=r.source_test_id LEFT JOIN tests rt ON rt.id=r.reassessment_test_id WHERE ".implode(' AND ',$where).' ORDER BY FIELD(r.status,\'in_progress\',\'planned\',\'reassessed\',\'completed\',\'cancelled\'),r.due_date,r.created_at DESC',$params);
+        $rows=fetch_all("SELECT r.*,s.name AS student_name,c.id AS class_id,c.stage,c.grade_label,c.name AS class_name,sk.name AS skill_name,t.title AS source_test_title,rt.title AS reassessment_title FROM remedial_plans r JOIN students s ON s.id=r.student_id JOIN classes c ON c.id=s.class_id LEFT JOIN skills sk ON sk.id=r.skill_id LEFT JOIN tests t ON t.id=r.source_test_id LEFT JOIN tests rt ON rt.id=r.reassessment_test_id WHERE ".implode(' AND ',$where).' ORDER BY FIELD(r.status,\'in_progress\',\'planned\',\'reassessed\',\'completed\',\'cancelled\'),r.due_date,r.created_at DESC',$params);
         Http::json(['items'=>$rows]);
     }
     if (!$segments&&$method==='POST') {
         $data=Http::input();Http::requireFields($data,['studentId','title']);$studentId=(int)$data['studentId'];
         if (!teacher_owns_student($teacherId,$studentId)) Http::json(['error'=>'الطالبة غير موجودة ضمن فصولك.'],404);
         $skillId=(int)($data['skillId']??0)?:null;$sourceTest=(int)($data['sourceTestId']??0)?:null;
-        execute_sql("INSERT INTO remedial_plans(teacher_id,student_id,skill_id,source_test_id,title,diagnosis,recommended_activity,recommended_resource_url,before_percent,target_percent,due_date,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",[$teacherId,$studentId,$skillId,$sourceTest,trim((string)$data['title']),trim((string)($data['diagnosis']??'')),trim((string)($data['activity']??'')),trim((string)($data['resourceUrl']??''))?:null,max(0,min(100,(float)($data['beforePercent']??0))),max(0,min(100,(float)($data['targetPercent']??70))),trim((string)($data['dueDate']??''))?:null,'planned']);
+        execute_sql("INSERT INTO remedial_plans(teacher_id,student_id,skill_id,source_test_id,title,diagnosis,recommended_activity,recommended_resource_url,before_percent,target_percent,due_date,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",[$teacherId,$studentId,$skillId,$sourceTest,trim((string)$data['title']),trim((string)($data['diagnosis']??'')),trim((string)($data['activity']??'')),platform_safe_resource_url($data['resourceUrl']??''),max(0,min(100,(float)($data['beforePercent']??0))),max(0,min(100,(float)($data['targetPercent']??70))),trim((string)($data['dueDate']??''))?:null,'planned']);
         Http::json(['id'=>(int)Database::connection()->lastInsertId()],201);
     }
     $id=route_id($segments,0);
@@ -502,6 +530,7 @@ function teacher_password_request_routes(string $method,array $segments,int $tea
 function public_password_reset_request(string $role): never
 {
     ensure_platform_enhancement_schema();
+    Http::rateLimit('password-reset-'.strtolower($role),5,3600);
     $role=strtoupper($role);
     if(!in_array($role,['STUDENT','PARENT','TEACHER','ADMIN'],true))Http::json(['error'=>'نوع الحساب غير صالح.'],422);
     $d=Http::input();$first=trim((string)($d['firstName']??''));$last=trim((string)($d['lastName']??''));$identifier=trim((string)($d['identifier']??''));$studentRef=trim((string)($d['studentReference']??''));
@@ -601,7 +630,7 @@ function owner_system_routes(string $method,array $segments,array $owner): never
         $tables=(int)($pdo->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()")?->fetchColumn()?:0);
         $dbSize=(int)($pdo->query("SELECT COALESCE(SUM(data_length+index_length),0) FROM information_schema.tables WHERE table_schema=DATABASE()")?->fetchColumn()?:0);
         $missing=[];foreach(['owners','teachers','students','classes','tests','test_attempts','rbac_roles','parent_student_links','remedial_plans','calendar_events','game_attempts','parent_private_messages','password_reset_requests','privacy_consents','system_backup_history'] as $table){if(!fetch_one('SELECT 1 AS ok FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=?',[$table]))$missing[]=$table;}
-        $uploadDirs=['attached_assets','backups'];$dirs=[];foreach($uploadDirs as $dir){$path=MADAR_ROOT.'/'.$dir;$dirs[]=['name'=>$dir,'exists'=>is_dir($path),'writable'=>is_dir($path)&&is_writable($path),'size'=>platform_directory_size($path)];}
+        $uploadDirs=['attached_assets'=>MADAR_ROOT.'/attached_assets','backups'=>platform_backup_directory()];$dirs=[];foreach($uploadDirs as $dir=>$path){$dirs[]=['name'=>$dir,'exists'=>is_dir($path),'writable'=>is_dir($path)&&is_writable($path),'size'=>platform_directory_size($path)];}
         $lastBackup=fetch_one("SELECT id,file_name,size_bytes,sha256,status,created_at,verified_at FROM system_backup_history WHERE status<>'deleted' ORDER BY created_at DESC LIMIT 1");
         $errors=fetch_all("SELECT id,severity,source,message,created_at FROM system_error_log WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT 20");
         Http::json(['database'=>['connected'=>true,'host'=>$config['host']??'','port'=>$config['port']??'','name'=>$config['name']??'','serverVersion'=>$pdo->getAttribute(PDO::ATTR_SERVER_VERSION),'tables'=>$tables,'sizeBytes'=>$dbSize,'missingTables'=>$missing],'runtime'=>['phpVersion'=>PHP_VERSION,'sapi'=>PHP_SAPI,'timezone'=>date_default_timezone_get(),'memoryLimit'=>ini_get('memory_limit'),'uploadMax'=>ini_get('upload_max_filesize'),'postMax'=>ini_get('post_max_size'),'diskFree'=>@disk_free_space(MADAR_ROOT),'diskTotal'=>@disk_total_space(MADAR_ROOT)],'directories'=>$dirs,'lastBackup'=>$lastBackup,'errors'=>$errors,'app'=>['version'=>'11.0','environment'=>env_value('APP_ENV','production')]]);
@@ -633,7 +662,9 @@ function owner_system_routes(string $method,array $segments,array $owner): never
 
 function platform_backup_directory(): string
 {
-    $dir=MADAR_ROOT.'/backups';
+    $configured=trim((string)(env_value('BACKUP_DIR','')??''));
+    $dir=$configured!==''?$configured:dirname(MADAR_ROOT,2).'/madar-backups';
+    if (!str_starts_with($dir,DIRECTORY_SEPARATOR)) $dir=MADAR_ROOT.'/'.$dir;
     if(!is_dir($dir) && !@mkdir($dir,0700,true) && !is_dir($dir)) throw new RuntimeException('تعذر إنشاء مجلد النسخ الاحتياطية.');
     if(!is_writable($dir)) throw new RuntimeException('مجلد النسخ الاحتياطية غير قابل للكتابة.');
     return $dir;
@@ -655,6 +686,8 @@ function platform_create_database_backup(string $backupType,string $actorRole,?i
     $handle=@fopen($path,'wb');if(!$handle)throw new RuntimeException('تعذر إنشاء ملف النسخة الاحتياطية.');
     $write=static function(string $text)use($handle):void{if(fwrite($handle,$text)===false)throw new RuntimeException('تعذر كتابة النسخة الاحتياطية.');};
     try{
+        $pdo->exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        $pdo->beginTransaction();
         $write("-- منصة مدار | نسخة قاعدة البيانات\n-- التاريخ: ".date('c')."\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS=0;\n\n");
         $tables=$pdo->query('SHOW FULL TABLES WHERE Table_type = \'BASE TABLE\'')->fetchAll(PDO::FETCH_NUM);
         foreach($tables as $tableRow){
@@ -675,6 +708,7 @@ function platform_create_database_backup(string $backupType,string $actorRole,?i
             $write("\n");
         }
         $write("SET FOREIGN_KEY_CHECKS=1;\n");
+        $pdo->commit();
         fclose($handle);$handle=null;
         $size=(int)filesize($path);$sha=hash_file('sha256',$path);
         execute_sql('INSERT INTO system_backup_history(backup_type,file_name,file_path,size_bytes,sha256,status,created_by_role,created_by_id,details) VALUES(?,?,?,?,?,\'created\',?,?,?)',[$backupType,$fileName,$path,$size,$sha,$actorRole,$actorId,'نسخة SQL كاملة لقاعدة البيانات']);
@@ -682,6 +716,7 @@ function platform_create_database_backup(string $backupType,string $actorRole,?i
         Activity::log($actorRole,$actorId,'إنشاء نسخة احتياطية',$fileName);
         return ['id'=>$id,'fileName'=>$fileName,'path'=>$path,'sizeBytes'=>$size,'sha256'=>$sha,'status'=>'created'];
     }catch(Throwable $error){
+        if($pdo->inTransaction())$pdo->rollBack();
         if(is_resource($handle))fclose($handle);@unlink($path);
         try{execute_sql('INSERT INTO system_error_log(severity,source,message,context_json) VALUES(\'error\',\'backup\',?,?)',[mb_substr($error->getMessage(),0,2000),json_encode(['type'=>$backupType],JSON_UNESCAPED_UNICODE)]);}catch(Throwable){}
         throw $error;

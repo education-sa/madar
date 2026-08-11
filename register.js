@@ -158,7 +158,17 @@ function fillRegistrationClasses() {
   const teacherSelect = document.getElementById("registrationTeacher");
   const classSelect = document.getElementById("registrationClass");
   const teacher = registrationTeachers.find((item) => String(item.id) === teacherSelect.value);
-  classSelect.innerHTML = `<option value="">اختاري الفصل</option>${(teacher?.classes || []).map((item) => `<option value="${item.id}">${item.name} · ${item.stage} · ${item.gradeLabel}</option>`).join("")}`;
+  classSelect.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "اختاري الفصل";
+  classSelect.appendChild(placeholder);
+  (teacher?.classes || []).forEach((item) => {
+    const option = document.createElement("option");
+    option.value = String(item.id);
+    option.textContent = `${item.name} · ${item.stage} · ${item.gradeLabel}`;
+    classSelect.appendChild(option);
+  });
   classSelect.disabled = !teacher;
   if (teacher?.classes.length === 1) classSelect.value = String(teacher.classes[0].id);
 }
@@ -171,7 +181,17 @@ async function loadRegistrationOptions() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "تعذّر تحميل الفصول.");
     registrationTeachers = data.teachers || [];
-    teacherSelect.innerHTML = `<option value="">اختاري المعلمة</option>${registrationTeachers.map((item) => `<option value="${item.id}">${item.name}</option>`).join("")}`;
+    teacherSelect.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "اختاري المعلمة";
+    teacherSelect.appendChild(placeholder);
+    registrationTeachers.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = String(item.id);
+      option.textContent = item.name;
+      teacherSelect.appendChild(option);
+    });
     teacherSelect.disabled = registrationTeachers.length === 0;
     if (registrationTeachers.length === 1) teacherSelect.value = String(registrationTeachers[0].id);
     fillRegistrationClasses();

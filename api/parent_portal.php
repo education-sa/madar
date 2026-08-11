@@ -119,6 +119,7 @@ function parent_portal_email_exists_anywhere(string $email): bool
 
 function parent_public_register(): never
 {
+    Http::rateLimit('parent-register',5,3600);
     ensure_parent_portal_schema();
     $data = Http::input();
     Http::requireFields($data, ['password']);
@@ -155,9 +156,8 @@ function parent_public_register(): never
         $teacherId = (int)$student['teacher_id'];
         $grouped[$teacherId][] = (string)$student['email'];
     }
-    if (!$grouped) {
-        Http::json(['error'=>'لم نجد أي طالبة مسجلة بهذه الإيميلات. يجب إنشاء حساب الطالبة واعتماده أولًا.'],422);
-    }
+    $genericMessage='تم استلام الطلب. إذا طابقت البيانات حسابات طالبات معتمدة فسيظهر الطلب للمعلمة للمراجعة.';
+    if (!$grouped){usleep(150000);Http::json(['ok'=>true,'message'=>$genericMessage],201);}
 
     // معرّف داخلي مخفي يحافظ على بنية قاعدة البيانات، ولا يُطلب من ولي الأمر ولا يظهر له.
     $internalEmail = parent_portal_internal_email('parent-request');
@@ -175,8 +175,7 @@ function parent_public_register(): never
     Activity::log('system', null, 'طلب حساب ولي أمر', 'طلب جديد بالاسم: ' . $name);
     Http::json([
         'ok'=>true,
-        'message'=>'تم إرسال طلب إنشاء حساب ولي الأمر إلى معلمة الطالبة للمراجعة.',
-        'requestsCreated'=>$created,
+        'message'=>$genericMessage,
     ],201);
 }
 
@@ -512,7 +511,7 @@ function parent_portal_children(int $parentId): array
         "SELECT s.id,s.name,s.email,s.stage,s.grade_label,s.learning_style,s.progress_percent,
                 c.name AS class_name,c.academic_year,c.teacher_id,t.name AS teacher_name,
                 COALESCE((SELECT SUM(mp.points) FROM motivational_points mp WHERE mp.student_id=s.id),0) AS total_points,
-                COALESCE((SELECT ROUND(AVG(ta.percentage),1) FROM test_attempts ta WHERE ta.student_id=s.id AND ta.status IN ('submitted','graded')),0) AS test_average
+                COALESCE((SELECT ROUND(AVG(ta.percentage),1) FROM test_attempts ta JOIN tests visible_test ON visible_test.id=ta.test_id WHERE ta.student_id=s.id AND ta.status IN ('submitted','graded') AND visible_test.show_result=1),0) AS test_average
          FROM parent_student_links l
          JOIN students s ON s.id=l.student_id
          LEFT JOIN classes c ON c.id=s.class_id
@@ -560,8 +559,8 @@ function parent_portal_overview(int $parentId, int $studentId): never
     $student = parent_portal_linked_student($parentId,$studentId);
     if (!$student) Http::json(['error'=>'الطالبة غير مرتبطة بحسابك.'],404);
     $testStats = fetch_one(
-        "SELECT COUNT(*) AS attempts,COALESCE(ROUND(AVG(percentage),1),0) AS average,COALESCE(MAX(percentage),0) AS best
-         FROM test_attempts WHERE student_id=? AND status IN ('submitted','graded')",
+        "SELECT COUNT(*) AS attempts,COALESCE(ROUND(AVG(a.percentage),1),0) AS average,COALESCE(MAX(a.percentage),0) AS best
+         FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE a.student_id=? AND a.status IN ('submitted','graded') AND t.show_result=1",
         [$studentId]
     ) ?: [];
     $attendance = fetch_one(
@@ -594,7 +593,7 @@ function parent_portal_overview(int $parentId, int $studentId): never
             'id'=>(int)$student['id'],'name'=>$student['name'],'email'=>$student['email'],'stage'=>$student['stage'],
             'gradeLabel'=>$student['grade_label']??'','className'=>$student['class_name']??'','academicYear'=>$student['academic_year']??'',
             'teacherName'=>$student['teacher_name']??'','teacherEmail'=>$student['teacher_email']??'',
-            'learningStyle'=>$student['learning_style']??'unknown','progressPercent'=>(float)($student['progress_percent']??0),
+            'learningStyle'=>$student['learning_style']??'unknown','progressPercent'=>(float)($testStats['average']??0),
         ],
         'cards'=>[
             'points'=>$points,
@@ -621,12 +620,12 @@ function parent_portal_tests(int $parentId, int $studentId): never
          FROM test_attempts a
          JOIN tests t ON t.id=a.test_id
          LEFT JOIN teachers te ON te.id=t.teacher_id
-         WHERE a.student_id=? ORDER BY COALESCE(a.submitted_at,a.started_at) DESC,a.id DESC",
+         WHERE a.student_id=? AND t.show_result=1 ORDER BY COALESCE(a.submitted_at,a.started_at) DESC,a.id DESC",
         [$studentId]
     );
     $available = fetch_all(
         "SELECT t.id,t.title,t.test_type,t.status,t.total_points,t.start_at,t.end_at,t.academic_year,t.semester,
-                (SELECT MAX(a.percentage) FROM test_attempts a WHERE a.test_id=t.id AND a.student_id=?) AS best_percentage
+                CASE WHEN t.show_result=1 THEN (SELECT MAX(a.percentage) FROM test_attempts a WHERE a.test_id=t.id AND a.student_id=?) ELSE NULL END AS best_percentage
          FROM tests t
          WHERE (t.class_id=? OR (t.class_id IS NULL AND t.teacher_id=?))
            AND t.status IN ('published','closed') ORDER BY t.created_at DESC",
@@ -651,11 +650,11 @@ function parent_portal_analysis(int $parentId, int $studentId): never
     $performance = fetch_all(
         "SELECT t.test_type,COUNT(*) AS attempts,ROUND(AVG(a.percentage),1) AS average,MAX(a.percentage) AS best
          FROM test_attempts a JOIN tests t ON t.id=a.test_id
-         WHERE a.student_id=? AND a.status IN ('submitted','graded') GROUP BY t.test_type",
+         WHERE a.student_id=? AND a.status IN ('submitted','graded') AND t.show_result=1 GROUP BY t.test_type",
         [$studentId]
     );
     Http::json([
-        'progressPercent'=>(float)($student['progress_percent']??0),
+        'progressPercent'=>$performance?round(array_sum(array_column($performance,'average'))/count($performance),1):0,
         'learningStyle'=>$student['learning_style']??'unknown',
         'learningAssessment'=>$learning ?: null,
         'skills'=>$skills,

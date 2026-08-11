@@ -53,6 +53,8 @@ try {
     require_once __DIR__ . '/knowledge_exchange.php';
     require_once __DIR__ . '/academic_year_management.php';
     require_once __DIR__ . '/interactive_games.php';
+    require_once __DIR__ . '/interactive_game_builder.php';
+    require_once __DIR__ . '/game_sessions.php';
     require_once __DIR__ . '/learning_styles.php';
     require_once __DIR__ . '/parent_portal.php';
     require_once __DIR__ . '/platform_enhancements.php';
@@ -67,6 +69,7 @@ try {
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header("Permissions-Policy: camera=(), microphone=(), geolocation=()");
+    header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
 
     $uriPath = rawurldecode(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
     $path = preg_replace('#^/api(?:/index\.php)?#', '', $uriPath) ?: '/';

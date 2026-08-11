@@ -171,7 +171,18 @@ async function renderWeeklyFollowUp() {
   if (!target) return;
   const classQuery = weeklyFollowUpClassId ? `&classId=${weeklyFollowUpClassId}` : "";
   try {
-    const data = await weeklyApi(`/weekly-follow-up?week=${weeklyFollowUpWeek}${classQuery}`);
+    let data;
+    try {
+      data = await weeklyApi(`/weekly-follow-up?week=${weeklyFollowUpWeek}${classQuery}`);
+    } catch (error) {
+      const staleClass = weeklyFollowUpClassId > 0 && error.message === "الفصل المختار غير موجود ضمن فصولك.";
+      if (!staleClass) throw error;
+      weeklyFollowUpClassId = 0;
+      weeklyFollowUpStage = "";
+      weeklyFollowUpGrade = "";
+      saveWeeklyState();
+      data = await weeklyApi(`/weekly-follow-up?week=${weeklyFollowUpWeek}`);
+    }
     weeklyFollowUpData = data;
     const nextContextKey = `${data.settings?.academic_year || ""}|${data.settings?.current_semester || ""}|${data.settings?.academic_start_date || ""}`;
     if (nextContextKey !== weeklyFollowUpContextKey) {

@@ -224,6 +224,9 @@ function owner_rbac_users_routes(string $method, array $segments, array $owner):
             Database::transaction(function(PDO $pdo) use($subjectType,$id):void {
                 $table=$subjectType==='teacher'?'teachers':($subjectType==='student'?'students':'platform_users');
                 $pdo->prepare('DELETE FROM user_role_assignments WHERE subject_type=? AND subject_id=?')->execute([$subjectType,$id]);
+                if ($subjectType==='teacher' && function_exists('teacher_attachments_schema_ready') && teacher_attachments_schema_ready()) {
+                    $pdo->prepare('DELETE FROM teacher_analysis_attachments WHERE teacher_id=?')->execute([$id]);
+                }
                 $pdo->prepare("DELETE FROM {$table} WHERE id=?")->execute([$id]);
             });
         } catch (Throwable $error) {
@@ -274,6 +277,11 @@ function owner_rbac_physical_files(string $subjectType, int $id): array
     } elseif ($subjectType==='teacher') {
         foreach (fetch_all("SELECT stored_name FROM knowledge_resources WHERE teacher_id=? AND resource_type='file' AND stored_name IS NOT NULL",[$id]) as $row) {
             $files[]=MADAR_ROOT.'/storage/private/knowledge-exchange/'.basename((string)$row['stored_name']);
+        }
+        if (function_exists('teacher_attachments_schema_ready') && teacher_attachments_schema_ready()) {
+            foreach (fetch_all('SELECT stored_name FROM teacher_analysis_attachments WHERE teacher_id=? AND stored_name IS NOT NULL',[$id]) as $row) {
+                $files[]=MADAR_ROOT.'/storage/private/teacher-analysis-attachments/'.basename((string)$row['stored_name']);
+            }
         }
         // ملفات إنجاز الطالبات لا تتبع المعلمة ملكيًا، لذلك لا تدخل في حذف حسابها.
     }

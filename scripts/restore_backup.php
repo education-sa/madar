@@ -26,13 +26,13 @@ if($file===''||$confirmation!=='استعادة-مدار'){
 }
 
 $real=realpath($file);
-$backupRoot=realpath(MADAR_ROOT.'/backups');
+$backupRoot=realpath(platform_backup_directory());
 if(!$real||!is_file($real)||strtolower(pathinfo($real,PATHINFO_EXTENSION))!=='sql'){
     fwrite(STDERR,"ملف النسخة غير موجود أو ليس ملف SQL.\n");
     exit(2);
 }
 if(!$backupRoot||!str_starts_with($real,$backupRoot.DIRECTORY_SEPARATOR)){
-    fwrite(STDERR,"للحماية، يجب أن يكون ملف الاستعادة داخل مجلد backups في المشروع.\n");
+    fwrite(STDERR,"للحماية، يجب أن يكون ملف الاستعادة داخل مجلد النسخ الاحتياطية الآمن.\n");
     exit(2);
 }
 if(filesize($real)===0){
@@ -102,6 +102,7 @@ function madar_sql_statements(string $path): Generator
     } finally { fclose($handle); }
 }
 
+$safety=null;
 try{
     $statementCount=0;
     foreach(madar_sql_statements($real) as $ignored)$statementCount++;
@@ -138,11 +139,21 @@ try{
     fwrite(STDOUT,"اكتملت الاستعادة بنجاح. الأوامر المنفذة: {$executed}\n");
     fwrite(STDOUT,"احتفظي بنسخة الأمان: {$safety['fileName']}\n");
 }catch(Throwable $error){
+    $recovered=false;$recoveryError='';
+    if(is_array($safety)&&is_file((string)($safety['path']??''))){
+        try{
+            $recoveryPdo=Database::connection();$recoveryPdo->exec('SET FOREIGN_KEY_CHECKS=0');
+            foreach(madar_sql_statements((string)$safety['path']) as $sql)$recoveryPdo->exec($sql);
+            $recoveryPdo->exec('SET FOREIGN_KEY_CHECKS=1');$recovered=true;
+        }catch(Throwable $restoreError){$recoveryError=$restoreError->getMessage();try{Database::connection()->exec('SET FOREIGN_KEY_CHECKS=1');}catch(Throwable){}}
+    }
     try{
         execute_sql("INSERT INTO system_error_log(severity,source,message,context_json) VALUES('critical','restore',?,?)",[
-            mb_substr($error->getMessage(),0,2000),json_encode(['file'=>$real?:$file],JSON_UNESCAPED_UNICODE)
+            mb_substr($error->getMessage(),0,2000),json_encode(['file'=>$real?:$file,'automaticRecovery'=>$recovered,'recoveryError'=>$recoveryError?:null],JSON_UNESCAPED_UNICODE)
         ]);
     }catch(Throwable){}
     fwrite(STDERR,"فشلت الاستعادة: {$error->getMessage()}\n");
+    if($recovered)fwrite(STDERR,"تمت استعادة الحالة السابقة تلقائيًا من نسخة الأمان.\n");
+    elseif(is_array($safety))fwrite(STDERR,"تعذرت الاستعادة التلقائية. نسخة الأمان محفوظة باسم: {$safety['fileName']}\n");
     exit(1);
 }
