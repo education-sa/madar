@@ -59,6 +59,8 @@ function public_login(string $role): never
             : Http::email((string) $data['email']);
     }
     $user = Auth::attempt($role, $email, (string) $data['password'], isset($data['otp']) ? (string)$data['otp'] : null);
+    $identity=Auth::realUser();
+    if($identity){$user['portal']=PortalAccess::state($identity);if(!PortalAccess::canMadar($identity))$user['redirect']=PortalAccess::destination($identity);}
     Http::json($user);
 }
 

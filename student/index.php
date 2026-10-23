@@ -6,4 +6,6 @@ if (!$user || $user['role'] !== 'student') {
     header('Location: /login.html?role=student');
     exit;
 }
-readfile(__DIR__ . '/index.html');
+PortalAccess::pageGuard($user);
+$html=file_get_contents(__DIR__.'/index.html');
+echo str_replace('</body>','<script src="/surveys/public/assets/portal-link.js?v=20261023"></script></body>',$html);

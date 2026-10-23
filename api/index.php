@@ -68,6 +68,7 @@ try {
     require_once __DIR__ . '/platform_routes.php';
     require_once __DIR__ . '/preview_routes.php';
     require_once __DIR__ . '/owner_routes.php';
+    require_once __DIR__ . '/portal_routes.php';
 
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
@@ -86,7 +87,9 @@ try {
     }
 
     $scope = array_shift($segments);
+    PortalAccess::apiGuard((string)$scope,$segments);
     match ($scope) {
+        'portal' => handle_portal_routes($method,$segments),
         'teacher' => handle_teacher_routes($method, $segments),
         'student' => handle_student_routes($method, $segments),
         'owner' => handle_owner_routes($method, $segments),

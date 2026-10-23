@@ -113,8 +113,7 @@ async function renderHome() {
 async function renderTeachers() {
   content.innerHTML = `<div class="empty-state">جارٍ التحميل...</div>`;
   const teachers = await api("/teachers");
-  const scopeData=await surveyScopeApi("teacher_scopes");
-  const teacherScopes=new Map(scopeData.items.map(item=>[Number(item.id),item.access_scope]));
+  await loadPortalAccounts("teacher");
   content.innerHTML = `
     <div class="toolbar">
       <div class="spacer"></div>
@@ -135,7 +134,8 @@ async function renderTeachers() {
               <td style="display:flex; gap:6px; flex-wrap:wrap">
                 <button class="btn btn-outline btn-sm" data-reset="${t.id}">إعادة تعيين كلمة المرور</button>
                 <button class="btn ${t.status === "pending" ? "btn-primary" : "btn-secondary"} btn-sm" data-toggle="${t.id}" data-status="${esc(t.status)}">${t.status === "pending" ? "موافقة وتفعيل" : t.status === "disabled" ? "تفعيل" : "تعطيل"}</button>
-                <button class="btn btn-outline btn-sm" data-teacher-scope="${t.id}" data-scope="${teacherScopes.get(Number(t.id))==='surveys_only'?'surveys_only':'full'}">${teacherScopes.get(Number(t.id))==='surveys_only'?'🔒 استبيانات فقط — تغيير':'🌐 وصول كامل — تقييد'}</button>
+                ${portalAccountButtons("teacher",t.id)}
+
                 <button class="btn btn-danger btn-sm" data-delete="${t.id}">حذف</button>
               </td>
             </tr>`
@@ -146,6 +146,7 @@ async function renderTeachers() {
     </div>
   `;
 
+  bindPortalAccountButtons();
   content.querySelector("#addTeacherBtn").addEventListener("click", () => {
     openModal(`
       <h3>إنشاء حساب معلمة جديد</h3>
@@ -191,13 +192,6 @@ async function renderTeachers() {
     })
   );
 
-  content.querySelectorAll('[data-teacher-scope]').forEach(button=>button.onclick=()=>{
-    const limited=button.dataset.scope!=='surveys_only';
-    confirmAction(limited?'تقييد هذه المعلمة بالاستبيانات فقط؟ سيُمنع وصولها إلى لوحة المعلمة وبقية واجهات بيانات الموقع، دون تعطيل حسابها أو تغيير بياناتها.':'السماح لهذه المعلمة بالوصول إلى وظائف المعلمة المعتادة وفق صلاحياتها؟',async()=>{
-      await surveyScopeApi('set_teacher_scope',{teacher_id:Number(button.dataset.teacherScope),access_scope:limited?'surveys_only':'full'});
-      toast(limited?'تم تقييد الحساب بالاستبيانات فقط':'تمت إعادة الوصول المعتاد');await renderTeachers();
-    });
-  });
   content.querySelectorAll("[data-delete]").forEach((btn) =>
     btn.addEventListener("click", () =>
       confirmAction("سيتم تعطيل حساب المعلمة وحذفه مؤقتًا، مع إمكانية استعادته من إدارة جميع المستخدمين.", async () => {
@@ -241,6 +235,7 @@ async function renderTeachers() {
 async function renderStudents() {
   content.innerHTML = `<div class="empty-state">جارٍ التحميل...</div>`;
   const students = await api("/students");
+  await loadPortalAccounts("student");
   content.innerHTML = `
     <div class="toolbar">
       <div class="spacer"></div>
@@ -259,6 +254,7 @@ async function renderStudents() {
               <td>${esc(s.class_name || "—")}</td>
               <td>${s.status === "disabled" ? '<span class="badge badge-red">معطّل</span>' : '<span class="badge badge-green">نشط</span>'}</td>
               <td style="display:flex; gap:6px; flex-wrap:wrap">
+                ${portalAccountButtons("student",s.id)}
                 <button class="btn btn-outline btn-sm" data-reset-student="${s.id}">تعيين كلمة مرور</button>
                 <button class="btn btn-secondary btn-sm" data-toggle="${s.id}" data-status="${esc(s.status)}">${s.status === "disabled" ? "تفعيل" : "تعطيل"}</button>
                 <button class="btn btn-danger btn-sm" data-delete="${s.id}">حذف</button>
@@ -271,6 +267,7 @@ async function renderStudents() {
     </div>
   `;
 
+  bindPortalAccountButtons();
   content.querySelector("#createStudentBtn").onclick = () => openCreateStudentOwnerModal();
 
   content.querySelectorAll("[data-toggle]").forEach((btn) =>
@@ -353,6 +350,7 @@ async function renderTests() {
 async function renderActivity() {
   content.innerHTML = `<div class="empty-state">جارٍ تحميل سجل العمليات...</div>`;
   const logs = await api("/activity-log");
+  try { const portal=await api('/portal/audit'); for(const a of portal.items)logs.push({actor_role:'owner',owner_name:a.actor,action:'بوابة ظليم: '+({grant_first_teacher:'منح معلم أول',revoke_first_teacher:'سحب معلم أول',portal_access:'تغيير الوصول'}[a.event_type]||a.event_type),details:a.subject_type+' #'+a.subject_id,created_at:a.created_at,before_data:a.before_json,after_data:a.after_json});logs.sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))); } catch(error) {console.warn(error.message);}
   content.innerHTML = `
     <div class="card activity-intro"><h3>سجل عمليات مالك الموقع والنظام</h3><p>تُعرض هوية المنفذ الحقيقية وعنوان IP ونوع المتصفح، مع إخفاء كلمات المرور والرموز السرية تلقائيًا.</p></div>
     <div class="card table-card"><div class="table-scroll"><table>
@@ -701,6 +699,7 @@ async function renderUsers(presetRole = "") {
 async function renderParents() {
   content.innerHTML = '<div class="empty-state">جارٍ تحميل حسابات أولياء الأمور...</div>';
   const data = await api("/users?role=PARENT");
+  await loadPortalAccounts("platform");
   content.innerHTML = `
     <div class="toolbar">
       <div class="spacer"></div>
@@ -726,6 +725,7 @@ async function renderParents() {
                 <td>${userStatusBadge(u)}</td>
                 <td>${new Date(u.created_at).toLocaleDateString("ar-SA")}</td>
                 <td style="display:flex; gap:6px; flex-wrap:wrap">
+                  ${portalAccountButtons("platform",u.id)}
                   <button class="btn btn-outline btn-sm" data-parent-link="${u.id}">ربط</button>
                   <button class="btn btn-outline btn-sm" data-reset="${u.id}">إعادة تعيين كلمة المرور</button>
                   <button class="btn ${u.status === "active" ? "btn-secondary" : "btn-primary"} btn-sm" data-toggle="${u.id}" data-status="${esc(u.status)}">${u.status === "active" ? "تعطيل" : "تفعيل"}</button>
@@ -738,6 +738,7 @@ async function renderParents() {
       </div>
     </div>`;
 
+  bindPortalAccountButtons();
   content.querySelector("#createParentBtn").onclick = () => openCreateOwnerUser("PARENT");
 
   content.querySelectorAll("[data-parent-link]").forEach((button) => {
@@ -1114,10 +1115,71 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
     csrfToken = currentOwner.csrfToken || csrfToken;
     document.getElementById("ownerNameLabel").textContent = currentOwner.name;
     document.getElementById("avatarCircle").textContent = currentOwner.name.trim()[0] || "م";
-    navigate("home");
+    navigate(new URLSearchParams(location.search).get("section") || "home");
   } catch (err) {
     // api() already redirects to login on 401/403
   }
 })();
 
 async function surveyScopeApi(op,data=null){const sessionResponse=await fetch('/surveys/public/api.php?op=session',{credentials:'same-origin',cache:'no-store'});const session=await sessionResponse.json();if(!sessionResponse.ok)throw new Error(session.error||'تعذر التحقق من الجلسة');const response=await fetch('/surveys/public/api.php?op='+encodeURIComponent(op),{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json','X-CSRF-Token':session.csrf}:{},...(data?{body:JSON.stringify(data)}:{})});const result=await response.json();if(!response.ok)throw new Error(result.error||'تعذر حفظ نطاق الحساب');return result;}
+
+// Zulaim controls are inline in the existing owner account rows, separate from Madar scopes.
+const portalAccounts = new Map();
+const portalModeLabels={madar_only:'مدار فقط',portal_only:'بوابة ظليم فقط',both:'مدار وبوابة ظليم'};
+async function loadPortalAccounts(type){
+  try{const d=await api('/portal/'+type);for(const row of d.items)portalAccounts.set(type+':'+row.id,row);}
+  catch(error){toast(error.message);}
+}
+function portalAccountButtons(type,id){
+  const row=portalAccounts.get(type+':'+id);if(!row)return '<button class="btn btn-outline btn-sm" data-portal-install>تهيئة ربط بوابة ظليم</button>';
+  if(type==='teacher')return `<button class="btn btn-outline btn-sm" data-teacher-settings="${id}">⚙ إعدادات</button>`;
+  return `<button class="btn btn-outline btn-sm" data-portal-account="${type}:${id}">${esc(portalModeLabels[row.access_mode])} — تغيير</button>`+
+    (type==='teacher'?`<button class="btn btn-outline btn-sm" data-portal-first="${id}">${row.first_teacher?'معلم أول — سحب الدور':'معلمة عادية — ترقية إلى معلم أول'}</button>`:'')+
+    `<span class="badge ${row.portal_enabled?'badge-green':'badge-orange'}">بوابة ظليم ${row.portal_enabled?'مفعلة':'متوقفة'}</span>`;
+}
+function bindPortalAccountButtons(){
+  content.querySelectorAll('[data-teacher-settings]').forEach(b=>b.onclick=()=>editTeacherSettings(Number(b.dataset.teacherSettings)));
+  content.querySelectorAll('[data-portal-install]').forEach(b=>b.onclick=()=>confirmAction('تهيئة جداول ربط بوابة ظليم؟ يحافظ التحديث على الحسابات والاستبيانات والملفات الحالية.',async()=>{await api('/portal/install',{method:'POST',body:JSON.stringify({confirmed:true})});toast('تمت تهيئة الربط؛ أعيدي فتح قسم الحسابات.');}));
+  content.querySelectorAll('[data-portal-account]').forEach(b=>b.onclick=()=>editPortalAccount(...b.dataset.portalAccount.split(':')));
+  content.querySelectorAll('[data-portal-first]').forEach(b=>b.onclick=()=>editPortalAccount('teacher',b.dataset.portalFirst,true));
+}
+function editPortalAccount(type,rawId,roleFocus=false){
+  const id=Number(rawId),row=portalAccounts.get(type+':'+id);if(!row)return;
+  openModal(`<h3>وصول بوابة ظليم</h3><p>المعلمة العادية تتابع طالبات فصولها ومادتها دون دور معلم أول. المعلم الأول يدير الفصول والطالبات، وصلاحيات مدار تبقى مستقلة.</p>
+    <label class="field">نوع الوصول<select id="portalMode">${Object.entries(portalModeLabels).map(([v,l])=>`<option value="${v}" ${row.access_mode===v?'selected':''}>${l}</option>`).join('')}</select></label>
+    <label class="field" style="display:flex;align-items:center;gap:10px"><input style="width:auto;flex:none" type="checkbox" id="portalEnabled" ${row.portal_enabled?'checked':''}> السماح بالدخول إلى بوابة ظليم</label>
+    ${type==='teacher'?`<label class="field" style="display:flex;align-items:center;gap:10px"><input style="width:auto;flex:none" type="checkbox" id="portalFirstTeacher" ${row.first_teacher?'checked':''}> معلم أول — إنشاء الفصول وإضافة الطالبات وإعادة تعيين كلمات مرورهن</label>`:''}
+    <p class="safe-note">لا يتغير حساب مدار أو كلمة المرور أو صلاحياته. إيقاف البوابة يمنع الوصول إلى ملفاتها فورًا.</p>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelPortalAccount">إلغاء</button><button class="btn btn-primary" id="savePortalAccount">حفظ</button></div>`);
+  if(roleFocus)document.getElementById('portalFirstTeacher').focus();
+  document.getElementById('cancelPortalAccount').onclick=closeModal;
+  document.getElementById('savePortalAccount').onclick=()=>{
+    const change={access_mode:document.getElementById('portalMode').value,portal_enabled:document.getElementById('portalEnabled').checked,first_teacher:type==='teacher'&&document.getElementById('portalFirstTeacher').checked,confirmed:true};
+    const message=row.first_teacher&&!change.first_teacher?'تأكيد سحب دور معلم أول؟ تبقى حساباتها وبياناتها محفوظة.':(!row.first_teacher&&change.first_teacher?'تأكيد منح دور معلم أول داخل بوابة ظليم فقط؟':'تأكيد تغيير وصول هذا الحساب إلى بوابة ظليم؟');
+    confirmAction(message,async()=>{await api('/portal/'+type+'/'+id,{method:'PUT',body:JSON.stringify(change)});toast('تم حفظ وصول بوابة ظليم');if(type==='teacher')await renderTeachers();else if(type==='student')await renderStudents();else await renderParents();});
+  };
+}
+
+async function editTeacherSettings(id){
+  let data;try{data=await api('/portal/teacher/'+id+'/settings');}catch(e){toast(e.message);return;}
+  const access=data.access;
+  const classRows=data.classes.map(c=>{const selected=Boolean(Number(c.can_view)&&Number(c.approved));return `<div class="teacher-setting-class" data-settings-class="${Number(c.id)}" style="border:1px solid #e5dfef;border-radius:12px;padding:12px;margin-top:9px">
+    <label style="display:flex;flex-direction:row;align-items:center;gap:8px"><input type="checkbox" data-selected style="width:auto" ${selected?'checked':''}><strong>${esc(c.title)}</strong><small>${esc(c.academic_year)}${Number(c.is_active)?'':' — مؤرشف'}</small></label>
+    <div data-class-options ${selected?'':'hidden'} style="margin-top:9px"><label class="field">المادة في هذا الفصل<input data-subject maxlength="85" value="${esc(c.subject||'')}" placeholder="مثال: الرياضيات"></label><div style="display:flex;gap:15px;flex-wrap:wrap"><label><input type="checkbox" data-upload style="width:auto" ${selected?!Number(c.can_upload)?'':'checked':'checked'}> متابعة ورفع أعمال المادة</label><label><input type="checkbox" data-post style="width:auto" ${selected?!Number(c.can_post)?'':'checked':'checked'}> نشر أنشطة المادة</label></div></div></div>`;}).join('');
+  openModal(`<h3>إعدادات ${esc(data.name)}</h3><form id="teacherUnifiedSettings">
+    <section style="padding:12px;border-radius:12px;background:#f6f2fb;margin-bottom:12px"><h4>١. الدخول إلى البوابات</h4><label class="field">السماح باستخدام<select id="teacherAccessMode">${Object.entries(portalModeLabels).map(([v,l])=>`<option value="${v}" ${access.access_mode===v?'selected':''}>${l}</option>`).join('')}</select></label></section>
+    <section style="padding:12px;border:1px solid #e5dfef;border-radius:12px;margin-bottom:12px"><h4>٢. الدور والتخصص</h4><div class="form-grid"><label class="field">دور المعلمة في ظليم<select id="teacherSchoolRole"><option value="regular" ${!access.first_teacher?'selected':''}>معلمة عادية — متابعة طالباتها ومادتها</option><option value="first" ${access.first_teacher?'selected':''}>معلم أول — إدارة الفصول والطالبات وكلمات المرور</option></select></label><label class="field">التخصص<input id="teacherSpecialty" maxlength="100" value="${esc(data.specialty)}" placeholder="مثال: الرياضيات"></label></div><p class="safe-note">منح الوصول إلى مدار لا يمنح دور معلم أول. الدور يخص بوابة ظليم فقط.</p></section>
+    <section><h4>٣. الفصول والمواد المعتمدة</h4><input id="teacherClassSearch" placeholder="بحث باسم الفصل أو الصف" aria-label="بحث في الفصول" style="width:100%;margin-bottom:6px">${classRows||'<p class="safe-note">لا توجد فصول مشتركة بعد. تظهر هنا الفصول التي تنشئها الإدارة أو المعلم الأول.</p>'}</section>
+    <div class="modal-actions"><button type="button" class="btn btn-outline" id="cancelTeacherSettings">إلغاء</button><button type="submit" class="btn btn-primary">حفظ الإعدادات واعتماد الفصول</button></div></form>`,'wide-user-modal');
+  const mode=document.getElementById('teacherAccessMode'),role=document.getElementById('teacherSchoolRole');
+  function modeChanged(){const off=mode.value==='madar_only';role.disabled=off;if(off)role.value='regular';}mode.onchange=modeChanged;modeChanged();
+  modalRoot.querySelectorAll('[data-settings-class]').forEach(box=>{box.querySelector('[data-selected]').onchange=e=>{box.querySelector('[data-class-options]').hidden=!e.target.checked;};});
+  document.getElementById('teacherClassSearch').oninput=e=>{const value=e.target.value.trim();modalRoot.querySelectorAll('[data-settings-class]').forEach(box=>box.hidden=!box.textContent.includes(value));};
+  document.getElementById('cancelTeacherSettings').onclick=closeModal;
+  document.getElementById('teacherUnifiedSettings').onsubmit=e=>{
+    e.preventDefault();const specialty=document.getElementById('teacherSpecialty').value.trim(),classes=[];
+    for(const box of modalRoot.querySelectorAll('[data-settings-class]'))if(box.querySelector('[data-selected]').checked){const subject=box.querySelector('[data-subject]').value.trim();if(!specialty||!subject){toast('حددي التخصص والمادة لكل فصل مختار.');return;}classes.push({id:Number(box.dataset.settingsClass),subject,can_upload:box.querySelector('[data-upload]').checked,can_post:box.querySelector('[data-post]').checked});}
+    const change={access_mode:mode.value,portal_enabled:mode.value!=='madar_only',first_teacher:role.value==='first',confirmed:true,settings:{specialty,classes}};
+    confirmAction(`حفظ إعدادات ${esc(data.name)} واعتماد ${classes.length} فصل؟ تُسحب متابعة الفصول التي ألغيتِ اختيارها، وتبقى أعمال الطالبات محفوظة.`,async()=>{await api('/portal/teacher/'+id,{method:'PUT',body:JSON.stringify(change)});toast('حُفظت الإعدادات والتخصص والفصول');await renderTeachers();});
+  };
+}

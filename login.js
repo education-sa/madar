@@ -27,8 +27,30 @@ const roleData = {
 
 const params = new URLSearchParams(window.location.search);
 const requestedRole = params.get("role");
+const requestedNext = params.get("next");
 const role = roleData[requestedRole] ? requestedRole : "student";
 const currentRole = roleData[role];
+
+function loginDestination(apiRole) {
+  const destinations = { teacher: "/teacher/", student: "/student/", admin: "/admin/", parent: "/parent/" };
+  const fallback = destinations[apiRole] || "/";
+  if (!requestedNext) return fallback;
+  try {
+    const target = new URL(requestedNext, window.location.origin);
+    if (target.origin !== window.location.origin || target.username || target.password) return fallback;
+    const allowedStudentGame = (target.pathname === "/games/game-player.php" && target.searchParams.get("preview") !== "1")
+      || target.pathname === "/games/percentage/percentage.html"
+      || target.pathname === "/games/fractions/fractions.html"
+      || target.pathname === "/games/exponents/exponents.html";
+    const allowed = (apiRole === "student" && (target.pathname.startsWith("/student/") || allowedStudentGame))
+      || (apiRole === "teacher" && (target.pathname.startsWith("/teacher/") || (target.pathname === "/games/game-player.php" && target.searchParams.get("preview") === "1")))
+      || (apiRole === "admin" && target.pathname.startsWith("/admin/"))
+      || (apiRole === "parent" && target.pathname.startsWith("/parent/"));
+    return allowed ? `${target.pathname}${target.search}${target.hash}` : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
 
 const roleTitle = document.getElementById("roleTitle");
 const accountQuestion = document.getElementById("accountQuestion");
@@ -100,8 +122,7 @@ loginForm.addEventListener("submit", async (event) => {
     if (!response.ok) throw new Error(data.error || "تعذّر تسجيل الدخول.");
     formMessage.style.color = "#198754";
     formMessage.textContent = "تم تسجيل الدخول بنجاح.";
-    const destinations = { teacher: "/teacher/", student: "/student/", admin: "/admin/", parent: "/parent/" };
-    window.location.href = destinations[apiRole];
+    window.location.href = data.redirect || loginDestination(apiRole);
   } catch (error) {
     formMessage.style.color = "#d44949";
     formMessage.textContent = error.message;

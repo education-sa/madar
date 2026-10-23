@@ -62,3 +62,28 @@ spl_autoload_register(static function (string $class): void {
         require_once $file;
     }
 });
+
+// Teacher access scopes are managed only by the real site owner through surveys/api.php.
+function madar_enforce_teacher_survey_scope(): void
+{
+    if (PHP_SAPI === 'cli' || ($_SESSION['role'] ?? '') !== 'teacher') return;
+    // Once installed, the three native access modes are the only authority.
+    if(PortalAccess::ready())return;
+    $actor = Auth::realUser();
+    if (!$actor || ($actor['subjectType'] ?? '') !== 'teacher') return;
+    $stmt = Database::connection()->prepare('SELECT setting_value FROM ms_settings WHERE setting_key=?');
+    $stmt->execute(['teacher_scope_'.(int)$actor['id']]);
+    if ($stmt->fetchColumn() !== 'surveys_only') return;
+    $path = rawurldecode((string)(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/'));
+    if ($path === '/ظليم' || $path === '/ظليم/' || $path === '/surveys/public' || str_starts_with($path, '/surveys/public/')) return;
+    if (in_array($path, ['/api/owner/login','/api/student/login','/api/parent/login','/api/admin/login','/api/teacher/login','/api/teacher/logout','/api/teacher/me','/api/teacher/password-reset-request','/api/portal/access'], true)) return;
+    header('Cache-Control: no-store');
+    if (str_starts_with($path, '/api/')) {
+        http_response_code(403);header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['error'=>'هذا الحساب مخصص للاستبيانات فقط.','code'=>'SURVEYS_ONLY','redirect'=>'/ظليم'],JSON_UNESCAPED_UNICODE);exit;
+    }
+    header('Location: /'.rawurlencode('ظليم'), true, 302);exit;
+}
+madar_enforce_teacher_survey_scope();
+
+PortalAccess::guardServicePage();

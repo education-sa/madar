@@ -10,5 +10,6 @@ if (!empty($_SESSION['ms_return_after_login'])) {
     $next=(string)$_SESSION['ms_return_after_login'];unset($_SESSION['ms_return_after_login']);
     if (str_starts_with($next,'/surveys/public/')&&!str_contains($next,"\r")&&!str_contains($next,"\n")) {header('Location: '.$next);exit;}
 }
+PortalAccess::pageGuard($user);
 $html=file_get_contents(__DIR__.'/index.html');
-echo str_replace('</body>','<script src="/surveys/public/assets/madar-link.js"></script></body>',$html);
+echo str_replace('</body>','<script src="/surveys/public/assets/portal-link.js?v=20261023"></script></body>',$html);

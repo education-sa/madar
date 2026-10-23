@@ -67,7 +67,7 @@ loginForm.addEventListener("submit", async (event) => {
       return;
     }
     if (data.csrfToken) sessionStorage.setItem("madar-csrf", data.csrfToken);
-    window.location.href = "index.html";
+    window.location.href = data.redirect || "index.html";
   } catch (err) {
     loginError.textContent = "تعذّر الاتصال بالخادم، حاولي مرة أخرى.";
     loginError.hidden = false;

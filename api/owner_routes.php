@@ -13,6 +13,7 @@ function handle_owner_routes(string $method,array $segments): never
     if (!in_array($method,['GET','HEAD'],true)) Auth::verifyCsrf();
     $ownerId=(int)$owner['id'];
 
+    if ($resource==='portal') owner_portal_routes($method,array_slice($segments,1),$owner);
     if ($resource==='me'&&$method==='PUT') owner_update_profile($owner);
     if ($resource==='privacy') platform_privacy_routes('owner',$ownerId,$method);
     if ($resource==='summary'&&$method==='GET') { Auth::requirePermission('dashboard.view'); owner_summary(); }

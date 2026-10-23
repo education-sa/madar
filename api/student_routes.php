@@ -12,6 +12,7 @@ function handle_student_routes(string $method,array $segments): never
     if ($resource==='login'&&$method==='POST') public_login('student');
     if ($resource==='registration-options'&&$method==='GET') student_registration_options();
     if ($resource==='register'&&$method==='POST') student_register_request();
+    if ($resource==='portal-register'&&$method==='POST') student_portal_register();
     if ($resource==='password-reset-request'&&$method==='POST') public_password_reset_request('STUDENT');
     if ($resource==='logout'&&$method==='POST') logout_route('student');
     if ($resource==='me'&&$method==='GET') me_route('student');
