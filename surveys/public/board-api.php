@@ -4,17 +4,22 @@ try {
  require dirname(__DIR__).'/app/bootstrap.php';
  require dirname(__DIR__).'/app/board-common.php';
  $op=(string)($_GET['op']??'overview');$method=$_SERVER['REQUEST_METHOD']??'GET';
- $reads=['overview','class','students','portfolio','teachers','audit','files','comments'];
+ $reads=['overview','class','students','portfolio','teachers','audit','files','comments','pending_students'];
  if (!in_array($method,['GET','POST'],true) || ($method==='GET'&&!in_array($op,$reads,true)) || ($method==='POST'&&in_array($op,$reads,true))) fail('طريقة الطلب غير مسموحة.',405);
  if($method==='POST') csrf();
  $u=mbActor();$admin=mbAdmin($u);if($method==='POST')rate('mb_board_'.$op.'_'.$u['id'],150);$b=$method==='POST'?($op==='upload'?[]:body()):[];
+ if($op==='pending_students') {mbRequireBoardManager($u);jsonout(['items'=>PortalEnrollment::pending()]);}
+ if($op==='approve_student') {
+  mbRequireBoardManager($u);if(empty($b['confirmed']))fail('أكدي الموافقة على الطالبة والفصل أولًا.',409);
+  PortalEnrollment::approve($u,mbId($b['student_id']??null),mbId($b['class_id']??null));jsonout(['ok'=>true]);
+ }
  if($op==='overview') {
   $q=$admin?'SELECT c.*,(SELECT COUNT(*) FROM mb_class_students m WHERE m.class_id=c.id) AS students_count FROM mb_classes c ORDER BY c.is_active DESC,c.academic_year DESC,c.title':
    'SELECT c.*,(SELECT COUNT(*) FROM mb_class_students m WHERE m.class_id=c.id) AS students_count FROM mb_classes c JOIN mb_teachers t ON t.class_id=c.id AND t.teacher_id=? AND t.can_view=1 JOIN mb_teacher_profiles p ON p.class_id=t.class_id AND p.teacher_id=t.teacher_id AND p.approved=1 AND p.subject<>\'\' WHERE c.is_active=1 ORDER BY c.title';
   jsonout(['is_admin'=>$admin,'is_platform_owner'=>mbIsPlatformOwner($u),'is_first_teacher'=>mbIsFirstTeacher($u),'classes'=>sql($q,$admin?[]:[$u['id']])->fetchAll()]);
  }
  if($op==='teachers') {
-  mbOwner($u);
+  mbRequireBoardManager($u);
   $syncConflicts=mbSyncMadarTeachers();
   $people=sql("SELECT id,name,email FROM ms_users WHERE active=1 AND id<>? AND external_id LIKE 'teacher:%' ORDER BY name LIMIT 1000",[$u['id']])->fetchAll();
   $members=sql('SELECT t.*,u.name,p.specialty,p.subject,p.grade_scope,p.approved FROM mb_teachers t JOIN ms_users u ON u.id=t.teacher_id LEFT JOIN mb_teacher_profiles p ON p.class_id=t.class_id AND p.teacher_id=t.teacher_id WHERE t.class_id=?', [mbId($_GET['class_id']??'')])->fetchAll();
@@ -33,7 +38,7 @@ try {
   mbRequireBoardManager($u);if(empty($b['confirmed']))fail('يلزم تأكيد هذا الإجراء.',409);$id=mbId($b['class_id']??null);mbClass($id);sql('UPDATE mb_classes SET is_active=? WHERE id=?',[!empty($b['is_active'])?1:0,$id]);mbAudit($u,'archive_class','class',$id);jsonout(['ok'=>true]);
  }
  if($op==='assign_teacher') {
-  mbOwner($u);$id=mbId($b['class_id']??null);$class=mbClass($id);$tid=mbId($b['teacher_id']??null);
+  mbRequireBoardManager($u);$id=mbId($b['class_id']??null);$class=mbClass($id);$tid=mbId($b['teacher_id']??null);
   $t=sql("SELECT u.id,u.external_id FROM ms_users u JOIN teachers nt ON u.external_id=CONCAT('teacher:',nt.id) WHERE u.id=? AND u.active=1 AND nt.status='active' AND nt.deleted_at IS NULL",[$tid])->fetch();if(!$t)fail('اختاري حساب معلمة نشطًا من القائمة.',404);
   $nativeId=(int)substr($t['external_id'],8);if(!PortalAccess::canPortal(['id'=>$nativeId,'subjectType'=>'teacher','role'=>'teacher','status'=>'active']))fail('مالكة الموقع لم تسمح لهذه المعلمة بدخول البوابة.',403);
   $specialty=required($b['specialty']??'',100);$subject=required($b['subject']??'',85);$gradeScope=required($b['grade_scope']??$class['grade'],100);
@@ -43,7 +48,7 @@ try {
   mbAudit($u,'assign_teacher','class',$id,'teacher_id='.$tid.'; subject='.$subject);jsonout(['ok'=>true]);
  }
  if($op==='revoke_teacher') {
-  mbOwner($u);if(empty($b['confirmed']))fail('يلزم تأكيد سحب الصلاحية.',409);$id=mbId($b['class_id']??null);$tid=mbId($b['teacher_id']??null);sql('DELETE FROM mb_teachers WHERE class_id=? AND teacher_id=?',[$id,$tid]);mbAudit($u,'revoke_teacher','class',$id,'teacher_id='.$tid);jsonout(['ok'=>true]);
+  mbRequireBoardManager($u);if(empty($b['confirmed']))fail('يلزم تأكيد سحب الصلاحية.',409);$id=mbId($b['class_id']??null);$tid=mbId($b['teacher_id']??null);sql('UPDATE mb_teachers SET can_view=0 WHERE class_id=? AND teacher_id=?',[$id,$tid]);sql('UPDATE mb_teacher_profiles SET approved=0 WHERE class_id=? AND teacher_id=?',[$id,$tid]);mbAudit($u,'revoke_teacher','class',$id,'teacher_id='.$tid);jsonout(['ok'=>true]);
  }
  if($op==='class') {
   $id=mbId($_GET['id']??null);$c=mbAccess($u,$id);

@@ -7,7 +7,8 @@ GIT=str(BUNDLE/'bin/git')
 ENV=os.environ.copy();ENV['GIT_EXEC_PATH']=str(BUNDLE/'libexec/git-core');ENV['PATH']=str(BUNDLE/'bin')+':'+ENV.get('PATH','');ENV['GIT_TERMINAL_PROMPT']='0'
 REMOTE='https://github.com/education-sa/madar.git'
 def git(*args,ok=True,data=None):
- p=subprocess.run([GIT,*args],cwd=ROOT,env=ENV,input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ auth=['-c','credential.helper=','-c','credential.helper=manager'] if args and args[0] in ('fetch','push','ls-remote') and (BUNDLE/'libexec/git-core/git-credential-manager').exists() else []
+ p=subprocess.run([GIT,*auth,*args],cwd=ROOT,env=ENV,input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
  if ok and p.returncode:raise RuntimeError(p.stderr.decode(errors='replace').strip() or 'Git failed')
  return p
 
@@ -72,6 +73,7 @@ def main():
  if input('بعد مراجعة الملفات، اكتبي «رفع» لإنشاء Commit ثم Push إلى GitHub: ').strip()!='رفع':print('تم الإلغاء دون Commit أو Push.');return
  # Recheck remote and content immediately before the explicit action.
  fetch_check();inspect(names)
+ git('push','--dry-run','origin','HEAD:refs/heads/main')
  if names:
   git('add','--',*names);inspect(paths('diff','--cached','--name-only','--diff-filter=AMR','-z'),':')
   git('diff','--cached','--check');git('commit','-m',title)
@@ -80,4 +82,4 @@ if __name__=='__main__':
  try:main()
  except (RuntimeError,KeyboardInterrupt,EOFError) as e:
   print('\nتوقف بأمان: '+str(e),file=sys.stderr)
-  print('لا يوجد Force Push أو حذف. إذا فشل توثيق GitHub بعد Commit، استخدمي Push origin في GitHub Desktop؛ الـCommit محفوظ محليًا.',file=sys.stderr);sys.exit(1)
+  print('لا يوجد Force Push أو حذف. عند فشل التوثيق شغّلي «ربط GitHub مرة واحدة.command»، ثم أعيدي زر الرفع. أي Commit موجود يبقى محفوظًا محليًا؛ ويمكن رفعه من Push origin في GitHub Desktop.',file=sys.stderr);sys.exit(1)

@@ -6,10 +6,8 @@ if (!$user || ($user['roleCode'] ?? '') !== Rbac::OWNER || ($user['role'] ?? '')
     header('Location: /owner/login.html');
     exit;
 }
-if (!empty($_SESSION['ms_return_after_login'])) {
-    $next=(string)$_SESSION['ms_return_after_login'];unset($_SESSION['ms_return_after_login']);
-    if (str_starts_with($next,'/surveys/public/')&&!str_contains($next,"\r")&&!str_contains($next,"\n")) {header('Location: '.$next);exit;}
-}
+// Owners stay in their original dashboard; ignore stale survey return targets.
+unset($_SESSION['ms_return_after_login']);
 $html=file_get_contents(__DIR__.'/protected/dashboard.html');
 $html=str_replace('/owner/dashboard.js?v=9','/owner/dashboard.js?v=20261023-unified-settings',$html);
 echo str_replace('</body>','<script src="/surveys/public/assets/portal-link.js?v=20261023-owner"></script></body>',$html);

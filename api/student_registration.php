@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once dirname(__DIR__).'/lib/PortalEnrollment.php';
 
 function ensure_student_registration_schema(): void
 {
@@ -222,6 +223,7 @@ function student_portal_register(): never
     if(strlen($password)>72)Http::json(['error'=>'كلمة المرور أطول من المسموح.'],422);
     $stage=$data['stage'];if(!in_array($stage,['ابتدائي','متوسط','ثانوي'],true))Http::json(['error'=>'اختاري المرحلة الدراسية.'],422);
     if(!PortalAccess::ready())Http::json(['error'=>'تسجيل البوابة غير متاح مؤقتًا.'],503);
+    PortalEnrollment::ensureSchema();
     $pdo=Database::connection();
     foreach(['students','teachers','owners','platform_users'] as $table){$q=$pdo->prepare('SELECT id FROM '.$table.' WHERE email=? LIMIT 1');$q->execute([$email]);if($q->fetchColumn())Http::json(['error'=>'البريد مستخدم مسبقًا. استخدمي حسابك الحالي أو تواصلي مع مالكة الموقع.'],409);}
     if(fetch_one("SELECT id FROM student_registration_requests WHERE email=? AND status='pending'",[$email]))Http::json(['error'=>'يوجد طلب حساب سابق بهذا البريد بانتظار الموافقة.'],409);
@@ -230,6 +232,7 @@ function student_portal_register(): never
         $pdo->prepare("INSERT INTO students(name,email,password_hash,stage,status,must_change_password) VALUES (?,?,?,?,'active',0)")->execute([$name,$email,password_hash($password,PASSWORD_DEFAULT),$stage]);$id=(int)$pdo->lastInsertId();
         $pdo->prepare("INSERT INTO mb_native_access(subject_type,subject_id,access_mode,portal_enabled) VALUES ('student',?,'portal_only',0)")->execute([$id]);
         $pdo->prepare("INSERT INTO mb_students(madar_student_id,display_name,entry_mode,school_enabled) VALUES (?,?,'school_only',0)")->execute([$id,$name]);
+        PortalEnrollment::record($pdo,$id);
         $pdo->commit();
     }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();if($e instanceof PDOException && ($e->errorInfo[1]??0)===1062)Http::json(['error'=>'البريد مستخدم مسبقًا.'],409);throw $e;}
     // Activity initializes its schema; keep its DDL outside the account transaction.

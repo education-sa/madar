@@ -1,12 +1,15 @@
 <?php
 declare(strict_types=1);
 
+require_once dirname(__DIR__,2).'/lib/PortalEnrollment.php';
+
 // Shared helpers for the Zulaim school portal. Madar account identity remains
 // the single login source; school roles are stored separately from Madar RBAC.
 function mbActor(): array {
  $u=user();
  $native=Auth::realUser();if(!$native)fail('يلزم تسجيل الدخول.',401);PortalAccess::requirePortal($native);
  mbEnsureSchema();
+ PortalEnrollment::ensureSchema();
  return $u;
 }
 function mbEnsureSchema(): void {
