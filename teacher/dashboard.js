@@ -1,5 +1,6 @@
-import { renderAnalysisDashboard } from "./analysis-dashboard.js?v=1";
-import { renderSkillAttachments } from "./skill-attachments.js?v=7";
+import { renderAnalysisDashboard } from "./analysis-dashboard.js?v=6";
+import { renderSkillAttachments } from "./skill-attachments.js?v=16";
+import { createTeacherLiveCompetitions } from "./live-competitions.js?v=20261005-print2";
 
 // لوحة تحكم المعلمة - منطق العرض والتنقل بين الأقسام (SPA بسيطة بدون مكتبات خارجية)
 
@@ -12,6 +13,7 @@ const ROUTE_TITLES = {
   home: "الرئيسية",
   profile: "الأداء الوظيفي",
   portfolio: "ملف الإنجاز",
+  "teacher-planning": "تخطيط المعلم",
   "student-panel": "قائمة الطالبات",
   "student-files": "ملفات الطالبات",
   "follow-up": "سجل متابعة",
@@ -29,19 +31,22 @@ const ROUTE_TITLES = {
   "analysis-learning": "أنماط التعلم",
   "games-panel": "الألعاب",
   "interactive-games": "الألعاب التفاعلية",
+  "game-creator": "إنشاء الألعاب",
   competitions: "المسابقات",
-  "strategies-panel": "الاستراتيجيات",
+  "strategies-panel": "التعلم النشط",
   "flipped-classroom": "الصف المقلوب",
   "library-panel": "الموارد المكتبية",
   videos: "الفيديوهات",
   training: "التدريبات",
   "knowledge-exchange": "تبادل المعرفة",
   "parent-panel": "ولي الأمر",
+  "my-group": "مجموعتي",
   reports: "التقارير الذكية",
   "remedial-plans": "الخطط العلاجية",
   calendar: "التقويم والمواعيد",
   "help-center": "مركز المساعدة",
   notifications: "الإشعارات",
+  announcements: "الإعلانات",
   classes: "إدارة الفصول",
   activity: "سجل الأنشطة",
   settings: "الإعدادات",
@@ -54,6 +59,13 @@ let csrfToken = "";
 
 let schoolSettings = null;
 let interactiveGamesState = { publicationReady: true, games: [], builderReady: false, builderGames: [] };
+const teacherLiveCompetitions = createTeacherLiveCompetitions({
+  api,
+  escapeHtml,
+  toast,
+  confirmAction,
+  getClasses: () => allClasses,
+});
 const ACADEMIC_GRADES = {
   "ابتدائي": ["رابع ابتدائي", "خامس ابتدائي", "سادس ابتدائي"],
   "متوسط": ["أول متوسط", "ثاني متوسط", "ثالث متوسط"],
@@ -125,8 +137,8 @@ async function loadSchoolSettings(force = false) {
 
 async function loadInteractiveGames() {
   const [legacy, builder] = await Promise.all([
-    api("/interactive-games"),
-    api("/interactive-games/builder/library").catch((error) => ({ migrationReady: false, games: [], error: error.message })),
+    api("/interactive-games", { cache: "no-store" }),
+    api("/interactive-games/builder/library", { cache: "no-store" }).catch((error) => ({ migrationReady: false, games: [], error: error.message })),
   ]);
   interactiveGamesState = {
     ...legacy,
@@ -195,6 +207,32 @@ function normalizeAcademicSelection(kind) {
 async function prepareAcademicSelection(kind) {
   await loadSchoolSettings();
   return normalizeAcademicSelection(kind);
+}
+
+async function prepareAnalysisAcademicSelection() {
+  await prepareAcademicSelection("analysis");
+  const selection = academicSelections.analysis;
+  if (selection.stage === "all") return selection;
+  const scopedClasses = academicClasses(selection);
+  const selectedClass = scopedClasses.find((item) => String(item.id) === String(selection.classId));
+  const scopeHasStudents = selectedClass
+    ? Number(selectedClass.student_count || 0) > 0
+    : scopedClasses.some((item) => Number(item.student_count || 0) > 0);
+  if (scopeHasStudents) return selection;
+
+  const populated = allClasses.filter((item) => Number(item.student_count || 0) > 0);
+  const currentYear = String(schoolSettings?.academicYear || "").trim();
+  const currentYearPopulated = currentYear
+    ? populated.filter((item) => String(item.academic_year || "").trim() === currentYear)
+    : [];
+  const fallback = currentYearPopulated[0] || populated[0];
+  if (!fallback) return selection;
+
+  selection.stage = fallback.level;
+  selection.gradeLabel = normalizeGradeKey(fallback.level, fallback.grade_label);
+  selection.classId = String(fallback.id);
+  sessionStorage.setItem("madarAcademicAnalysis", JSON.stringify(selection));
+  return selection;
 }
 
 function arabicClassNumber(index) {
@@ -278,7 +316,7 @@ function academicClassLabel(item, index) {
   return `الفصل ${normalizedDigit}${name && !/^\s*(?:فصل|الفصل)?\s*[١٢٣٤1-4]\s*$/u.test(name) ? ` — ${escapeHtml(name)}` : ""}`;
 }
 
-function academicSelectorHtml(kind) {
+function academicSelectorHtml(kind, { embedded = false } = {}) {
   const selection = normalizeAcademicSelection(kind);
   const allowAll = ACADEMIC_ALL_FILTER_KINDS.has(kind);
   const grades = ACADEMIC_GRADES[selection.stage] || [];
@@ -286,12 +324,14 @@ function academicSelectorHtml(kind) {
   const semesterLabel = schoolSettings?.semesterLabel || "—";
   const stageValues = allowAll ? ["all", ...Object.keys(ACADEMIC_GRADES)] : Object.keys(ACADEMIC_GRADES);
   const gradeValues = allowAll ? ["all", ...grades] : grades;
+  const filterClass = embedded ? ' class="analysis-workspace__filter"' : "";
+  const fields = `
+      <label${filterClass}>المرحلة<select data-academic-stage>${stageValues.map((value) => `<option value="${value}" ${selection.stage === value ? "selected" : ""}>${value === "all" ? "الجميع" : value}</option>`).join("")}</select></label>
+      <label${filterClass}>الصف<select data-academic-grade>${gradeValues.map((value) => `<option value="${value}" ${selection.gradeLabel === value ? "selected" : ""}>${value === "all" ? "الجميع" : value}</option>`).join("")}</select></label>
+      <label${filterClass}>الفصل<select data-academic-class>${allowAll ? `<option value="" ${selection.classId ? "" : "selected"}>الجميع</option>` : ""}${classes.length ? classes.map((item, index) => `<option value="${item.id}" ${String(selection.classId) === String(item.id) ? "selected" : ""}>${academicClassLabel(item, index)}</option>`).join("") : (allowAll ? "" : '<option value="">لا يوجد فصل مسجل لهذا الصف</option>')}</select></label>`;
+  if (embedded) return `<div class="analysis-workspace__academic-filters" data-academic-kind="${kind}">${fields}</div>`;
   return `<section class="academic-filter" data-academic-kind="${kind}">
-    <div class="academic-filter-fields">
-      <label>المرحلة<select data-academic-stage>${stageValues.map((value) => `<option value="${value}" ${selection.stage === value ? "selected" : ""}>${value === "all" ? "الجميع" : value}</option>`).join("")}</select></label>
-      <label>الصف<select data-academic-grade>${gradeValues.map((value) => `<option value="${value}" ${selection.gradeLabel === value ? "selected" : ""}>${value === "all" ? "الجميع" : value}</option>`).join("")}</select></label>
-      <label>الفصل<select data-academic-class>${allowAll ? `<option value="" ${selection.classId ? "" : "selected"}>الجميع</option>` : ""}${classes.length ? classes.map((item, index) => `<option value="${item.id}" ${String(selection.classId) === String(item.id) ? "selected" : ""}>${academicClassLabel(item, index)}</option>`).join("") : (allowAll ? "" : '<option value="">لا يوجد فصل مسجل لهذا الصف</option>')}</select></label>
-    </div>
+    <div class="academic-filter-fields">${fields}</div>
     <div class="semester-indicator"><strong>${escapeHtml(semesterLabel)}</strong></div>
   </section>`;
 }
@@ -322,11 +362,12 @@ function bindAcademicSelector(kind, onChange) {
 
 function academicQuery(kind) {
   const selection = normalizeAcademicSelection(kind);
+  const selectedClass = selectedAcademicClass(kind);
   return new URLSearchParams({
     stage: selection.stage || "",
     gradeLabel: actualAcademicGradeLabel(kind),
     classId: selection.classId || "",
-    academicYear: schoolSettings?.academicYear || "",
+    academicYear: kind === "analysis" ? (selectedClass?.academic_year || "") : (schoolSettings?.academicYear || ""),
     semester: schoolSettings?.currentSemester || "first",
   }).toString();
 }
@@ -373,7 +414,12 @@ async function api(path, options = {}) {
     }
   }
 
-  if (!res.ok) throw new Error(data?.error || `حدث خطأ في الخادم (${res.status}).`);
+  if (!res.ok) {
+    const error = new Error(data?.error || `حدث خطأ في الخادم (${res.status}).`);
+    error.status = res.status;
+    error.data = data;
+    throw error;
+  }
   if (data?.csrfToken) csrfToken = data.csrfToken;
   return data;
 }
@@ -523,6 +569,17 @@ async function boot() {
   refreshNotifBell();
   initGlobalSearch();
 
+  const parentMenuItem = document.querySelector('.nav-item[data-route="parent-panel"]');
+  if (parentMenuItem && !document.querySelector('.nav-item[data-route="my-group"]')) {
+    const groupButton = document.createElement('button');
+    groupButton.type = 'button';
+    groupButton.className = parentMenuItem.className;
+    groupButton.classList.remove('active');
+    groupButton.dataset.route = 'my-group';
+    groupButton.innerHTML = '<span aria-hidden="true">👥</span> مجموعتي';
+    parentMenuItem.insertAdjacentElement('afterend', groupButton);
+  }
+
   document.querySelectorAll(".nav-item[data-route]").forEach((btn) => {
     btn.addEventListener("click", () => navigate(btn.dataset.route));
   });
@@ -554,8 +611,10 @@ async function refreshNotifBell() {
 }
 
 function navigate(route) {
+  if (route !== "games-panel" || gamesPanelMode !== "competitions") teacherLiveCompetitions.stop();
+  const activeSidebarRoute = ["help-center", "notifications", "announcements"].includes(route) ? "activity" : route;
   document.querySelectorAll(".nav-item[data-route]").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.route === route);
+    btn.classList.toggle("active", btn.dataset.route === activeSidebarRoute);
   });
   document.getElementById("sidebar").classList.remove("open");
   if (location.hash.replace("#", "") !== route) location.hash = route;
@@ -744,7 +803,8 @@ async function renderPortfolio() {
     <div class="student-panel-tabs" role="tablist" style="margin-bottom: 20px;">
       <button class="tab-btn ${teacherPortfolioTab === "evidences" ? "active" : ""}" id="tabEvidences" type="button">سجل الشواهد والوثائق</button>
       <button class="tab-btn ${teacherPortfolioTab === "bio" ? "active" : ""}" id="tabBio" type="button">السيرة والبيانات المهنية</button>
-      <button class="tab-btn ${teacherPortfolioTab === "student-files" ? "active" : ""}" id="tabStudentFiles" type="button">ملفات أعمال الطالبات</button>
+      <button class="tab-btn ${teacherPortfolioTab === "nafes" ? "active" : ""}" id="tabNafes" type="button"><span aria-hidden="true">🎯</span> نافس</button>
+      <button class="tab-btn ${teacherPortfolioTab === "tahsili_abilities" ? "active" : ""}" id="tabTahsili" type="button"><span aria-hidden="true">🏆</span> التحصيلي والقدرات</button>
     </div>
 
     <div id="portfolioTabContent"></div>
@@ -755,11 +815,13 @@ async function renderPortfolio() {
 
   const tabEvidences = document.getElementById("tabEvidences");
   const tabBio = document.getElementById("tabBio");
-  const tabStudentFiles = document.getElementById("tabStudentFiles");
+  const tabNafes = document.getElementById("tabNafes");
+  const tabTahsili = document.getElementById("tabTahsili");
 
   tabEvidences.onclick = () => { teacherPortfolioTab = "evidences"; renderPortfolio(); };
   tabBio.onclick = () => { teacherPortfolioTab = "bio"; renderPortfolio(); };
-  tabStudentFiles.onclick = () => { navigate("student-files"); };
+  tabNafes.onclick = () => { teacherPortfolioTab = "nafes"; renderPortfolio(); };
+  tabTahsili.onclick = () => { teacherPortfolioTab = "tahsili_abilities"; renderPortfolio(); };
 
   const contentWrap = document.getElementById("portfolioTabContent");
 
@@ -834,6 +896,87 @@ async function renderPortfolio() {
         </div>
       </div>
     `;
+  } else if (teacherPortfolioTab === "nafes" || teacherPortfolioTab === "tahsili_abilities") {
+    await renderPortfolioTargetedKnowledge(contentWrap, teacherPortfolioTab);
+  }
+}
+
+async function renderPortfolioTargetedKnowledge(container, mode) {
+  const meta = KNOWLEDGE_META[mode];
+  try {
+    const data = await api("/knowledge-exchange");
+    const resources = data.resources.filter((item) => item.category === mode);
+    container.innerHTML = `
+      <div class="knowledge-layout">
+        <form class="card knowledge-form" id="portfolioKnowledgeForm" enctype="multipart/form-data">
+          <div class="knowledge-card-heading"><span aria-hidden="true">${meta.icon}</span><div><h3>إضافة ${meta.label}</h3><p>${meta.hint}</p></div></div>
+          <label class="field">العنوان<input id="portfolioKnowledgeTitle" maxlength="190" required placeholder="اكتبي عنوان المورد"></label>
+          <label class="field">وصف مختصر <small>اختياري</small><textarea id="portfolioKnowledgeDescription" maxlength="1000" placeholder="اكتبي وصفًا يساعد الطالبة على معرفة محتوى المورد"></textarea></label>
+          <div class="form-grid two">
+            <label class="field">نوع المادة<select id="portfolioKnowledgeResourceKind"><option value="file">ملف PDF أو صورة</option><option value="link">رابط إلكتروني</option></select></label>
+            <div class="field"><span>الفئة المستهدفة</span><strong style="display:block;margin-top:9px;color:var(--purple-950)">${escapeHtml(meta.audience)}</strong></div>
+          </div>
+          <label class="field knowledge-file-field" id="portfolioKnowledgeFileField">اختيار ملف PDF أو صورة<input id="portfolioKnowledgeFile" type="file" accept="application/pdf,image/*"><small>الحد الأقصى 15 ميجابايت.</small></label>
+          <label class="field" id="portfolioKnowledgeUrlField" hidden>الرابط الإلكتروني<input id="portfolioKnowledgeUrl" type="url" inputmode="url" dir="ltr" placeholder="https://example.com"></label>
+          <div id="portfolioKnowledgeMessage"></div>
+          <button class="btn btn-primary knowledge-submit" type="submit">إرسال إلى طالبات ${escapeHtml(meta.audience)}</button>
+        </form>
+        <section class="card knowledge-list-card">
+          <div class="knowledge-card-heading"><span aria-hidden="true">📚</span><div><h3>${meta.label} المضافة</h3><p>${resources.length} مورد</p></div></div>
+          <div class="knowledge-resource-list">${resources.length ? resources.map((item) => {
+            const action = item.resourceType === "link"
+              ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">فتح الرابط</a>`
+              : `<a class="btn btn-secondary btn-sm" href="/api/teacher/knowledge-exchange/${item.id}/file" target="_blank" rel="noopener">معاينة الملف</a>`;
+            return `<article class="knowledge-resource-item"><span class="knowledge-resource-icon" aria-hidden="true">${meta.icon}</span><div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.description || "بدون وصف")}</p><small>${formatDate(item.createdAt)}${item.originalName ? ` · ${escapeHtml(item.originalName)}` : ""}</small></div><div class="knowledge-resource-actions">${action}<button class="btn btn-outline btn-sm" type="button" data-delete-portfolio-knowledge="${item.id}">حذف</button></div></article>`;
+          }).join("") : `<div class="empty-state"><div class="ic">${meta.icon}</div>لم تُضف ${meta.label} بعد.</div>`}</div>
+        </section>
+      </div>`;
+
+    const resourceKind = document.getElementById("portfolioKnowledgeResourceKind");
+    const syncResourceKind = () => {
+      document.getElementById("portfolioKnowledgeFileField").hidden = resourceKind.value !== "file";
+      document.getElementById("portfolioKnowledgeUrlField").hidden = resourceKind.value !== "link";
+    };
+    resourceKind.onchange = syncResourceKind;
+    syncResourceKind();
+
+    document.querySelectorAll("[data-delete-portfolio-knowledge]").forEach((button) => {
+      button.onclick = () => confirmAction("هل تريدين حذف هذا المورد من حسابات الطالبات؟", async () => {
+        await api(`/knowledge-exchange/${button.dataset.deletePortfolioKnowledge}`, { method: "DELETE" });
+        toast("تم حذف المورد.");
+        await renderPortfolio();
+      });
+    });
+
+    document.getElementById("portfolioKnowledgeForm").onsubmit = async (event) => {
+      event.preventDefault();
+      const submit = event.submitter || event.currentTarget.querySelector('[type="submit"]');
+      const message = document.getElementById("portfolioKnowledgeMessage");
+      submit.disabled = true;
+      const formData = new FormData();
+      formData.set("category", mode);
+      formData.set("title", document.getElementById("portfolioKnowledgeTitle").value.trim());
+      formData.set("description", document.getElementById("portfolioKnowledgeDescription").value.trim());
+      if (resourceKind.value === "link") {
+        const url = document.getElementById("portfolioKnowledgeUrl").value.trim();
+        if (!url) { message.innerHTML = '<div class="form-error">أضيفي الرابط الإلكتروني.</div>'; submit.disabled = false; return; }
+        formData.set("url", url);
+      } else {
+        const file = document.getElementById("portfolioKnowledgeFile").files[0];
+        if (!file) { message.innerHTML = '<div class="form-error">اختاري ملف PDF أو صورة.</div>'; submit.disabled = false; return; }
+        formData.set("file", file);
+      }
+      try {
+        await api("/knowledge-exchange", { method: "POST", body: formData });
+        toast(`تم إرسال ${meta.label} إلى طالبات ${meta.audience}.`);
+        await renderPortfolio();
+      } catch (error) {
+        message.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+        submit.disabled = false;
+      }
+    };
+  } catch (error) {
+    container.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -1247,7 +1390,7 @@ async function loadManageTable() {
   );
   wrap.querySelectorAll("[data-del]").forEach((btn) =>
     btn.addEventListener("click", () => {
-      confirmAction(`هل تأكيد حذف الطالبة "${btn.dataset.name}"؟ لا يمكن التراجع عن هذا الإجراء.`, async () => {
+      confirmAction(`هل تأكيد حذف الطالبة "${btn.dataset.name}"؟ سيُعطّل حسابها وتختفي من قائمة الطالبات، مع بقاء نتائجها القديمة محفوظة.`, async () => {
         await api(`/students/${btn.dataset.del}`, { method: "DELETE" });
         toast("تم حذف الطالبة.");
         loadManageTable();
@@ -1484,17 +1627,141 @@ function openStudentFileReview(file) {
   document.getElementById("approvePortfolioFile").onclick=()=>saveReview("approved");
 }
 
+function studentGameNumber(value, suffix = "") {
+  if (value === null || value === undefined || value === "") return "—";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return `${Number.isInteger(number) ? number : number.toFixed(2)}${suffix}`;
+}
+
+function studentGameDateTime(value) {
+  if (!value) return "—";
+  const date=new Date(String(value).replace(" ","T"));
+  return Number.isNaN(date.getTime())?escapeHtml(value):date.toLocaleString("ar-SA",{dateStyle:"medium",timeStyle:"short"});
+}
+
+function studentFileWorksTable(files) {
+  if (!files.length) return '<div class="empty-state"><div class="ic">📂</div><p>لا توجد أعمال مرفوعة لهذه الطالبة.</p></div>';
+  return `<div class="table-wrap"><table><thead><tr><th>العمل</th><th>تاريخ الرفع</th><th>الحالة</th><th>الإجراءات</th></tr></thead><tbody>${files.map((file) => {
+    const meta=PORTFOLIO_CATEGORY_META[file.category]||PORTFOLIO_CATEGORY_META.other;
+    return `<tr><td><strong>${escapeHtml(file.title)}</strong><small class="portfolio-file-meta">${meta.icon} ${meta.label} · ${escapeHtml(file.originalName)}</small></td><td>${formatDate(file.createdAt)}</td><td>${portfolioReviewBadge(file.reviewStatus)}</td><td><div class="portfolio-table-actions"><button class="btn btn-secondary btn-sm" type="button" data-profile-preview-file="${file.id}">معاينة</button><button class="btn btn-primary btn-sm" type="button" data-profile-review-file="${file.id}">مراجعة</button></div></td></tr>`;
+  }).join("")}</tbody></table></div>`;
+}
+
+function studentGameAttemptsTable(attempts) {
+  if (!attempts.length) return '<div class="empty-state"><div class="ic">🎮</div><p>لم تُسجل للطالبة أي محاولة لعبة بعد.</p></div>';
+  return `<div class="student-game-table-note">يُعرض كل سجل كما حُفظ من اللعبة تلقائيًا، بما في ذلك تكرار اللعب لنفس اللعبة.</div><div class="table-wrap"><table class="student-game-attempts-table"><thead><tr><th>اسم اللعبة</th><th>المحاولة</th><th>الدرجة</th><th>الدرجة الكاملة</th><th>النسبة</th><th>الحالة</th><th>بدء المحاولة</th><th>إكمالها</th></tr></thead><tbody>${attempts.map((attempt) => `<tr>
+    <td><strong>${escapeHtml(attempt.gameName)}</strong><small class="portfolio-file-meta">${attempt.difficulty === "easy" ? "بسيط" : attempt.difficulty === "medium" ? "متوسط" : attempt.difficulty === "hard" ? "متقدم" : "—"}</small></td>
+    <td>المحاولة ${studentGameNumber(attempt.attemptNumber)}</td>
+    <td>${studentGameNumber(attempt.score)}</td>
+    <td>${studentGameNumber(attempt.maxScore)}</td>
+    <td><strong>${studentGameNumber(attempt.percentage, "%")}</strong></td>
+    <td><span class="student-game-status ${attempt.status === "completed" ? "completed" : "started"}">${attempt.status === "completed" ? "مكتملة" : "بدأت"}</span></td>
+    <td>${studentGameDateTime(attempt.startedAt)}</td>
+    <td>${studentGameDateTime(attempt.completedAt)}</td>
+  </tr>`).join("")}</tbody></table></div>`;
+}
+
+function studentGameCertificatesTable(certificates) {
+  if (!certificates.length) return '<div class="empty-state"><div class="ic">🎓</div><p>لم ترسل الطالبة شهادة إنجاز بعد.</p></div>';
+  return `<div class="student-game-table-note">لا تظهر هنا إلا الشهادة التي أرسلتها الطالبة إلى ملف الإنجاز.</div><div class="table-wrap"><table><thead><tr><th>اسم اللعبة</th><th>الدرجة وقت الإرسال</th><th>النسبة</th><th>تاريخ ووقت الإرسال</th><th>الإجراءات</th></tr></thead><tbody>${certificates.map((certificate) => `<tr>
+    <td><strong>${escapeHtml(certificate.gameName)}</strong>${certificate.attemptNumber ? `<small class="portfolio-file-meta">المحاولة ${studentGameNumber(certificate.attemptNumber)}</small>` : ""}${certificate.lessonName && certificate.lessonName !== certificate.gameName ? `<small class="portfolio-file-meta">${escapeHtml(certificate.lessonName)}</small>` : ""}</td>
+    <td>${studentGameNumber(certificate.score)}${certificate.maxScore !== null ? ` / ${studentGameNumber(certificate.maxScore)}` : ""}</td>
+    <td><strong>${studentGameNumber(certificate.percentage, "%")}</strong></td>
+    <td>${studentGameDateTime(certificate.sentAt)}</td>
+    <td><div class="portfolio-table-actions"><button class="btn btn-secondary btn-sm" type="button" data-view-game-certificate="${certificate.id}">عرض الشهادة</button><button class="btn btn-warning btn-sm" type="button" data-delete-game-certificate="${certificate.id}">مسح الشهادة وإتاحة الإرسال</button></div></td>
+  </tr>`).join("")}</tbody></table></div>`;
+}
+
+async function openTeacherGameCertificate(certificateId, studentId) {
+  const result=await api(`/student-files/certificates/${certificateId}`,{cache:"no-store"});
+  const certificate=result.certificate||{};
+  const grade=Number(certificate.questionCount)>0?`${studentGameNumber(certificate.correctCount)} / ${studentGameNumber(certificate.questionCount)}`:"—";
+  const score=certificate.maxScore!==null&&certificate.maxScore!==undefined
+    ? `${studentGameNumber(certificate.score)} / ${studentGameNumber(certificate.maxScore)}`
+    : studentGameNumber(certificate.score);
+  openModal(`
+    <header class="portfolio-dialog-header"><div><span>شهادات الإنجاز</span><h3>شهادة إتقان</h3></div><button class="dialog-close" id="closeTeacherCertificate" type="button" aria-label="إغلاق">×</button></header>
+    <section class="teacher-game-certificate">
+      <div class="teacher-game-certificate-brand"><img src="/assets/print/madar-official-logo-transparent.png" alt="شعار مدار"><span><strong>مدار</strong><small>منصة الرياضيات التفاعلية</small></span></div>
+      <h2>شهادة إتقان</h2><p>تمنح منصة مدار هذه الشهادة للطالبة</p><h3>${escapeHtml(certificate.studentName||"—")}</h3>
+      <p>بعد إتمام لعبة <strong>${escapeHtml(certificate.lessonName||certificate.gameName||"—")}</strong></p>
+      <div class="teacher-game-certificate-facts"><span>النسبة<strong>${studentGameNumber(certificate.accuracy,"%")}</strong></span><span>الإجابات الصحيحة<strong>${grade}</strong></span><span>الدرجة<strong>${score}</strong></span><span>المستوى<strong>${escapeHtml(certificate.levelLabel||"—")}</strong></span></div>
+      <div class="teacher-game-certificate-context"><span>${escapeHtml(certificate.stageLabel||"—")}</span><span>${escapeHtml(certificate.gradeLabel||"—")}</span><span>${escapeHtml(certificate.semesterLabel||"—")}</span><span>${escapeHtml(certificate.academicYear||"—")}</span></div>
+      <small>أُرسلت في ${studentGameDateTime(certificate.sentAt||certificate.issuedAt)}</small>
+    </section>
+    <div class="modal-actions"><button class="btn btn-outline" id="backToStudentFile" type="button">العودة إلى ملف الطالبة</button></div>
+  `,"teacher-game-certificate-dialog");
+  document.getElementById("closeTeacherCertificate").onclick=closeModal;
+  document.getElementById("backToStudentFile").onclick=()=>openStudentLearningFile(studentId,"certificates");
+}
+
+async function openStudentLearningFile(studentId, initialTab = "attempts") {
+  const data=await api(`/student-files/students/${studentId}`,{cache:"no-store"});
+  const student=data.student||{};
+  const files=data.files||[];
+  const attempts=data.gameAttempts||[];
+  const certificates=data.certificates||[];
+  const tabs=[
+    ["works","الأعمال المرفوعة",files.length],
+    ["attempts","محاولات الألعاب",attempts.length],
+    ["certificates","شهادات الإنجاز",certificates.length],
+  ];
+  const selected=tabs.some(([key])=>key===initialTab)?initialTab:"attempts";
+  openModal(`
+    <header class="portfolio-dialog-header"><div><span>${escapeHtml(student.className||"—")} · ${escapeHtml(student.email||"")}</span><h3>ملف الطالبة: ${escapeHtml(student.name||"—")}</h3></div><button class="dialog-close" id="closeStudentLearningFile" type="button" aria-label="إغلاق">×</button></header>
+    <div class="student-file-profile-tabs" role="tablist">${tabs.map(([key,label,count])=>`<button type="button" role="tab" data-student-file-tab="${key}" class="${key===selected?"active":""}">${label}<small>${count}</small></button>`).join("")}</div>
+    <div class="student-file-profile-panel" id="studentFileProfilePanel"></div>
+  `,"student-file-profile-dialog");
+  document.getElementById("closeStudentLearningFile").onclick=closeModal;
+
+  function renderProfileTab(tab) {
+    document.querySelectorAll("[data-student-file-tab]").forEach(button=>{
+      const active=button.dataset.studentFileTab===tab;
+      button.classList.toggle("active",active);
+      button.setAttribute("aria-selected",String(active));
+    });
+    const panel=document.getElementById("studentFileProfilePanel");
+    panel.innerHTML=tab==="works"?studentFileWorksTable(files):tab==="certificates"?studentGameCertificatesTable(certificates):studentGameAttemptsTable(attempts);
+    panel.querySelectorAll("[data-profile-preview-file]").forEach(button=>button.onclick=()=>openStudentFilePreview(files.find(file=>file.id===Number(button.dataset.profilePreviewFile))));
+    panel.querySelectorAll("[data-profile-review-file]").forEach(button=>button.onclick=()=>openStudentFileReview(files.find(file=>file.id===Number(button.dataset.profileReviewFile))));
+    panel.querySelectorAll("[data-view-game-certificate]").forEach(button=>button.onclick=()=>openTeacherGameCertificate(Number(button.dataset.viewGameCertificate),studentId).catch(error=>toast(error.message)));
+    panel.querySelectorAll("[data-delete-game-certificate]").forEach(button=>button.onclick=async()=>{
+      const certificate=certificates.find(item=>item.id===Number(button.dataset.deleteGameCertificate));
+      if(!confirm(`هل تريدين مسح شهادة «${certificate?.gameName||"اللعبة"}» لهذه المحاولة؟ بعد المسح ستتمكن الطالبة من إعادة إرسال شهادة المحاولة نفسها.`)) return;
+      button.disabled=true;
+      try {
+        await api(`/student-files/certificates/${button.dataset.deleteGameCertificate}`,{method:"DELETE"});
+        toast("تم مسح شهادة المحاولة، ويمكن للطالبة إرسالها من جديد.");
+        await openStudentLearningFile(studentId,"certificates");
+      } catch(error) {
+        button.disabled=false;
+        toast(error.message);
+      }
+    });
+  }
+  document.querySelectorAll("[data-student-file-tab]").forEach(button=>button.onclick=()=>renderProfileTab(button.dataset.studentFileTab));
+  renderProfileTab(selected);
+}
+
 async function renderStudentFiles() {
   const [data] = await Promise.all([api("/student-files"), loadSchoolSettings()]);
   const files = (data.files || []).filter((file) => academicItemMatches("studentFiles", file));
+  const students=(data.students||[]).filter((student)=>academicItemMatches("studentFiles",student));
   contentEl.innerHTML = `
     ${academicSelectorHtml("studentFiles")}
     <section class="student-files-hero">
       <div class="student-files-hero-icon" aria-hidden="true">📁</div>
       <div><span>إدارة الطالبات</span><h3>ملفات الطالبات</h3><p>هنا تظهر الواجبات وأوراق العمل والمهام والمشاريع وصور الإنجاز التي ترفعها الطالبات من حساباتهن.</p></div>
-      <strong>${files.length} ملف</strong>
+      <strong>${students.length} طالبة</strong>
     </section>
+    <div class="card student-files-directory-card">
+      <div class="student-files-directory-head"><div><h3>ملفات الطالبات</h3><p>افتحي ملف الطالبة للاطلاع على أعمالها ومحاولات الألعاب وشهادات الإنجاز.</p></div><input id="studentFileDirectorySearch" placeholder="بحث باسم الطالبة أو الفصل..." /></div>
+      <div class="student-files-directory" id="studentFilesDirectory">${students.length?students.map((student)=>`<article data-student-directory-card data-search="${escapeHtml(`${student.name} ${student.email} ${student.className}`.toLocaleLowerCase("ar"))}"><div class="student-file-avatar" aria-hidden="true">${escapeHtml(String(student.name||"ط").trim().charAt(0)||"ط")}</div><div><h4>${escapeHtml(student.name)}</h4><p>${escapeHtml(student.className||"—")} · ${escapeHtml(student.email)}</p><div class="student-file-counts"><span>📂 ${student.workCount} عمل</span><span>🎮 ${student.gameAttemptCount} محاولة</span><span>🎓 ${student.certificateCount} شهادة</span></div></div><button class="btn btn-primary btn-sm" type="button" data-open-student-file="${student.id}">فتح الملف</button></article>`).join(""):'<div class="empty-state"><div class="ic">👩‍🎓</div><p>لا توجد طالبات في الاختيار الحالي.</p></div>'}</div>
+      <div class="empty-state" id="studentDirectoryNoResults" hidden>لا توجد طالبة مطابقة للبحث.</div>
+    </div>
     <div class="card">
+      <h3 class="section-title">كل الأعمال المرفوعة</h3>
       <div class="toolbar">
         <input id="studentFilesSearch" placeholder="بحث باسم الطالبة أو عنوان العمل..." />
         <select id="studentFilesCategory"><option value="">كل أنواع الأعمال</option>${Object.entries(PORTFOLIO_CATEGORY_META).map(([key, item]) => `<option value="${key}">${item.label}</option>`).join("")}</select>
@@ -1521,6 +1788,15 @@ async function renderStudentFiles() {
     </div>`;
 
   bindAcademicSelector("studentFiles", renderStudentFiles);
+  document.querySelectorAll("[data-open-student-file]").forEach(button=>button.onclick=()=>openStudentLearningFile(Number(button.dataset.openStudentFile)).catch(error=>toast(error.message)));
+  const directorySearch=document.getElementById("studentFileDirectorySearch");
+  const directoryCards=[...document.querySelectorAll("[data-student-directory-card]")];
+  const directoryNoResults=document.getElementById("studentDirectoryNoResults");
+  if(directorySearch) directorySearch.oninput=()=>{
+    const search=directorySearch.value.trim().toLocaleLowerCase("ar");let visible=0;
+    directoryCards.forEach(card=>{const matches=!search||card.dataset.search.includes(search);card.hidden=!matches;if(matches)visible++;});
+    directoryNoResults.hidden=visible!==0;
+  };
   if (!files.length) return;
   const searchInput = document.getElementById("studentFilesSearch");
   const categoryInput = document.getElementById("studentFilesCategory");
@@ -1551,6 +1827,81 @@ let followUpMode = sessionStorage.getItem("madarFollowUpMode") === "tests" ? "te
 let followUpSection = sessionStorage.getItem("madarFollowUpSection") || "attendance";
 let followUpRowsById = new Map();
 let followUpLoadedSettings = {};
+let followUpAutosaveTimer = null;
+let followUpAutosavePayload = null;
+let followUpAutosavePromise = null;
+
+function setFollowUpAutosaveStatus(state, message) {
+  const host = document.getElementById("followUpTopAction");
+  if (!host) return;
+  if (!message) { host.innerHTML = ""; return; }
+  host.innerHTML = `<span class="follow-up-autosave" data-state="${escapeHtml(state)}"><i aria-hidden="true"></i>${escapeHtml(message)}</span>`;
+}
+
+function collectFollowUpPayload() {
+  if (!document.getElementById("followUpTable")) return null;
+  const settings = { ...followUpLoadedSettings };
+  document.querySelectorAll(".max-input").forEach((input) => { settings[input.dataset.maxSetting] = Number(input.value); });
+  const fields = followUpPeriod < 3
+    ? ["periodicTestScore", "participationScore", "homeworkScore", "tasksScore"]
+    : ["finalExamScore"];
+  const rows = [...document.querySelectorAll("#followUpTable tbody tr")].map((row) => {
+    const original = followUpRowsById.get(Number(row.dataset.studentId)) || {};
+    const record = { studentId: Number(row.dataset.studentId) };
+    fields.forEach((field) => {
+      const input = row.querySelector(`[data-score="${field}"]`);
+      record[field] = input ? numericInput(row, field) : (original[field] ?? null);
+    });
+    return record;
+  });
+  const selection = normalizeAcademicSelection("followUp");
+  return {
+    settings,
+    rows,
+    body: { period: followUpPeriod, settings, rows, stage: selection.stage, gradeLabel: actualAcademicGradeLabel("followUp"), classId: selection.classId, academicYear: schoolSettings?.academicYear || "", semester: schoolSettings?.currentSemester || "first" },
+  };
+}
+
+function scheduleFollowUpAutosave(delay = 650) {
+  const payload = collectFollowUpPayload();
+  if (!payload) return;
+  followUpAutosavePayload = payload;
+  setFollowUpAutosaveStatus("pending", "بانتظار الحفظ…");
+  clearTimeout(followUpAutosaveTimer);
+  followUpAutosaveTimer = setTimeout(() => { flushFollowUpAutosave(); }, Math.max(0, delay));
+}
+
+async function flushFollowUpAutosave() {
+  clearTimeout(followUpAutosaveTimer);
+  followUpAutosaveTimer = null;
+  if (followUpAutosavePromise) {
+    await followUpAutosavePromise;
+    return followUpAutosavePayload ? flushFollowUpAutosave() : true;
+  }
+  const payload = followUpAutosavePayload;
+  if (!payload) return true;
+  followUpAutosavePayload = null;
+  setFollowUpAutosaveStatus("saving", "جارٍ الحفظ…");
+  followUpAutosavePromise = (async () => {
+    try {
+      await api("/follow-up", { method: "PUT", body: JSON.stringify(payload.body) });
+      followUpLoadedSettings = { ...payload.settings };
+      payload.rows.forEach((row) => followUpRowsById.set(Number(row.studentId), { ...(followUpRowsById.get(Number(row.studentId)) || {}), ...row }));
+      setFollowUpAutosaveStatus("saved", "تم الحفظ تلقائيًا ✓");
+      return true;
+    } catch (error) {
+      if (!followUpAutosavePayload) followUpAutosavePayload = payload;
+      setFollowUpAutosaveStatus("error", "تعذّر الحفظ — أعيدي المحاولة");
+      toast(error.message || "تعذّر الحفظ التلقائي.", "error");
+      return false;
+    } finally {
+      followUpAutosavePromise = null;
+    }
+  })();
+  const saved = await followUpAutosavePromise;
+  if (saved && followUpAutosavePayload) return flushFollowUpAutosave();
+  return saved;
+}
 
 function cleanScore(value) {
   if (value === null || value === undefined || value === "") return "—";
@@ -1667,7 +2018,9 @@ async function renderFollowUp() {
     </div>
   `;
   document.querySelectorAll("[data-follow-mode]").forEach((button) => {
-    button.onclick = () => {
+    button.onclick = async () => {
+      if (followUpMode === "tests" && !await flushFollowUpAutosave()) return;
+      if (followUpMode === "tracking" && window.flushWeeklyFollowUpAutosaves && !await window.flushWeeklyFollowUpAutosaves()) return;
       followUpMode = button.dataset.followMode;
       sessionStorage.setItem("madarFollowUpMode", followUpMode);
       renderFollowUp();
@@ -1683,14 +2036,15 @@ async function renderFollowUp() {
     });
     return;
   }
-  bindAcademicSelector("followUp", renderFollowUp);
+  bindAcademicSelector("followUp", async () => { if (await flushFollowUpAutosave()) renderFollowUp(); });
   document.querySelectorAll("[data-follow-period]").forEach((button) => {
-    button.onclick = () => {
+    button.onclick = async () => {
+      if (!await flushFollowUpAutosave()) return;
       followUpPeriod = Number(button.dataset.followPeriod);
       renderFollowUp();
     };
   });
-  document.getElementById("printFollowUpGrades").onclick = openFollowUpPrintMenu;
+  document.getElementById("printFollowUpGrades").onclick = async () => { if (await flushFollowUpAutosave()) openFollowUpPrintMenu(); };
   await loadFollowUpPeriod();
   document.getElementById("followUpSearch").oninput = (event) => {
     const query = event.target.value.trim().toLocaleLowerCase("ar");
@@ -1764,26 +2118,29 @@ async function loadFollowUpPeriod() {
   }).join("");
 
   target.innerHTML = `
-    <p class="tracking-note">حددي الدرجة الكاملة لكل بند، ثم أدخلي درجات الطالبات واحفظي السجل.</p>
+    <p class="tracking-note">حددي الدرجة الكاملة لكل بند، ثم أدخلي درجات الطالبات؛ تُحفظ التغييرات تلقائيًا.</p>
     ${followUpPeriod === 3 ? '<p class="tracking-note">متوسط الاختبارين يُحسب تلقائيًا من درجة الاختبار الفتري في الفترة الأولى ودرجة الاختبار الفتري في الفترة الثانية. ومتوسطات المشاركة والواجبات والمهام تُحسب من الفترتين نفسيهما.</p>' : ""}
     <div class="score-settings">${settingsHtml}</div>
     ${data.rows.length ? `<div class="table-wrap"><table id="followUpTable"><thead><tr>${followUpPeriod < 3
       ? "<th>البريد الإلكتروني</th><th>اسم الطالبة</th><th>الاختبار الفتري</th><th>المشاركة</th><th>الواجبات</th><th>المهام</th><th>المجموع</th>"
       : "<th>البريد الإلكتروني</th><th>اسم الطالبة</th><th>متوسط الاختبارين</th><th>متوسط المشاركة</th><th>متوسط الواجبات</th><th>متوسط المهام</th><th>الاختبار النهائي</th><th>المجموع</th>"
     }</tr></thead><tbody>${rowsHtml}</tbody></table></div>` : '<div class="empty-state">لا توجد طالبات في فصولك بعد.</div>'}
-    <div class="modal-actions"><button class="btn btn-primary" id="saveFollowUp" ${data.rows.length ? "" : "disabled"}>حفظ سجل الفترة</button></div>
+    ${data.rows.length ? '<p class="follow-up-inline-save-note">يُحفظ كل تعديل تلقائيًا دون الحاجة إلى زر حفظ.</p>' : ""}
   `;
 
   document.querySelectorAll(".score-input").forEach((input) => {
-    input.oninput = () => recalculateFollowUpRow(input.closest("tr"));
+    input.oninput = () => { recalculateFollowUpRow(input.closest("tr")); scheduleFollowUpAutosave(); };
+    input.onchange = () => scheduleFollowUpAutosave(0);
   });
   document.querySelectorAll(".max-input").forEach((input) => {
     input.oninput = () => {
       updateFollowUpMaximums();
       document.querySelectorAll("#followUpTable tbody tr").forEach(recalculateFollowUpRow);
+      scheduleFollowUpAutosave();
     };
+    input.onchange = () => scheduleFollowUpAutosave(0);
   });
-  document.getElementById("saveFollowUp").onclick = saveFollowUpPeriod;
+  setFollowUpAutosaveStatus("idle", data.rows.length ? "الحفظ التلقائي مفعّل" : "");
 }
 
 function currentMax(name) {
@@ -1825,43 +2182,52 @@ function recalculateFollowUpRow(row) {
   row.querySelector(".tracking-total").textContent = cleanScore(total);
 }
 
-async function saveFollowUpPeriod() {
-  const button = document.getElementById("saveFollowUp");
-  button.disabled = true;
-  const settings = { ...followUpLoadedSettings };
-  document.querySelectorAll(".max-input").forEach((input) => { settings[input.dataset.maxSetting] = Number(input.value); });
-  const fields = followUpPeriod < 3
-    ? ["periodicTestScore", "participationScore", "homeworkScore", "tasksScore"]
-    : ["finalExamScore"];
-  const rows = [...document.querySelectorAll("#followUpTable tbody tr")].map((row) => {
-    const original = followUpRowsById.get(Number(row.dataset.studentId)) || {};
-    const record = { studentId: Number(row.dataset.studentId) };
-    fields.forEach((field) => {
-      const input = row.querySelector(`[data-score="${field}"]`);
-      record[field] = input ? numericInput(row, field) : (original[field] ?? null);
-    });
-    return record;
-  });
-  try {
-    const selection = normalizeAcademicSelection("followUp");
-    await api("/follow-up", { method: "PUT", body: JSON.stringify({ period: followUpPeriod, settings, rows, stage: selection.stage, gradeLabel: actualAcademicGradeLabel("followUp"), classId: selection.classId, academicYear: schoolSettings?.academicYear || "", semester: schoolSettings?.currentSemester || "first" }) });
-    toast("تم حفظ سجل المتابعة.");
-    await loadFollowUpPeriod();
-  } catch (error) {
-    toast(error.message);
-    button.disabled = false;
-  }
-}
-
 // ==========================================================================
 // النقاط التحفيزية
 // ==========================================================================
+let motivationFrameResizeObserver = null;
+
+function syncMotivationFrameHeight(frame) {
+  const frameDocument = frame.contentDocument;
+  if (!frameDocument) return;
+  const contentHeight = Math.ceil(Math.max(
+    frameDocument.documentElement?.scrollHeight || 0,
+    frameDocument.body?.scrollHeight || 0,
+  ));
+  if (contentHeight > 0) frame.style.height = `${contentHeight}px`;
+}
+
 async function renderMotivation() {
+  motivationFrameResizeObserver?.disconnect();
+  motivationFrameResizeObserver = null;
   contentEl.innerHTML = `
     <section class="motivation-frame-shell">
-      <iframe class="motivation-app-frame" src="motivation.html?v=5" title="مشروع نقاط التحفيز" loading="eager"></iframe>
+      <iframe class="motivation-app-frame" src="motivation.html?v=7-points" title="مشروع نقاط التحفيز" loading="eager" scrolling="no"></iframe>
     </section>
   `;
+  const frame = contentEl.querySelector(".motivation-app-frame");
+  frame.addEventListener("load", () => {
+    let frameResizeObserver = null;
+    const updateHeight = () => {
+      if (!frame.isConnected) {
+        frameResizeObserver?.disconnect();
+        if (motivationFrameResizeObserver === frameResizeObserver) motivationFrameResizeObserver = null;
+        return;
+      }
+      syncMotivationFrameHeight(frame);
+    };
+    updateHeight();
+    const frameDocument = frame.contentDocument;
+    if (!frameDocument || typeof ResizeObserver === "undefined") return;
+    frameResizeObserver = new ResizeObserver(updateHeight);
+    frameResizeObserver.observe(frameDocument.documentElement);
+    if (frameDocument.body) frameResizeObserver.observe(frameDocument.body);
+    motivationFrameResizeObserver = frameResizeObserver;
+    frame.contentWindow?.addEventListener("unload", () => {
+      frameResizeObserver?.disconnect();
+      if (motivationFrameResizeObserver === frameResizeObserver) motivationFrameResizeObserver = null;
+    }, { once: true });
+  }, { once: true });
 }
 
 // ==========================================================================
@@ -1980,7 +2346,7 @@ async function loadTestsList(type) {
                 <td>${arabicMathNumber(Number(t.completed_count || 0), testStage)}/${arabicMathNumber(Number(t.assigned_count || 0), testStage)}</td>
                 <td class="tests-actions-cell">
                   <button class="btn btn-outline btn-sm" data-edit="${t.id}" data-test-type="${t.type}">تعديل</button>
-                  <button class="btn btn-secondary btn-sm" data-dup="${t.id}" data-test-type="${t.type}">نسخ</button>
+                  <button class="btn btn-secondary btn-sm" data-dup="${t.id}" data-test-type="${t.type}" data-test-title="${escapeHtml(t.title)}">تكرار الاختبار</button>
                   <button class="btn ${t.status === "published" ? "btn-outline" : "btn-primary"} btn-sm" data-toggle="${t.id}" data-status="${t.status}">${t.status === "published" ? "إلغاء النشر" : "نشر"}</button>
                   <button class="btn btn-outline btn-sm" data-results="${t.id}">النتائج</button>
                   <a class="btn btn-outline btn-sm" href="/api/teacher/reports/test/${t.id}.pdf" target="_blank">طباعة</a>
@@ -2003,13 +2369,11 @@ async function loadTestsList(type) {
     }
 
     wrap.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", async () => openTestForm(b.dataset.testType || (type === "all" ? "pre_diagnostic" : type), await api(`/tests/${b.dataset.edit}`))));
-    wrap.querySelectorAll("[data-dup]").forEach((b) => b.addEventListener("click", async () => {
-      const copied = await api(`/tests/${b.dataset.dup}/duplicate`, { method: "POST" });
-      recentCreatedTestId = Number(copied.id || 0);
-      recentCreatedTestType = b.dataset.testType || (type === "all" ? "pre_diagnostic" : type);
-      toast("تم نسخ الاختبار كمسودة.");
-      loadTestsList(type);
-    }));
+    wrap.querySelectorAll("[data-dup]").forEach((b) => b.addEventListener("click", () => openTestDuplicateForm({
+      id: Number(b.dataset.dup),
+      title: b.dataset.testTitle || "اختبار",
+      type: b.dataset.testType || (type === "all" ? "pre_diagnostic" : type),
+    })));
     wrap.querySelectorAll("[data-toggle]").forEach((b) => b.addEventListener("click", async () => {
       const action = b.dataset.status === "published" ? "unpublish" : "publish";
       await api(`/tests/${b.dataset.toggle}/${action}`, { method: "POST" });
@@ -2033,6 +2397,47 @@ async function loadTestsList(type) {
 let questionDraft = [];
 let questionDraftStage = "";
 
+function openTestDuplicateForm(source) {
+  openModal(`<form id="testDuplicateForm">
+    <h3>تكرار الاختبار</h3>
+    <p class="modal-note">ستُنشأ نسخة مستقلة كمسودة مع جميع الأسئلة، ولن يتغير الاختبار الأصلي أو نتائجه.</p>
+    <div id="testDuplicateMsg"></div>
+    <div class="form-grid">
+      <label class="field">عنوان الاختبار الجديد<input id="testDuplicateTitle" value="${escapeHtml(`${source.title} (نسخة)`)}" required></label>
+      <label class="field">نوع الاختبار<select id="testDuplicateType">
+        ${Object.entries(TEST_TYPE_LABELS).map(([value, label]) => `<option value="${value}" ${source.type === value ? "selected" : ""}>${label}</option>`).join("")}
+      </select></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" type="button" id="cancelTestDuplicate">إلغاء</button>
+      <button class="btn btn-primary" type="submit" id="submitTestDuplicate">تكرار وفتح للتعديل</button>
+    </div>
+  </form>`);
+  document.getElementById("cancelTestDuplicate").onclick = closeModal;
+  document.getElementById("testDuplicateForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const title = document.getElementById("testDuplicateTitle").value.trim();
+    const selectedType = document.getElementById("testDuplicateType").value;
+    if (!title) {
+      document.getElementById("testDuplicateMsg").innerHTML = '<div class="form-error">أدخلي عنوان النسخة الجديدة.</div>';
+      return;
+    }
+    const submitButton = document.getElementById("submitTestDuplicate");
+    submitButton.disabled = true;
+    try {
+      const copied = await api(`/tests/${source.id}/duplicate`, { method: "POST", body: JSON.stringify({ title, type: selectedType }) });
+      recentCreatedTestId = Number(copied.id || 0);
+      recentCreatedTestType = copied.type || selectedType;
+      const copiedTest = await api(`/tests/${recentCreatedTestId}`);
+      toast("تم تكرار الاختبار. يمكنكِ الآن تعديل النسخة الجديدة.");
+      openTestForm(recentCreatedTestType, copiedTest);
+    } catch (error) {
+      submitButton.disabled = false;
+      document.getElementById("testDuplicateMsg").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+    }
+  };
+}
+
 function openTestForm(type, test) {
   const selection = normalizeAcademicSelection("tests");
   const matchingClasses = academicClasses(selection);
@@ -2055,6 +2460,9 @@ function openTestForm(type, test) {
     <div class="test-context-note">${escapeHtml(selection.stage)} · ${escapeHtml(selection.gradeLabel)} · ${escapeHtml(schoolSettings?.semesterLabel || "الترم الأول")} · ${escapeHtml(schoolSettings?.academicYear || "العام غير محدد")}</div>
     <div class="form-grid">
       <div class="field">عنوان الاختبار<input id="tfTitle" value="${escapeHtml(test?.title || "")}" /></div>
+      <div class="field">نوع الاختبار<select id="tfType">
+        ${Object.entries(TEST_TYPE_LABELS).map(([value, label]) => `<option value="${value}" ${(test?.type || type) === value ? "selected" : ""}>${label}</option>`).join("")}
+      </select></div>
       <div class="field">المهارة
         <select id="tfSkill"><option value="">بدون مهارة</option>${allSkills.map((s) => `<option value="${s.id}" ${test?.skill_id == s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`).join("")}</select>
       </div>
@@ -2181,7 +2589,7 @@ async function submitTestForm(type, existingTest, publish) {
   }
   const payload = {
     title,
-    type,
+    type: document.getElementById("tfType").value,
     skillId: document.getElementById("tfSkill").value || null,
     classId: document.getElementById("tfClass").value || null,
     durationMinutes: document.getElementById("tfNoTime")?.checked ? 0 : Math.max(1, Math.min(240, Number(document.getElementById("tfDuration").value) || 20)),
@@ -2210,7 +2618,12 @@ async function submitTestForm(type, existingTest, publish) {
     if (publish) await api(`/tests/${saved.id}/publish`, { method: "POST" });
     closeModal();
     toast(publish ? "تم حفظ ونشر الاختبار." : "تم حفظ الاختبار كمسودة.");
-    loadTestsList(type);
+    if (testsPanelMode !== "all" && testsPanelMode !== payload.type) {
+      testsPanelMode = payload.type;
+      renderTestsPanel().catch(showTestsLoadError);
+    } else {
+      loadTestsList(testsPanelMode);
+    }
   } catch (err) {
     document.getElementById("testFormMsg").innerHTML = `<div class="form-error" style="margin-bottom:10px">${escapeHtml(err.message)}</div>`;
   }
@@ -2297,7 +2710,7 @@ function analysisPrintTable(headers, rows, className = "") {
   return `<div class="print-table-wrap"><table class="${escapeHtml(className)}"><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
-async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientation = "portrait", popupWindow = null }) {
+async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientation = "portrait", popupWindow = null, sections = null }) {
   const popup = popupWindow || window.open("", "_blank");
   if (!popup) {
     toast("اسمحي بالنوافذ المنبثقة حتى تفتح معاينة الطباعة.", "error");
@@ -2310,24 +2723,50 @@ async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientati
   } catch (error) {
     settings = {};
   }
-  const context = analysisClassContext(classId);
   const absoluteMadarLogo = new URL(settings.madarLogoUrl || "/assets/print/madar-official-logo-transparent.png", window.location.origin).href;
   const absoluteVisionLogo = new URL(settings.visionLogoUrl || "/vision-2030-logo.png", window.location.origin).href;
   const absoluteAdditionalLogo = settings.additionalLogoUrl ? new URL(settings.additionalLogoUrl, window.location.origin).href : "";
   const governmentLines = [
     "<strong>المملكة العربية السعودية</strong>",
+    "<span>وزارة التعليم</span>",
     settings.educationDepartment ? `<span>إدارة التعليم: ${escapeHtml(settings.educationDepartment)}</span>` : "",
     settings.educationOffice ? `<span>مكتب التعليم: ${escapeHtml(settings.educationOffice)}</span>` : "",
     settings.schoolName ? `<span>المدرسة: ${escapeHtml(settings.schoolName)}</span>` : "",
   ].filter(Boolean).join("");
   const leader = settings.schoolLeaderName || "____________________";
   const teacher = settings.teacherName || currentTeacher?.name || "____________________";
-  const academicYear = settings.academicYear || "—";
-  const semester = settings.semesterLabel || "—";
-  const subjectName = settings.subjectName || "الرياضيات";
-  const printStage = context.stage && context.stage !== "جميع المراحل" ? context.stage : (settings.stageLabel || context.stage || "—");
-  const printGrade = context.grade && context.grade !== "جميع الصفوف" ? context.grade : (settings.gradeLabel || context.grade || "—");
   const pageOrientation = orientation === "landscape" ? "landscape" : "portrait";
+  const hasStructuredSections = Array.isArray(sections) && sections.length > 0;
+  const reportSections = hasStructuredSections ? sections : [{ title: "", bodyHtml, context: { classId } }];
+
+  function officialSection(section, index) {
+    const supplied = section?.context || {};
+    const classContext = analysisClassContext(supplied.classId ?? classId);
+    const subjectName = supplied.subjectName || settings.subjectName || "الرياضيات";
+    const printStage = supplied.stage || (classContext.stage !== "جميع المراحل" ? classContext.stage : settings.stageLabel) || "جميع المراحل";
+    const printGrade = supplied.grade || (classContext.grade !== "جميع الصفوف" ? classContext.grade : settings.gradeLabel) || "جميع الصفوف";
+    const className = supplied.className || classContext.name || "جميع الفصول";
+    const semester = supplied.semesterLabel || settings.semesterLabel || "—";
+    const academicYear = supplied.academicYear || settings.academicYear || "—";
+    const sectionTitle = section?.title || title;
+    return `<article class="official-print-section${index ? " has-page-break" : ""}">
+      <header class="official-header">
+        <section class="government-copy">${governmentLines}</section>
+        <section class="center-logo"><div class="print-logo-row"><img src="${absoluteMadarLogo}" alt="شعار مدار"><img src="${absoluteVisionLogo}" alt="شعار رؤية السعودية 2030">${absoluteAdditionalLogo ? `<img src="${absoluteAdditionalLogo}" alt="الشعار الإضافي">` : ""}</div><h1>${escapeHtml(title)}</h1></section>
+        <section class="report-meta">
+          <div><b>المادة:</b> ${escapeHtml(subjectName)}</div>
+          <div><b>المرحلة والصف:</b> ${escapeHtml(`${printStage} — ${printGrade}`)}</div>
+          <div><b>الفصل:</b> ${escapeHtml(className)}</div>
+          <div><b>الفصل الدراسي:</b> ${escapeHtml(semester)}</div>
+          <div><b>العام الدراسي:</b> ${escapeHtml(academicYear)}</div>
+        </section>
+      </header>
+      ${hasStructuredSections ? `<header class="report-section-title"><span>تحليل النتائج التشخيصية</span><h2>${escapeHtml(sectionTitle)}</h2></header>` : ""}
+      <section class="report-content">${section?.bodyHtml || ""}</section>
+      <footer class="official-footer"><span>مديرة المدرسة: ${escapeHtml(leader)}</span><span>المعلمة: ${escapeHtml(teacher)}</span></footer>
+    </article>`;
+  }
+  const officialDocument = reportSections.map(officialSection).join("");
   popup.document.open();
   popup.document.write(`<!doctype html>
 <html lang="ar" dir="rtl">
@@ -2338,13 +2777,14 @@ async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientati
   <style>
     @page { size: A4 ${pageOrientation}; margin: 8mm; }
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; direction: rtl; color: #28213a; font-family: Tahoma, Arial, sans-serif; background: #eef0f3; }
+    html, body { margin: 0; padding: 0; direction: rtl; color: #241b3c; font-family: Tajawal, "Segoe UI", Tahoma, sans-serif; background: #eef0f3; }
     .print-actions { position: sticky; top: 0; z-index: 20; display: flex; justify-content: center; gap: 10px; padding: 12px; background: #fff; border-bottom: 1px solid #ddd; }
     .print-actions button { border: 1px solid #5a2b82; border-radius: 9px; padding: 9px 18px; background: #5a2b82; color: #fff; font: inherit; cursor: pointer; }
     .print-actions button + button { background: #fff; color: #5a2b82; }
-    .official-sheet { width: ${pageOrientation === "landscape" ? "297mm" : "210mm"}; min-height: ${pageOrientation === "landscape" ? "210mm" : "297mm"}; margin: 16px auto; padding: 7mm 8mm 18mm; background: #fff; box-shadow: 0 6px 24px rgba(25,20,35,.12); position: relative; }
-    .official-frame { width: 100%; border-collapse: collapse; border: 0; table-layout: fixed; }
-    .official-frame > thead > tr > td, .official-frame > tbody > tr > td { border: 0; padding: 0; vertical-align: top; }
+    .print-actions button:disabled { cursor: wait; opacity: .55; }
+    .official-document { width: ${pageOrientation === "landscape" ? "297mm" : "210mm"}; margin: 16px auto; }
+    .official-print-section { min-height: ${pageOrientation === "landscape" ? "210mm" : "297mm"}; margin: 0 0 16px; padding: 7mm 8mm 8mm; background: #fff; box-shadow: 0 6px 24px rgba(25,20,35,.12); position: relative; }
+    .official-print-section.has-page-break { break-before: page; page-break-before: always; }
     .official-header { display: grid; grid-template-columns: minmax(0,1fr) minmax(48mm,.72fr) minmax(0,1fr); grid-template-areas: "meta logo government"; gap: 6mm; align-items: center; border-bottom: 2px solid #765191; padding-bottom: 4mm; margin-bottom: 5mm; direction: ltr; }
     .government-copy { grid-area: government; direction: rtl; text-align: right; font-size: 9.2pt; line-height: 1.65; }
     .government-copy strong, .government-copy span { display: block; }
@@ -2355,7 +2795,10 @@ async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientati
     .center-logo h1 { margin: 2mm 0 0; color: #4f266f; font-size: 15pt; line-height: 1.35; }
     .report-meta { grid-area: meta; direction: rtl; border: 1px solid #d8d0df; border-radius: 8px; background: #faf9fb; padding: 2.5mm 3mm; font-size: 8.8pt; line-height: 1.75; text-align: right; }
     .report-meta b { color: #5a2b82; }
-    .report-content { width: 100%; max-width: 100%; overflow: hidden; padding-bottom: 14mm; }
+    .report-section-title { display: block; margin: 0 0 4mm; border-right: 4px solid #6b3fa0; padding: 1.5mm 3mm 1.5mm 0; break-inside: avoid; page-break-inside: avoid; break-after: avoid; page-break-after: avoid; }
+    .report-section-title span { display: block; color: #1f7f76; font-size: 8pt; font-weight: 800; }
+    .report-section-title h2 { margin: .8mm 0 0; color: #3f2257; font-size: 13pt; }
+    .report-content { display: block; width: 100%; max-width: 100%; overflow: visible; }
     .report-title { margin: 0 0 4mm; color: #4f266f; font-size: 13pt; }
     .print-summary { display: grid; grid-template-columns: repeat(auto-fit,minmax(32mm,1fr)); gap: 3mm; margin: 0 0 5mm; }
     .print-summary > div { border: 1px solid #d9d1e1; border-radius: 7px; background: #faf8fd; padding: 3mm; text-align: center; }
@@ -2366,11 +2809,11 @@ async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientati
     h3 { font-size: 11.5pt; margin: 4mm 0 2mm; }
     .print-note { border: 1px solid #ded6e8; border-radius: 7px; background: #f7f3fb; padding: 3mm; font-size: 8.5pt; line-height: 1.7; margin: 3mm 0; }
     .print-table-wrap { width: 100%; max-width: 100%; overflow: visible; margin: 3mm 0; }
-    table:not(.official-frame) { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: ${pageOrientation === "landscape" ? "7.4pt" : "8.2pt"}; }
-    table:not(.official-frame) thead { display: table-header-group; }
-    table:not(.official-frame) th, table:not(.official-frame) td { border: 1px solid #b9b3bf; padding: 1.8mm; text-align: center; vertical-align: middle; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
-    table:not(.official-frame) th { background: #f1edf5; color: #3f2555; font-weight: 700; }
-    table:not(.official-frame) tr { break-inside: avoid; page-break-inside: avoid; }
+    .report-content table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: ${pageOrientation === "landscape" ? "7.4pt" : "8.2pt"}; direction: rtl; }
+    .report-content table thead { display: table-header-group; }
+    .report-content table th, .report-content table td { border: 1px solid #b9b3bf; padding: 1.8mm; text-align: center; vertical-align: middle; direction: rtl; unicode-bidi: plaintext; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+    .report-content table th { background: #f1edf5; color: #3f2555; font-weight: 700; }
+    .report-content table tr { break-inside: avoid; page-break-inside: avoid; }
     .question-print-table th:nth-child(1), .question-print-table td:nth-child(1) { width: 11%; }
     .question-print-table th:nth-child(2), .question-print-table td:nth-child(2) { width: 18%; }
     .question-print-table th:nth-child(3), .question-print-table td:nth-child(3) { width: 32%; text-align: right; }
@@ -2381,53 +2824,112 @@ async function openAnalysisPrint({ title, classId = "", bodyHtml = "", orientati
     .mastery-mid { color: #8a5a00; font-weight: 700; }
     .mastery-low { color: #b3261e; font-weight: 700; }
     .follow-up-print-section + .follow-up-print-section { break-before: page; page-break-before: always; }
-    .official-footer { position: absolute; right: 8mm; left: 8mm; bottom: 6mm; display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; border-top: 1px solid #cfc7d5; padding-top: 2.5mm; font-size: 9pt; direction: rtl; }
+    .analysis-print-context { display: flex; justify-content: space-between; gap: 4mm; margin: 0 0 4mm; border: 1px solid #d8d0df; background: #f8f6fa; padding: 2.5mm 3mm; color: #51465e; font-size: 8.3pt; line-height: 1.55; }
+    .analysis-print-context span:last-child { text-align: left; }
+    .analysis-print-table-section, .analysis-print-chart { break-inside: auto; page-break-inside: auto; }
+    .analysis-print-table-section h3, .analysis-print-chart figcaption { border-right: 3px solid #6b3fa0; padding-right: 2.5mm; }
+    .analysis-print-tables { margin-bottom: 5mm; }
+    .analysis-print-charts { border-top: 1px solid #d8d0df; padding-top: 4mm; }
+    .analysis-print-chart { margin: 0 0 5mm; }
+    .analysis-print-chart figcaption { color: #4f266f; font-size: 11pt; font-weight: 800; break-after: avoid; }
+    .analysis-print-chart__legend { display: flex; flex-wrap: wrap; gap: 2.5mm 5mm; margin: 2.5mm 0; font-size: 8pt; font-weight: 700; }
+    .analysis-print-chart__legend span { display: inline-flex; align-items: center; gap: 1.5mm; }
+    .analysis-print-chart__legend i { width: 8mm; height: 3mm; border: 1px solid #4f4657; background: var(--analysis-print-series); }
+    .analysis-print-chart__legend .is-series-1 i { background: repeating-linear-gradient(135deg,var(--analysis-print-series) 0 1.2mm,#fff 1.2mm 2.4mm); }
+    .analysis-print-chart__legend .is-series-2 i { background: #fff; border: 1.5px dashed #3f3549; }
+    .analysis-print-chart__rows { display: grid; gap: 1.7mm; }
+    .analysis-print-chart__row { display: grid; grid-template-columns: minmax(33mm,.75fr) minmax(0,2.25fr); align-items: center; gap: 3mm; border-bottom: 1px solid #ebe7ed; padding: 1.5mm 0; break-inside: avoid; page-break-inside: avoid; }
+    .analysis-print-chart__row > strong { font-size: 8pt; line-height: 1.4; overflow-wrap: anywhere; }
+    .analysis-print-chart__values { display: grid; gap: 1mm; }
+    .analysis-print-chart__value { display: grid; grid-template-columns: 20mm minmax(0,1fr) 12mm; align-items: center; gap: 2mm; font-size: 7.5pt; }
+    .analysis-print-chart__value > span { color: #51465e; }
+    .analysis-print-chart__value > i { display: block; height: 3.2mm; border: 1px solid #9d96a3; background: #f5f3f6; overflow: hidden; }
+    .analysis-print-chart__value > i b { display: block; width: var(--analysis-print-width); height: 100%; background: var(--analysis-print-series); }
+    .analysis-print-chart__value.is-series-1 > i b { background: repeating-linear-gradient(135deg,var(--analysis-print-series) 0 1.2mm,#fff 1.2mm 2.4mm); border-left: 1px solid #4f4657; }
+    .analysis-print-chart__value.is-series-2 > i b { background: #fff; border: 1.5px dashed #3f3549; }
+    .analysis-print-chart__value em { color: #241b3c; font-style: normal; font-weight: 800; direction: ltr; text-align: left; }
+    .analysis-print-empty, .analysis-print-report-note { border: 1px solid #d8d0df; background: #faf9fb; padding: 4mm; color: #51465e; font-size: 9pt; line-height: 1.7; }
+    .analysis-print-empty.is-error { border-color: #c98686; color: #842f2f; background: #fff7f7; }
+    .analysis-print-report-note { margin: 4mm 0; border-right: 3px solid #1f9d91; }
+    .official-footer { position: static; display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; margin-top: 8mm; border-top: 1px solid #cfc7d5; padding-top: 2.5mm; font-size: 9pt; direction: rtl; break-inside: avoid; page-break-inside: avoid; }
     .official-footer span:first-child { text-align: right; }
     .official-footer span:last-child { text-align: left; }
     @media print {
-      html, body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      html, body { width: 100%; margin: 0; padding: 0; background: #fff; direction: rtl; overflow: visible; }
       .print-actions { display: none !important; }
-      .official-sheet { width: auto; min-height: 0; margin: 0; padding: 0 0 15mm; box-shadow: none; }
-      .official-frame > thead { display: table-header-group; }
-      .official-header { break-inside: avoid; }
-      .official-footer { position: fixed; right: 0; left: 0; bottom: 0; }
+      .official-document { display: block !important; width: 100%; margin: 0; padding: 0; }
+      .official-print-section { display: block !important; width: 100%; min-height: 0; margin: 0; padding: 0; background: #fff; box-shadow: none; break-inside: auto; page-break-inside: auto; }
+      .official-print-section.has-page-break { break-before: page !important; page-break-before: always !important; }
+      .official-print-section:last-child { break-after: auto; page-break-after: auto; }
+      .official-header { display: grid !important; grid-template-columns: minmax(0,1fr) minmax(48mm,.72fr) minmax(0,1fr) !important; grid-template-areas: "meta logo government" !important; gap: 6mm !important; align-items: center !important; width: 100%; margin: 0 0 5mm; padding: 0 0 4mm; break-inside: avoid !important; page-break-inside: avoid !important; }
+      .government-copy { grid-area: government !important; direction: rtl; text-align: right; }
+      .center-logo { grid-area: logo !important; direction: rtl; text-align: center; }
+      .report-meta { grid-area: meta !important; direction: rtl; text-align: right; }
+      .report-section-title { display: block !important; margin: 0 0 4mm; break-inside: avoid !important; page-break-inside: avoid !important; break-after: avoid !important; page-break-after: avoid !important; }
+      .report-content, .analysis-print-tables, .analysis-print-charts { display: block !important; width: 100%; max-width: 100%; overflow: visible !important; }
+      .analysis-print-context { display: grid !important; grid-template-columns: minmax(32mm,.65fr) minmax(0,2fr); gap: 4mm; width: 100%; break-inside: avoid; page-break-inside: avoid; }
+      .analysis-print-table-section { display: block !important; width: 100%; break-inside: auto; page-break-inside: auto; }
+      .analysis-print-table-section h3, .analysis-print-chart figcaption, .analysis-print-chart__legend { break-inside: avoid !important; page-break-inside: avoid !important; break-after: avoid !important; page-break-after: avoid !important; }
+      .print-table-wrap { display: block; width: 100%; max-width: 100%; overflow: visible !important; }
+      .report-content table { width: 100% !important; max-width: 100% !important; table-layout: fixed !important; border-collapse: collapse !important; direction: rtl; }
+      .report-content table thead { display: table-header-group !important; }
+      .report-content table tbody { display: table-row-group; }
+      .report-content table tr { break-inside: avoid !important; page-break-inside: avoid !important; }
+      .report-content table th, .report-content table td { overflow: visible; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+      .analysis-print-charts { clear: both; border-top: 1px solid #d8d0df; padding-top: 4mm; }
+      .analysis-print-chart { display: block !important; width: 100%; max-width: 100%; overflow: visible; break-inside: auto; page-break-inside: auto; }
+      .analysis-print-chart__rows { display: block !important; width: 100%; }
+      .analysis-print-chart__row { display: grid !important; grid-template-columns: 42mm minmax(0,1fr) !important; gap: 3mm !important; width: 100%; max-width: 100%; margin: 0; break-inside: avoid !important; page-break-inside: avoid !important; }
+      .analysis-print-chart__values { display: grid !important; width: 100%; }
+      .analysis-print-chart__value { display: grid !important; grid-template-columns: 20mm minmax(0,1fr) 12mm !important; gap: 2mm !important; width: 100%; direction: rtl; }
+      .official-footer { position: static !important; display: grid !important; grid-template-columns: 1fr 1fr; width: 100%; margin-top: 8mm; break-inside: avoid !important; page-break-inside: avoid !important; }
     }
-    @media (max-width: 850px) {
-      .official-sheet { width: 100%; min-height: 0; margin: 0; padding: 14px; }
+    @media screen and (max-width: 850px) {
+      .official-document { width: 100%; margin: 0; }
+      .official-print-section { width: 100%; min-height: 0; margin: 0 0 14px; padding: 14px; }
       .official-header { grid-template-columns: 1fr; grid-template-areas: "government" "logo" "meta"; }
       .official-footer { position: static; margin-top: 20px; }
+      .analysis-print-context { flex-direction: column; }
+      .analysis-print-context span:last-child { text-align: right; }
+      .analysis-print-chart__row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div class="print-actions"><button type="button" onclick="window.print()">طباعة / حفظ PDF</button><button type="button" onclick="window.close()">إغلاق</button></div>
-  <main class="official-sheet">
-    <table class="official-frame">
-      <thead><tr><td>
-        <header class="official-header">
-          <section class="government-copy">${governmentLines}</section>
-          <section class="center-logo"><div class="print-logo-row"><img src="${absoluteMadarLogo}" alt="شعار مدار"><img src="${absoluteVisionLogo}" alt="شعار رؤية السعودية 2030">${absoluteAdditionalLogo ? `<img src="${absoluteAdditionalLogo}" alt="الشعار الإضافي">` : ""}</div><h1>${escapeHtml(title)}</h1></section>
-          <section class="report-meta">
-            <div><b>المادة:</b> ${escapeHtml(subjectName)}</div>
-            <div><b>المرحلة والصف:</b> ${escapeHtml(`${printStage} — ${printGrade}`)}</div>
-            <div><b>الفصل:</b> ${escapeHtml(context.name)}</div>
-            <div><b>الفصل الدراسي:</b> ${escapeHtml(semester)}</div>
-            <div><b>العام الدراسي:</b> ${escapeHtml(academicYear)}</div>
-          </section>
-        </header>
-      </td></tr></thead>
-      <tbody><tr><td><section class="report-content">${bodyHtml}</section></td></tr></tbody>
-    </table>
-    <footer class="official-footer"><span>مديرة المدرسة: ${escapeHtml(leader)}</span><span>المعلمة: ${escapeHtml(teacher)}</span></footer>
-  </main>
+  <div class="print-actions"><button id="analysisPrintNow" type="button" onclick="window.print()" disabled>جارٍ تحميل الشعارات…</button><button type="button" onclick="window.close()">إغلاق</button></div>
+  <main class="official-document">${officialDocument}</main>
 </body>
 </html>`);
   popup.document.close();
+  const images = [...popup.document.images];
+  const fontReadiness = popup.document.fonts?.ready || Promise.resolve();
+  const imageReadiness = images.map(async (image) => {
+    if (!image.complete) {
+      await new Promise((resolve) => {
+        image.addEventListener("load", resolve, { once: true });
+        image.addEventListener("error", resolve, { once: true });
+      });
+    }
+    if (typeof image.decode === "function") {
+      try { await image.decode(); } catch (_) {}
+    }
+  });
+  await Promise.race([
+    Promise.allSettled([fontReadiness, ...imageReadiness]),
+    new Promise((resolve) => setTimeout(resolve, 5000)),
+  ]);
+  const printButton = popup.document.getElementById("analysisPrintNow");
+  if (printButton) {
+    printButton.disabled = false;
+    printButton.textContent = "طباعة / حفظ PDF";
+  }
   popup.focus();
+  return true;
 }
 
 async function renderAnalysisPanel() {
-  try { await loadSchoolSettings(); } catch (_) {}
+  try { await prepareAnalysisAcademicSelection(); } catch (_) {}
   await renderAnalysisDashboard({
     root: contentEl,
     academicSelectorHtml,
@@ -2855,9 +3357,166 @@ function openClassForm(cls) {
 // ==========================================================================
 // سجل الأنشطة
 // ==========================================================================
-async function renderActivity() {
-  const logs = await api("/data/activity-log");
+async function renderActivityPanel(mode = "activity") {
+  const activeMode = ["activity", "announcements", "notifications", "help-center"].includes(mode) ? mode : "activity";
   contentEl.innerHTML = `
+    <div class="student-panel-tabs" role="tablist" aria-label="سجل الأنشطة والإعلانات والمساعدة والإشعارات">
+      <button class="tab-btn ${activeMode === "activity" ? "active" : ""}" type="button" data-activity-panel="activity">سجل الأنشطة</button>
+      <button class="tab-btn ${activeMode === "announcements" ? "active" : ""}" type="button" data-activity-panel="announcements">الإعلانات</button>
+      <button class="tab-btn ${activeMode === "notifications" ? "active" : ""}" type="button" data-activity-panel="notifications">الإشعارات</button>
+      <button class="tab-btn ${activeMode === "help-center" ? "active" : ""}" type="button" data-activity-panel="help-center">مركز المساعدة</button>
+    </div>
+    <div id="activityPanelContent"></div>
+  `;
+  contentEl.querySelectorAll("[data-activity-panel]").forEach((button) => {
+    button.onclick = () => navigate(button.dataset.activityPanel);
+  });
+  const panel = document.getElementById("activityPanelContent");
+  if (activeMode === "announcements") await renderAnnouncements(panel);
+  else if (activeMode === "notifications") await renderNotifications(panel);
+  else if (activeMode === "help-center") await renderHelpCenter(panel);
+  else await renderActivity(panel);
+}
+
+const ANNOUNCEMENT_SIZE_LABELS = {
+  auto: "تلقائي",
+  small: "صغير",
+  medium: "متوسط",
+  large: "كبير",
+};
+
+async function renderAnnouncements(target = contentEl) {
+  let data;
+  try {
+    data = await api("/announcements");
+  } catch (error) {
+    target.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  const announcements = Array.isArray(data.announcements) ? data.announcements : [];
+  target.innerHTML = `
+    <section class="announcement-manager-grid">
+      <form class="card announcement-compose-card" id="announcementForm" enctype="multipart/form-data">
+        <header class="announcement-section-head">
+          <span aria-hidden="true">📣</span>
+          <div><small>رسالة تظهر عند دخول الطالبة</small><h3>إنشاء إعلان جديد</h3></div>
+        </header>
+        <p class="announcement-form-note">يمكن كتابة نص أو إرفاق صورة أو استخدامهما معًا. اختيار المقاس غير إلزامي وسيُضبط تلقائيًا إذا تُرك على الوضع التلقائي.</p>
+        <label class="field announcement-text-field">نص الإعلان <small>اختياري عند إرفاق صورة</small>
+          <textarea name="body" maxlength="4000" rows="6" placeholder="اكتبي الإعلان الذي سيظهر للطالبات…"></textarea>
+        </label>
+        <div class="announcement-form-row">
+          <label class="field">صورة الإعلان <small>اختيارية · PNG أو JPG أو WebP · حتى 5MB</small>
+            <input id="announcementImageInput" name="image" type="file" accept="image/png,image/jpeg,image/webp" />
+          </label>
+          <label class="field">مقاس الإعلان <small>اختياري</small>
+            <select name="displaySize">
+              <option value="auto">تلقائي — حسب المحتوى</option>
+              <option value="small">صغير</option>
+              <option value="medium">متوسط</option>
+              <option value="large">كبير</option>
+            </select>
+          </label>
+        </div>
+        <div class="announcement-image-preview" id="announcementImagePreview" hidden></div>
+        <label class="announcement-publish-switch">
+          <input name="isActive" type="checkbox" value="1" checked />
+          <span aria-hidden="true"></span>
+          <b>نشر الإعلان مباشرة للطالبات</b>
+        </label>
+        <div id="announcementFormMessage" aria-live="polite"></div>
+        <button class="btn btn-primary announcement-submit" type="submit">حفظ الإعلان</button>
+      </form>
+
+      <section class="announcement-list-panel">
+        <div class="announcement-list-heading">
+          <div><small>الإعلانات السابقة</small><h3>إدارة الإعلانات</h3></div>
+          <span>${announcements.length}</span>
+        </div>
+        <div class="announcement-list">
+          ${announcements.length ? announcements.map((announcement) => `
+            <article class="announcement-admin-card ${announcement.isActive ? "is-active" : ""}">
+              <div class="announcement-card-status">
+                <span class="announcement-status ${announcement.isActive ? "active" : "draft"}">${announcement.isActive ? "منشور الآن" : "غير منشور"}</span>
+                <small>المقاس: ${escapeHtml(ANNOUNCEMENT_SIZE_LABELS[announcement.displaySize] || "تلقائي")}</small>
+              </div>
+              ${announcement.imageUrl ? `<img src="${escapeHtml(announcement.imageUrl)}" alt="معاينة صورة الإعلان" loading="lazy" />` : ""}
+              ${announcement.body ? `<p>${escapeHtml(announcement.body)}</p>` : '<p class="announcement-image-only">إعلان بصورة فقط</p>'}
+              <footer>
+                <time>${formatDate(announcement.publishedAt || announcement.createdAt)}</time>
+                <div>
+                  <button class="btn btn-outline btn-sm" type="button" data-announcement-status="${announcement.id}" data-active="${announcement.isActive ? "0" : "1"}">${announcement.isActive ? "إيقاف" : "نشر"}</button>
+                  <button class="btn btn-danger btn-sm" type="button" data-announcement-delete="${announcement.id}">حذف</button>
+                </div>
+              </footer>
+            </article>`).join("") : '<div class="empty-state announcement-empty"><span aria-hidden="true">📭</span><strong>لا توجد إعلانات بعد</strong><p>أنشئي أول إعلان ليظهر للطالبات عند دخولهن.</p></div>'}
+        </div>
+      </section>
+    </section>`;
+
+  const form = document.getElementById("announcementForm");
+  const imageInput = document.getElementById("announcementImageInput");
+  const preview = document.getElementById("announcementImagePreview");
+  let previewUrl = "";
+  imageInput.onchange = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    const file = imageInput.files?.[0];
+    if (!file) {
+      preview.hidden = true;
+      preview.innerHTML = "";
+      previewUrl = "";
+      return;
+    }
+    previewUrl = URL.createObjectURL(file);
+    preview.innerHTML = `<img src="${previewUrl}" alt="معاينة الصورة قبل الحفظ" /><span>${escapeHtml(file.name)}</span>`;
+    preview.hidden = false;
+  };
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const message = document.getElementById("announcementFormMessage");
+    const submit = form.querySelector('[type="submit"]');
+    const payload = new FormData(form);
+    payload.set("isActive", form.elements.isActive.checked ? "1" : "0");
+    submit.disabled = true;
+    submit.textContent = "جارٍ الحفظ…";
+    message.innerHTML = "";
+    try {
+      await api("/announcements", { method: "POST", body: payload });
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      toast(form.elements.isActive.checked ? "تم نشر الإعلان للطالبات." : "تم حفظ الإعلان دون نشره.");
+      await renderActivityPanel("announcements");
+    } catch (error) {
+      message.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+      submit.disabled = false;
+      submit.textContent = "حفظ الإعلان";
+    }
+  };
+  target.querySelectorAll("[data-announcement-status]").forEach((button) => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        const isActive = button.dataset.active === "1";
+        await api(`/announcements/${button.dataset.announcementStatus}/status`, { method: "PUT", body: JSON.stringify({ isActive }) });
+        toast(isActive ? "تم نشر الإعلان، وإيقاف أي إعلان سابق." : "تم إيقاف الإعلان.");
+        await renderActivityPanel("announcements");
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message);
+      }
+    };
+  });
+  target.querySelectorAll("[data-announcement-delete]").forEach((button) => {
+    button.onclick = () => confirmAction("حذف هذا الإعلان نهائيًا مع صورته؟", async () => {
+      await api(`/announcements/${button.dataset.announcementDelete}`, { method: "DELETE" });
+      toast("تم حذف الإعلان.");
+      await renderActivityPanel("announcements");
+    });
+  });
+}
+
+async function renderActivity(target = contentEl) {
+  const logs = await api("/data/activity-log");
+  target.innerHTML = `
     <div class="card">
       ${
         logs.length
@@ -2868,6 +3527,1102 @@ async function renderActivity() {
       }
     </div>
   `;
+}
+
+// ==========================================================================
+// تخطيط المعلم
+// ==========================================================================
+const TEACHER_PLANNING_SECTIONS = {
+  "semester-plans": {
+    icon: "🗓️",
+    title: "الخطط الفصلية",
+    hint: "مساحة تنظيم الخطط الفصلية وربطها بالعام الدراسي والترم.",
+  },
+  "curriculum-distribution": {
+    icon: "📚",
+    title: "توزيع المنهج",
+    hint: "مساحة تنظيم توزيع وحدات ودروس المنهج على أسابيع الفصل الدراسي.",
+  },
+  strategies: {
+    icon: "💡",
+    title: "الاستراتيجيات",
+    hint: "مساحة تنظيم استراتيجيات التدريس المرتبطة بالتخطيط والدروس.",
+  },
+  "interactive-presentations": {
+    icon: "🖥️",
+    title: "العروض التفاعلية",
+    hint: "مساحة إعداد وتنظيم العروض التفاعلية المستخدمة داخل الحصص.",
+  },
+  "professional-community": {
+    icon: "🤝",
+    title: "المجتمع المهني",
+    hint: "مساحة خاصة داخل حسابكِ لتنظيم مواد التطوير المهني ومراجعكِ؛ لا تُشارك تلقائيًا مع أي معلمة أخرى.",
+  },
+  "planning-settings": {
+    icon: "⚙️",
+    title: "إعداد التخطيط",
+    hint: "مساحة تهيئة بيانات التخطيط وخياراته بما يناسب احتياجكِ.",
+  },
+};
+
+let teacherPlanningMode = "semester-plans";
+let teacherPlanningState = { migrationReady: true, items: [], classes: [], loaded: false };
+let strategyReportState = { migrationReady: true, items: [], loaded: false };
+const teacherPlanningSearchState = {
+  "semester-plans": "",
+  "curriculum-distribution": "",
+  strategies: "",
+  "interactive-presentations": "",
+};
+
+const PLANNING_DESTINATION_LABELS = {
+  "library-worksheets": "أوراق العمل", "library-training": "التدريبات", "library-videos": "الفيديوهات",
+  "semester-plans": "الخطط الفصلية",
+  "curriculum-distribution": "توزيع المنهج",
+  strategies: "الاستراتيجيات",
+  "interactive-presentations": "العروض التفاعلية",
+  "professional-community": "المجتمع المهني · تنظيم خاص",
+};
+const PLANNING_CONTENT_LABELS = { presentation: "عرض تقديمي", activity: "نشاط", explanation: "شرح", game: "لعبة" };
+const PLANNING_SOURCE_LABELS = { video: "فيديو", html: "HTML", zip: "حزمة ZIP", pdf: "PDF", image: "صورة" };
+
+function teacherPlanningTabs() {
+  return `<div class="student-panel-tabs teacher-planning-tabs" role="tablist" aria-label="أقسام تخطيط المعلم">
+    ${Object.entries(TEACHER_PLANNING_SECTIONS).map(([key, value]) => `<button class="tab-btn ${teacherPlanningMode === key ? "active" : ""}" type="button" role="tab" aria-selected="${teacherPlanningMode === key}" data-teacher-planning="${key}">${value.title}</button>`).join("")}
+  </div>`;
+}
+
+function planningContentFallback(item) {
+  const visual = {
+    html: { extension: "HTML", symbol: "</>", detail: "صفحة ويب" },
+    zip: { extension: "ZIP", symbol: "⋮", detail: "حزمة ويب" },
+    pdf: { extension: "PDF", symbol: "≡", detail: "مستند" },
+    image: { extension: "IMG", symbol: "▧", detail: "صورة" },
+  }[item.sourceType] || { extension: "FILE", symbol: "◇", detail: "ملف" };
+  return `<div class="planning-cover-fallback source-${escapeHtml(item.sourceType)}">
+    <div class="planning-file-visual" aria-hidden="true"><i></i><b>${visual.symbol}</b><strong>${visual.extension}</strong><span></span><span></span></div>
+    <div class="planning-fallback-copy"><strong>${escapeHtml(visual.detail)}</strong><small>${escapeHtml(PLANNING_CONTENT_LABELS[item.contentType] || item.contentType)}</small></div>
+  </div>`;
+}
+
+function formatPlanningNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? new Intl.NumberFormat("ar-SA", { useGrouping: false }).format(number) : "—";
+}
+
+function planningPresentationCard(item) {
+  const published = item.status === "published" && Number(item.publishedClassCount || 0) > 0;
+  const unitNumber = formatPlanningNumber(item.unitNumber);
+  const lessonNumber = formatPlanningNumber(item.lessonNumber);
+  return `<article class="card teacher-game-card planning-presentation-game-card" data-planning-presentation="${item.id}">
+    <div class="teacher-game-lesson-number" aria-label="الوحدة ${escapeHtml(unitNumber)}، الدرس ${escapeHtml(lessonNumber)}">${escapeHtml(unitNumber)}-${escapeHtml(lessonNumber)}</div>
+    <div class="teacher-game-copy">
+      <div class="planning-presentation-kicker"><span>${escapeHtml(PLANNING_CONTENT_LABELS[item.contentType] || item.contentType)}</span><span>${escapeHtml(PLANNING_SOURCE_LABELS[item.sourceType] || item.sourceType)}</span></div>
+      <h3>${escapeHtml(item.name)}</h3>
+      <p class="planning-presentation-lesson">${escapeHtml(item.lessonName)}</p>
+      <div class="teacher-game-publication-row"><span class="teacher-game-publication-status${published ? " is-published" : " is-unpublished"}" role="status">${published ? `منشور · ${formatPlanningNumber(item.publishedClassCount || 0)} فصل` : "غير منشور"}</span></div>
+      <div class="teacher-game-features" aria-label="بيانات العرض"><span>🎓 ${escapeHtml(item.stage)} · ${escapeHtml(item.gradeLabel)}</span><span>▣ ${escapeHtml(PLANNING_CONTENT_LABELS[item.contentType] || item.contentType)}</span><span>⌁ ${escapeHtml(PLANNING_SOURCE_LABELS[item.sourceType] || item.sourceType)}</span></div>
+      <div class="teacher-game-actions planning-presentation-primary-actions">
+        <a class="btn btn-primary" href="${escapeHtml(item.previewUrl)}" target="_blank" rel="noopener">فتح العرض</a>
+        <button class="btn btn-secondary" type="button" data-planning-copy-link="${escapeHtml(item.playerUrl)}">نسخ الرابط</button>
+        <button class="btn btn-outline" type="button" data-planning-settings="${item.id}">إعداد العرض</button>
+      </div>
+      <div class="planning-presentation-management">
+        <span>إدارة العرض</span>
+        <div>
+          <button class="btn btn-outline btn-sm" type="button" data-planning-publish="${item.id}">${published ? "تعديل النشر" : "نشر للطالبات"}</button>
+          <button class="btn btn-danger btn-sm" type="button" data-planning-delete="${item.id}">حذف</button>
+        </div>
+      </div>
+    </div>
+  </article>`;
+}
+
+function planningContentCard(item, options = {}) {
+  if (options.presentationGameLayout) return planningPresentationCard(item);
+  const published = item.status === "published" && Number(item.publishedClassCount || 0) > 0;
+  const parentPublished = Number(item.publishedParentClassCount || 0) > 0;
+  const cover = item.hasCover ? `<img src="${escapeHtml(item.coverUrl)}" alt="غلاف ${escapeHtml(item.name)}" loading="lazy">` : planningContentFallback(item);
+  return `<article class="planning-content-card">
+    <div class="planning-content-cover">${cover}<span class="planning-state ${published ? "published" : "draft"}">${published ? "منشور" : "مسودة"}</span><span class="planning-cover-format">${escapeHtml(PLANNING_SOURCE_LABELS[item.sourceType] || item.sourceType)}</span></div>
+    <div class="planning-content-body">
+      <div class="planning-card-kicker"><span class="content-kind">${escapeHtml(PLANNING_CONTENT_LABELS[item.contentType] || item.contentType)}</span><span>${escapeHtml(PLANNING_DESTINATION_LABELS[item.destination] || item.destination)}</span></div>
+      <h3>${escapeHtml(item.name)}</h3>
+      <p class="planning-school-scope"><span aria-hidden="true">◎</span>${escapeHtml(item.stage)} · ${escapeHtml(item.gradeLabel)}</p>
+      <div class="planning-lesson-summary"><div><span>الوحدة ${Number(item.unitNumber)}</span><span>الدرس ${Number(item.lessonNumber)}</span></div><strong>${escapeHtml(item.lessonName)}</strong></div>
+      <div class="planning-publication-summary"><span><small>الإتاحة للطالبات</small><strong>${published ? `${Number(item.publishedClassCount || 0)} فصل` : "غير منشور"}</strong></span>${item.destination === "semester-plans" ? `<span><small>الإتاحة لأولياء الأمور</small><strong>${parentPublished ? `${Number(item.publishedParentClassCount || 0)} فصل` : "غير منشور"}</strong></span>` : `<span><small>آخر تحديث</small><strong>${formatDate(item.updatedAt || item.createdAt)}</strong></span>`}</div>
+      <div class="planning-card-actions">
+        <a class="btn btn-outline btn-sm" href="${escapeHtml(item.previewUrl)}" target="_blank" rel="noopener">معاينة</a>
+        <div class="planning-card-publish-actions">
+          <button class="btn btn-primary btn-sm" type="button" data-planning-publish="${item.id}">${published ? "تعديل النشر" : "نشر للطالبات"}</button>
+          ${item.destination === "semester-plans" ? `<button class="btn btn-outline btn-sm planning-parent-publish-button" type="button" data-planning-publish-parents="${item.id}" ${teacherPlanningState.parentPublicationReady ? "" : `disabled title="يلزم تشغيل ${escapeHtml(teacherPlanningState.parentPublicationMigration || "ترحيل نشر أولياء الأمور")}"`}>${parentPublished ? "تعديل نشر أولياء الأمور" : "نشر لأولياء الأمور"}</button>` : ""}
+          <button class="btn btn-outline btn-sm" type="button" data-planning-settings="${item.id}">إعدادات</button>
+        </div>
+        <button class="btn btn-danger btn-sm" type="button" data-planning-delete="${item.id}">حذف</button>
+      </div>
+    </div>
+  </article>`;
+}
+
+function planningContentLibrary(items, emptyTitle = "لا يوجد محتوى هنا بعد", options = {}) {
+  const isSearchEmpty = Boolean(String(options.searchQuery || "").trim());
+  return items.length
+    ? `<div class="planning-content-grid${options.list ? " planning-content-list" : ""}">${items.map((item) => planningContentCard(item, options)).join("")}</div>`
+    : isSearchEmpty
+      ? `<div class="planning-library-empty planning-search-empty"><span aria-hidden="true">⌕</span><h3>لا توجد نتائج مطابقة لبحثك</h3><p>جرّبي اسمًا آخر أو امسحي عبارة البحث لعرض كل المحتوى.</p><button class="btn btn-outline" type="button" data-planning-search-clear>مسح البحث</button></div>`
+      : `<div class="planning-library-empty"><span aria-hidden="true">▧</span><h3>${escapeHtml(emptyTitle)}</h3><p>ارفعي محتوى من «إعداد التخطيط» وحددي هذه الوجهة ليظهر هنا.</p><button class="btn btn-primary" type="button" data-open-planning-studio>فتح استديو المحتوى</button></div>`;
+}
+
+function normalizePlanningSearch(value) {
+  const digits = { "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4", "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9", "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4", "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9" };
+  return String(value ?? "")
+    .replace(/[٠-٩۰-۹]/g, (digit) => digits[digit])
+    .replace(/[\u0640\u064B-\u065F\u0670]/g, "")
+    .toLocaleLowerCase("ar")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function filterPlanningContent(items, query) {
+  const terms = normalizePlanningSearch(query).split(" ").filter(Boolean);
+  if (!terms.length) return items;
+  return items.filter((item) => {
+    const haystack = normalizePlanningSearch([
+      item.name,
+      item.stage,
+      item.gradeLabel,
+      item.lessonName,
+      item.unitNumber,
+      item.lessonNumber,
+      `الوحدة ${item.unitNumber}`,
+      `الدرس ${item.lessonNumber}`,
+      item.contentType,
+      PLANNING_CONTENT_LABELS[item.contentType] || "",
+      item.sourceType,
+      PLANNING_SOURCE_LABELS[item.sourceType] || "",
+    ].join(" "));
+    return terms.every((term) => haystack.includes(term));
+  });
+}
+
+function planningSearchLibrary(items, section, mode) {
+  const query = teacherPlanningSearchState[mode] || "";
+  const filteredItems = filterPlanningContent(items, query);
+  const libraryOptions = { list: true, searchQuery: query, presentationGameLayout: mode === "interactive-presentations" };
+  return `<section class="planning-library-toolbar" aria-labelledby="planningLibraryTitle">
+    <div class="planning-library-title"><small>مكتبتكِ</small><h2 id="planningLibraryTitle">محتوى ${escapeHtml(section.title)}</h2><span id="planningLibraryCount">${filteredItems.length} من ${items.length} محتوى</span></div>
+    <form class="planning-library-search" id="planningLibrarySearchForm" role="search">
+      <label for="planningLibrarySearch"><span aria-hidden="true">⌕</span><input id="planningLibrarySearch" type="search" autocomplete="off" value="${escapeHtml(query)}" placeholder="ابحثي بالاسم، المرحلة، الصف، الوحدة أو الدرس" aria-label="البحث في ${escapeHtml(section.title)}"></label>
+      <button class="btn btn-primary" type="submit">بحث</button>
+      <button class="btn btn-outline planning-search-clear" type="button" data-planning-search-clear ${query ? "" : "hidden"}>مسح</button>
+    </form>
+  </section>
+  <div id="planningLibraryResults" aria-live="polite">${planningContentLibrary(filteredItems, `لا يوجد محتوى في ${section.title}`, libraryOptions)}</div>`;
+}
+
+function bindPlanningLibrarySearch(mode, items, section) {
+  const form = document.getElementById("planningLibrarySearchForm");
+  const input = document.getElementById("planningLibrarySearch");
+  const results = document.getElementById("planningLibraryResults");
+  if (!form || !input || !results) return;
+
+  const renderResults = () => {
+    const query = input.value;
+    teacherPlanningSearchState[mode] = query;
+    const filteredItems = filterPlanningContent(items, query);
+    results.innerHTML = planningContentLibrary(filteredItems, `لا يوجد محتوى في ${section.title}`, { list: true, searchQuery: query, presentationGameLayout: mode === "interactive-presentations" });
+    const count = document.getElementById("planningLibraryCount");
+    if (count) count.textContent = `${filteredItems.length} من ${items.length} محتوى`;
+    form.querySelector("[data-planning-search-clear]")?.toggleAttribute("hidden", !query.trim());
+    bindPlanningCards();
+    bindPlanningTabs();
+    results.querySelector("[data-planning-search-clear]")?.addEventListener("click", clearSearch);
+  };
+  const clearSearch = () => {
+    input.value = "";
+    renderResults();
+    input.focus();
+  };
+
+  input.addEventListener("input", renderResults);
+  form.addEventListener("submit", (event) => { event.preventDefault();renderResults(); });
+  form.querySelector("[data-planning-search-clear]")?.addEventListener("click", clearSearch);
+  results.querySelector("[data-planning-search-clear]")?.addEventListener("click", clearSearch);
+}
+
+const PROFESSIONAL_COMMUNITY_REPORT_STORAGE_VERSION = 1;
+const PROFESSIONAL_COMMUNITY_REPORT_STORAGE_LIMIT = 100;
+const PROFESSIONAL_COMMUNITY_REPORT_TYPES = Object.freeze({
+  "professional-community": Object.freeze({
+    badge: "مجتمع مهني",
+    title: "تقرير مجتمع تعلم مهني",
+    kicker: "توثيق جلسة مهنية",
+    detailsHeading: "بيانات الجلسة",
+    numberLabel: "رقم الجلسة",
+    numberNoun: "الجلسة",
+    topicLabel: "موضوع الجلسة",
+    topicPlaceholder: "اكتبي موضوع الجلسة",
+    objectivesLabel: "أهداف الجلسة",
+    outcomesLabel: "نتائج الجلسة",
+    facilitatorLabel: "منفذة الجلسة",
+  }),
+  workshop: Object.freeze({
+    badge: "ورشة عمل",
+    title: "تقرير ورشة عمل",
+    kicker: "توثيق ورشة عمل",
+    detailsHeading: "بيانات الورشة",
+    numberLabel: "رقم الورشة",
+    numberNoun: "الورشة",
+    topicLabel: "عنوان الورشة",
+    topicPlaceholder: "اكتبي عنوان الورشة",
+    objectivesLabel: "أهداف الورشة",
+    outcomesLabel: "نتائج الورشة",
+    facilitatorLabel: "منفذة الورشة",
+  }),
+});
+
+function normalizeProfessionalCommunityReportType(value) {
+  return value === "workshop" ? "workshop" : "professional-community";
+}
+
+function professionalCommunityReportTypeMeta(value) {
+  return PROFESSIONAL_COMMUNITY_REPORT_TYPES[normalizeProfessionalCommunityReportType(value)];
+}
+
+function professionalCommunityReportStorageKey() {
+  const accountKey = currentTeacher?.id || currentTeacher?.email || "guest";
+  return `madarProfessionalCommunityReports:v${PROFESSIONAL_COMMUNITY_REPORT_STORAGE_VERSION}:${String(accountKey)}`;
+}
+
+function professionalCommunityHijriDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const localNoon = new Date(year, month - 1, day, 12, 0, 0, 0);
+  if (localNoon.getFullYear() !== year || localNoon.getMonth() !== month - 1 || localNoon.getDate() !== day) return "";
+  try {
+    const formatted = new Intl.DateTimeFormat("ar-SA-u-ca-islamic-umalqura", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(localNoon);
+    return formatted.includes("هـ") ? formatted : `${formatted} هـ`;
+  } catch (_) { return ""; }
+}
+
+function normalizeProfessionalCommunityReport(item = {}) {
+  const text = (value, maxLength = 1000) => String(value ?? "").slice(0, maxLength);
+  const textList = (value, maxItems = 100) => Array.isArray(value)
+    ? value.slice(0, maxItems).map((entry) => text(entry, 1000))
+    : [];
+  const attendees = Array.isArray(item.attendees)
+    ? item.attendees.slice(0, 100).map((entry) => ({
+      name: text(entry?.name, 500),
+      signature: text(entry?.signature, 500),
+    }))
+    : [];
+  return {
+    id: text(item.id, 120),
+    reportType: normalizeProfessionalCommunityReportType(item.reportType),
+    createdAt: text(item.createdAt, 40),
+    updatedAt: text(item.updatedAt, 40),
+    sessionNumber: text(item.sessionNumber, 40),
+    topic: text(item.topic, 500),
+    targetAudience: text(item.targetAudience, 300),
+    day: text(item.day, 60),
+    date: text(item.date, 40),
+    hijriDate: text(item.hijriDate, 120),
+    location: text(item.location, 300),
+    objectives: textList(item.objectives),
+    outcomes: textList(item.outcomes),
+    attendees,
+    facilitatorName: text(item.facilitatorName, 300),
+    facilitatorSignature: text(item.facilitatorSignature, 300),
+    leaderName: text(item.leaderName, 300),
+    leaderSignature: text(item.leaderSignature, 300),
+  };
+}
+
+function readProfessionalCommunityReports() {
+  try {
+    const raw = localStorage.getItem(professionalCommunityReportStorageKey());
+    if (!raw) return { items: [], error: "" };
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error("Invalid report collection");
+    return {
+      items: parsed
+        .filter((item) => item && typeof item === "object" && item.id)
+        .slice(0, PROFESSIONAL_COMMUNITY_REPORT_STORAGE_LIMIT)
+        .map(normalizeProfessionalCommunityReport),
+      error: "",
+    };
+  } catch (_) {
+    return { items: [], error: "تعذر قراءة التقارير المحفوظة على هذا الجهاز." };
+  }
+}
+
+function writeProfessionalCommunityReports(items) {
+  try {
+    const normalized = items
+      .slice(0, PROFESSIONAL_COMMUNITY_REPORT_STORAGE_LIMIT)
+      .map(normalizeProfessionalCommunityReport);
+    localStorage.setItem(professionalCommunityReportStorageKey(), JSON.stringify(normalized));
+    return normalized;
+  } catch (_) {
+    throw new Error("تعذر حفظ التقرير على هذا الجهاز. تحققي من مساحة التخزين المتاحة ثم أعيدي المحاولة.");
+  }
+}
+
+function upsertProfessionalCommunityReport(data) {
+  const state = readProfessionalCommunityReports();
+  const items = state.error ? [] : [...state.items];
+  const now = new Date().toISOString();
+  const existingIndex = data.id ? items.findIndex((item) => item.id === data.id) : -1;
+  const existing = existingIndex >= 0 ? items[existingIndex] : null;
+  const id = existing?.id || data.id || (globalThis.crypto?.randomUUID?.() ?? `report-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
+  const report = normalizeProfessionalCommunityReport({
+    ...data,
+    id,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  });
+  if (existingIndex >= 0) items.splice(existingIndex, 1);
+  items.unshift(report);
+  writeProfessionalCommunityReports(items);
+  return report;
+}
+
+function professionalCommunityReportCard(item) {
+  const reportType = normalizeProfessionalCommunityReportType(item.reportType);
+  const reportMeta = professionalCommunityReportTypeMeta(reportType);
+  const hijriDate = professionalCommunityHijriDate(item.date);
+  const primaryDetail = item.targetAudience
+    ? `<span aria-hidden="true">◎</span> الفئة المنفذة: <strong>${escapeHtml(item.targetAudience)}</strong>`
+    : `<span aria-hidden="true">⌖</span> مقر التنفيذ: <strong>${escapeHtml(item.location || "—")}</strong>`;
+  return `<article class="professional-report-card">
+    <div class="professional-report-card-date">
+      <small>التاريخ الميلادي</small>
+      <strong>${escapeHtml(formatDate(item.date))}</strong>
+      <span class="professional-report-card-hijri"><small>هجري</small><b>${escapeHtml(hijriDate || "—")}</b></span>
+    </div>
+    <div class="professional-report-card-copy">
+      <div class="professional-report-card-kicker"><span class="professional-report-type-badge${reportType === "workshop" ? " is-workshop" : ""}">${escapeHtml(reportMeta.badge)}</span><span>${escapeHtml(reportMeta.numberNoun)} ${escapeHtml(item.sessionNumber || "—")}</span><span>${escapeHtml(item.location || "مقر غير محدد")}</span></div>
+      <h3>${escapeHtml(item.topic || reportMeta.title)}</h3>
+      <p>${primaryDetail}</p>
+    </div>
+    <div class="professional-report-card-actions">
+      <button class="btn btn-primary" type="button" data-open-professional-saved-report="${escapeHtml(item.id)}">فتح التقرير</button>
+      <button class="btn btn-danger btn-sm" type="button" data-delete-professional-report="${escapeHtml(item.id)}">حذف</button>
+    </div>
+  </article>`;
+}
+
+function professionalCommunityReportLibrary() {
+  const state = readProfessionalCommunityReports();
+  const body = state.error
+    ? `<div class="professional-report-library-state is-error" role="alert"><span aria-hidden="true">!</span><div><h3>تعذر عرض السجل</h3><p>${escapeHtml(state.error)}</p></div></div>`
+    : state.items.length
+      ? `<div class="professional-report-list">${state.items.map(professionalCommunityReportCard).join("")}</div>`
+      : `<div class="professional-report-library-state"><span aria-hidden="true">▤</span><div><h3>لا توجد تقارير محفوظة بعد</h3><p>أنشئي تقريرًا واحفظيه ليظهر هنا ويمكنكِ فتحه وطباعته لاحقًا.</p></div><button class="btn btn-outline" type="button" data-open-professional-report>إنشاء أول تقرير</button></div>`;
+  return `<section class="professional-report-library" id="professionalReportLibrary" aria-labelledby="professionalReportLibraryTitle">
+    <header><div><small>سجل التنفيذ</small><h2 id="professionalReportLibraryTitle">تقارير المجتمع المهني</h2></div><span>${formatPlanningNumber(state.items.length)} تقرير</span></header>
+    ${body}
+  </section>`;
+}
+
+function refreshProfessionalCommunityReportLibrary() {
+  const current = document.getElementById("professionalReportLibrary");
+  if (!current) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = professionalCommunityReportLibrary();
+  current.replaceWith(wrapper.firstElementChild);
+  bindProfessionalCommunityReportLibrary();
+}
+
+function bindProfessionalCommunityReportLibrary() {
+  contentEl.querySelectorAll("[data-open-professional-saved-report]").forEach((button) => {
+    button.onclick = () => openProfessionalCommunityReportBuilder(button.dataset.openProfessionalSavedReport).catch((error) => toast(error.message));
+  });
+  contentEl.querySelectorAll("[data-delete-professional-report]").forEach((button) => {
+    button.onclick = () => {
+      const id = button.dataset.deleteProfessionalReport;
+      const state = readProfessionalCommunityReports();
+      const report = state.items.find((item) => item.id === id);
+      if (!report) { toast("لم يعد التقرير موجودًا.");refreshProfessionalCommunityReportLibrary();return; }
+      const reportMeta = professionalCommunityReportTypeMeta(report.reportType);
+      if (!window.confirm(`هل تريدين حذف تقرير «${report.topic || reportMeta.title}»؟`)) return;
+      try {
+        writeProfessionalCommunityReports(state.items.filter((item) => item.id !== id));
+        refreshProfessionalCommunityReportLibrary();
+        toast("تم حذف التقرير.");
+      } catch (error) { toast(error.message); }
+    };
+  });
+}
+
+function bindPlanningTabs() {
+  contentEl.querySelectorAll("[data-teacher-planning]").forEach((button) => {
+    button.onclick = () => renderTeacherPlanning(button.dataset.teacherPlanning).catch((error) => {
+      contentEl.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`;
+    });
+  });
+  contentEl.querySelectorAll("[data-open-planning-studio]").forEach((button) => { button.onclick = () => renderTeacherPlanning("planning-settings"); });
+  contentEl.querySelectorAll("[data-open-strategy-report]").forEach((button) => { button.onclick = openStrategyReportModal; });
+  contentEl.querySelectorAll("[data-open-professional-report]").forEach((button) => {
+    button.onclick = () => openProfessionalCommunityReportBuilder("", button.dataset.openProfessionalReport).catch((error) => toast(error.message));
+  });
+  bindProfessionalCommunityReportLibrary();
+}
+
+function professionalCommunityPointHtml(kind, index, value = "", reportType = "professional-community") {
+  const reportMeta = professionalCommunityReportTypeMeta(reportType);
+  const sectionLabel = kind === "objectives" ? reportMeta.objectivesLabel : reportMeta.outcomesLabel;
+  return `<li class="pl-report-point-item">
+    <span aria-hidden="true"></span>
+    <label><span class="sr-only">${sectionLabel}، النقطة ${index + 1}</span><textarea rows="1" maxlength="1000" placeholder="اكتبي النقطة هنا...">${escapeHtml(value)}</textarea></label>
+    <button class="report-remove-control" type="button" data-remove-report-point aria-label="حذف النقطة">×</button>
+  </li>`;
+}
+
+function professionalCommunityAttendeeHtml(index, attendee = {}) {
+  return `<tr>
+    <td class="report-row-number">${formatPlanningNumber(index + 1)}</td>
+    <td><label><span class="sr-only">اسم المعلمة ${index + 1}</span><textarea rows="1" maxlength="500" placeholder="اسم المعلمة">${escapeHtml(attendee.name || "")}</textarea></label></td>
+    <td><label><span class="sr-only">توقيع المعلمة ${index + 1}</span><textarea rows="1" maxlength="500" aria-label="توقيع المعلمة ${index + 1}">${escapeHtml(attendee.signature || "")}</textarea></label></td>
+    <td class="report-row-action"><button class="report-remove-control" type="button" data-remove-report-attendee aria-label="حذف صف المعلمة ${index + 1}">×</button></td>
+  </tr>`;
+}
+
+async function openProfessionalCommunityReportBuilder(reportId = "", requestedReportType = "professional-community") {
+  const savedState = readProfessionalCommunityReports();
+  const savedReport = reportId ? savedState.items.find((item) => item.id === reportId) : null;
+  if (reportId && !savedReport) { toast("لم يعد التقرير المحفوظ موجودًا.");refreshProfessionalCommunityReportLibrary();return; }
+  const reportType = normalizeProfessionalCommunityReportType(savedReport?.reportType || requestedReportType);
+  const reportMeta = professionalCommunityReportTypeMeta(reportType);
+  let settings = {};
+  try { settings = await loadSchoolSettings(); } catch (_) { settings = {}; }
+  const today = savedReport?.date || strategyReportToday();
+  const hijriDate = professionalCommunityHijriDate(today);
+  const dayName = savedReport?.day || new Intl.DateTimeFormat("ar-SA", { weekday: "long" }).format(new Date());
+  const teacherName = settings.teacherName || currentTeacher?.name || "";
+  const visionLogo = settings.visionLogoUrl || "/vision-2030-logo.png";
+  const madarLogo = settings.madarLogoUrl || "/assets/print/madar-official-logo-transparent.png";
+  const educationDepartment = settings.educationDepartment || "—";
+  const educationOffice = settings.educationOffice || "—";
+  const schoolName = settings.schoolName || "—";
+  const objectiveValues = savedReport?.objectives?.length ? savedReport.objectives : Array.from({ length: 3 }, () => "");
+  const outcomeValues = savedReport?.outcomes?.length ? savedReport.outcomes : Array.from({ length: 3 }, () => "");
+  const attendeeValues = savedReport?.attendees?.length ? savedReport.attendees : Array.from({ length: 5 }, () => ({ name: "", signature: "" }));
+  const objectives = objectiveValues.map((value, index) => professionalCommunityPointHtml("objectives", index, value, reportType)).join("");
+  const outcomes = outcomeValues.map((value, index) => professionalCommunityPointHtml("outcomes", index, value, reportType)).join("");
+  const attendees = attendeeValues.map((attendee, index) => professionalCommunityAttendeeHtml(index, attendee)).join("");
+
+  openModal(`<section class="professional-report-builder" aria-labelledby="professionalReportBuilderTitle">
+    <header class="report-builder-toolbar">
+      <div class="report-builder-title">
+        <span class="report-builder-mark" aria-hidden="true">✦</span>
+        <div><small>منشئ مستند رسمي</small><h2 id="professionalReportBuilderTitle">${escapeHtml(reportMeta.title)}</h2><p>عبّئي الحقول ثم اطبعي التقرير أو احفظيه بصيغة PDF.</p></div>
+      </div>
+      <div class="report-builder-actions">
+        <button class="btn btn-outline" id="clearProfessionalReport" type="button">تفريغ الحقول</button>
+        <button class="btn btn-secondary report-save-button" id="saveProfessionalReport" type="button"><span aria-hidden="true">✓</span> حفظ</button>
+        <button class="btn btn-primary report-print-button" id="printProfessionalReport" type="button"><span aria-hidden="true">▣</span> طباعة التقرير</button>
+        <button class="report-builder-close" id="closeProfessionalReport" type="button" aria-label="إغلاق منشئ التقرير">×</button>
+      </div>
+    </header>
+    <div class="report-builder-panel-top" role="note"><span aria-hidden="true">A4</span><p><strong>معاينة مباشرة</strong> جميع الحقول داخل الورقة قابلة للكتابة، ولن تظهر أدوات الإضافة والحذف عند الطباعة.</p></div>
+    <div class="professional-report-canvas">
+      <div class="professional-report-viewport">
+      <form class="pl-report-paper" id="professionalCommunityReport" data-report-type="${escapeHtml(reportType)}" autocomplete="off">
+        <div class="pl-report-inner">
+          <header class="pl-report-official-header">
+            <section class="pl-report-authority" aria-label="بيانات الجهة التعليمية">
+              <strong>المملكة العربية السعودية</strong>
+              <dl>
+                <div><dt>إدارة التعليم</dt><dd>${escapeHtml(educationDepartment)}</dd></div>
+                <div><dt>مكتب التعليم</dt><dd>${escapeHtml(educationOffice)}</dd></div>
+                <div><dt>اسم المدرسة</dt><dd>${escapeHtml(schoolName)}</dd></div>
+              </dl>
+            </section>
+            <section class="pl-report-title-badge">
+              <small>${escapeHtml(reportMeta.kicker)}</small>
+              <h1>${escapeHtml(reportMeta.title)}</h1>
+              <i aria-hidden="true"></i>
+            </section>
+            <section class="pl-report-header-logos" aria-label="هوية منصة مدار ورؤية السعودية 2030">
+              <img class="pl-report-madar-logo" src="${escapeHtml(madarLogo)}" alt="شعار منصة مدار">
+              <span aria-hidden="true"></span>
+              <img class="pl-report-vision-logo" src="${escapeHtml(visionLogo)}" alt="شعار رؤية السعودية 2030">
+            </section>
+          </header>
+
+          <section class="pl-report-session" aria-labelledby="plReportSessionTitle">
+            <div class="pl-report-section-heading"><span aria-hidden="true">01</span><h2 id="plReportSessionTitle">${escapeHtml(reportMeta.detailsHeading)}</h2><i></i></div>
+            <div class="pl-report-data-grid">
+              <label><span>${escapeHtml(reportMeta.numberLabel)}</span><input name="sessionNumber" type="text" inputmode="numeric" maxlength="20" value="${escapeHtml(savedReport?.sessionNumber || "")}" placeholder="مثال: ٠١"></label>
+              <label class="report-topic-field"><span>${escapeHtml(reportMeta.topicLabel)}</span><input name="topic" type="text" maxlength="220" value="${escapeHtml(savedReport?.topic || "")}" placeholder="${escapeHtml(reportMeta.topicPlaceholder)}"></label>
+              <label><span>الفئة المنفذة</span><input name="targetAudience" type="text" maxlength="160" value="${escapeHtml(savedReport?.targetAudience || "")}" placeholder="مثال: معلمات الرياضيات"></label>
+              <label><span>اليوم</span><input name="day" type="text" maxlength="30" value="${escapeHtml(dayName)}" placeholder="اليوم"></label>
+              <label><span>مقر التنفيذ</span><input name="location" type="text" maxlength="160" value="${escapeHtml(savedReport?.location || "")}" placeholder="مثال: مركز مصادر التعلم"></label>
+              <label class="report-gregorian-date-field"><span>التاريخ الميلادي</span><input name="date" type="date" value="${escapeHtml(today)}"></label>
+              <label class="report-hijri-date-field"><span>التاريخ الهجري <small>أم القرى</small></span><input name="hijriDate" type="text" value="${escapeHtml(hijriDate)}" placeholder="يُحتسب تلقائيًا" readonly aria-readonly="true"></label>
+            </div>
+          </section>
+
+          <div class="pl-report-summary-grid">
+            <section class="pl-report-points" aria-labelledby="plReportObjectivesTitle">
+              <div class="pl-report-section-heading"><span aria-hidden="true">02</span><h2 id="plReportObjectivesTitle">${escapeHtml(reportMeta.objectivesLabel)}</h2><i></i></div>
+              <ol id="professionalReportObjectives">${objectives}</ol>
+              <button class="report-editor-control" type="button" data-add-report-point="objectives"><span aria-hidden="true">+</span> إضافة نقطة</button>
+            </section>
+            <section class="pl-report-points" aria-labelledby="plReportOutcomesTitle">
+              <div class="pl-report-section-heading"><span aria-hidden="true">03</span><h2 id="plReportOutcomesTitle">${escapeHtml(reportMeta.outcomesLabel)}</h2><i></i></div>
+              <ol id="professionalReportOutcomes">${outcomes}</ol>
+              <button class="report-editor-control" type="button" data-add-report-point="outcomes"><span aria-hidden="true">+</span> إضافة نقطة</button>
+            </section>
+          </div>
+
+          <section class="pl-report-attendance" aria-labelledby="plReportAttendanceTitle">
+            <div class="pl-report-section-heading"><span aria-hidden="true">04</span><h2 id="plReportAttendanceTitle">توقيع الحاضرات</h2><i></i></div>
+            <table>
+              <thead><tr><th aria-label="الرقم">م</th><th class="report-attendance-heading">اسم المعلمة</th><th class="report-attendance-heading">التوقيع</th><th class="report-row-action" aria-label="إجراءات"></th></tr></thead>
+              <tbody id="professionalReportAttendees">${attendees}</tbody>
+            </table>
+            <button class="report-editor-control" type="button" data-add-report-attendee><span aria-hidden="true">+</span> إضافة صف</button>
+          </section>
+
+          <section class="pl-report-approval" aria-labelledby="plReportApprovalTitle">
+            <div class="pl-report-section-heading"><span aria-hidden="true">05</span><h2 id="plReportApprovalTitle">الاعتماد</h2><i></i></div>
+            <div class="pl-report-approval-grid">
+              <label><span>${escapeHtml(reportMeta.facilitatorLabel)}</span><input name="facilitatorName" type="text" maxlength="160" value="${escapeHtml(savedReport?.facilitatorName || teacherName)}" placeholder="اسم المنفذة"><small>التوقيع</small><input name="facilitatorSignature" type="text" maxlength="120" value="${escapeHtml(savedReport?.facilitatorSignature || "")}" aria-label="توقيع ${escapeHtml(reportMeta.facilitatorLabel)}"></label>
+              <label><span>مديرة المدرسة</span><input name="leaderName" type="text" maxlength="160" value="${escapeHtml(savedReport?.leaderName || settings.schoolLeaderName || "")}" placeholder="اسم المديرة"><small>التوقيع</small><input name="leaderSignature" type="text" maxlength="120" value="${escapeHtml(savedReport?.leaderSignature || "")}" aria-label="توقيع مديرة المدرسة"></label>
+              <div class="pl-report-stamp"><span>الختم الرسمي</span><div aria-label="مساحة الختم"></div></div>
+            </div>
+          </section>
+
+          <footer class="pl-report-footer">
+            <strong>مَدار</strong>
+            <span>منصة الرياضيات التفاعلية · توثيق مهني منظم</span>
+          </footer>
+        </div>
+      </form>
+      </div>
+    </div>
+  </section>`, "professional-report-modal");
+
+  const report = document.getElementById("professionalCommunityReport");
+  const reportCanvas = report.closest(".professional-report-canvas");
+  const reportViewport = report.closest(".professional-report-viewport");
+  const attendeeBody = document.getElementById("professionalReportAttendees");
+  const pointLists = {
+    objectives: document.getElementById("professionalReportObjectives"),
+    outcomes: document.getElementById("professionalReportOutcomes"),
+  };
+  const gregorianDateField = report.elements.namedItem("date");
+  const hijriDateField = report.elements.namedItem("hijriDate");
+  let currentReportId = savedReport?.id || "";
+  const renumberAttendees = () => {
+    [...attendeeBody.rows].forEach((row, index) => {
+      row.querySelector(".report-row-number").textContent = formatPlanningNumber(index + 1);
+      row.querySelectorAll(".sr-only").forEach((label, labelIndex) => { label.textContent = `${labelIndex ? "توقيع" : "اسم"} المعلمة ${index + 1}`; });
+      row.querySelector("[data-remove-report-attendee]")?.setAttribute("aria-label", `حذف صف المعلمة ${index + 1}`);
+    });
+  };
+  const renumberPoints = (list, kind) => {
+    [...list.children].forEach((item, index) => {
+      const label = kind === "objectives" ? reportMeta.objectivesLabel : reportMeta.outcomesLabel;
+      item.querySelector(".sr-only").textContent = `${label}، النقطة ${index + 1}`;
+    });
+  };
+
+  let previewFrame = 0;
+  const fitReportPreview = () => {
+    cancelAnimationFrame(previewFrame);
+    previewFrame = requestAnimationFrame(() => {
+      if (!report.isConnected) return;
+      const canvasStyle = getComputedStyle(reportCanvas);
+      const availableWidth = reportCanvas.clientWidth
+        - parseFloat(canvasStyle.paddingLeft || 0)
+        - parseFloat(canvasStyle.paddingRight || 0);
+      const scale = Math.min(1, Math.max(.35, availableWidth / report.offsetWidth));
+      report.style.setProperty("--report-preview-scale", String(scale));
+      reportViewport.style.width = `${Math.ceil(report.offsetWidth * scale)}px`;
+      reportViewport.style.height = `${Math.ceil(report.offsetHeight * scale)}px`;
+    });
+  };
+  const resizeReportTextarea = (field) => {
+    field.style.height = "auto";
+    field.style.height = `${field.scrollHeight}px`;
+  };
+  const resizeAllReportTextareas = () => {
+    report.querySelectorAll("textarea").forEach(resizeReportTextarea);
+    fitReportPreview();
+  };
+  const syncProfessionalCommunityHijriDate = () => {
+    hijriDateField.value = professionalCommunityHijriDate(gregorianDateField.value);
+  };
+  const previewObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fitReportPreview);
+  previewObserver?.observe(reportCanvas);
+  previewObserver?.observe(report);
+  window.addEventListener("resize", fitReportPreview);
+  const closeReportBuilder = () => {
+    previewObserver?.disconnect();
+    window.removeEventListener("resize", fitReportPreview);
+    cancelAnimationFrame(previewFrame);
+    modalRoot.onkeydown = null;
+    closeModal();
+  };
+  const reportOverlay = document.getElementById("modalOverlay");
+  reportOverlay.addEventListener("click", (event) => {
+    if (event.target === reportOverlay) event.stopImmediatePropagation();
+  }, true);
+  document.getElementById("closeProfessionalReport").onclick = closeReportBuilder;
+  document.getElementById("printProfessionalReport").onclick = () => window.print();
+  document.getElementById("saveProfessionalReport").onclick = () => {
+    syncProfessionalCommunityHijriDate();
+    const fieldValue = (name) => String(report.elements.namedItem(name)?.value || "").trim();
+    const data = {
+      id: currentReportId,
+      reportType,
+      sessionNumber: fieldValue("sessionNumber"),
+      topic: fieldValue("topic"),
+      targetAudience: fieldValue("targetAudience"),
+      day: fieldValue("day"),
+      date: fieldValue("date"),
+      hijriDate: fieldValue("hijriDate"),
+      location: fieldValue("location"),
+      objectives: [...pointLists.objectives.querySelectorAll("textarea")].map((field) => field.value.trim()),
+      outcomes: [...pointLists.outcomes.querySelectorAll("textarea")].map((field) => field.value.trim()),
+      attendees: [...attendeeBody.rows].map((row) => {
+        const fields = row.querySelectorAll("textarea");
+        return { name: fields[0]?.value.trim() || "", signature: fields[1]?.value.trim() || "" };
+      }),
+      facilitatorName: fieldValue("facilitatorName"),
+      facilitatorSignature: fieldValue("facilitatorSignature"),
+      leaderName: fieldValue("leaderName"),
+      leaderSignature: fieldValue("leaderSignature"),
+    };
+    const button = document.getElementById("saveProfessionalReport");
+    try {
+      const stored = upsertProfessionalCommunityReport(data);
+      currentReportId = stored.id;
+      button.innerHTML = '<span aria-hidden="true">✓</span> تم الحفظ';
+      refreshProfessionalCommunityReportLibrary();
+      toast(data.id ? "تم تحديث التقرير المحفوظ." : "تم حفظ التقرير في سجل التنفيذ.");
+      setTimeout(() => {
+        if (button.isConnected) button.innerHTML = '<span aria-hidden="true">✓</span> حفظ';
+      }, 1800);
+    } catch (error) { toast(error.message); }
+  };
+  document.getElementById("clearProfessionalReport").onclick = () => {
+    if (!window.confirm("هل تريدين تفريغ جميع حقول التقرير؟")) return;
+    report.querySelectorAll("input, textarea").forEach((field) => { field.value = ""; });
+    syncProfessionalCommunityHijriDate();
+    resizeAllReportTextareas();
+    toast("تم تفريغ حقول التقرير.");
+  };
+  report.addEventListener("input", (event) => {
+    if (event.target === gregorianDateField) syncProfessionalCommunityHijriDate();
+    if (!(event.target instanceof HTMLTextAreaElement)) return;
+    resizeReportTextarea(event.target);
+    fitReportPreview();
+  });
+  report.addEventListener("click", (event) => {
+    const addPointButton = event.target.closest("[data-add-report-point]");
+    if (addPointButton) {
+      const kind = addPointButton.dataset.addReportPoint;
+      const list = pointLists[kind];
+      if (!list) return;
+      list.insertAdjacentHTML("beforeend", professionalCommunityPointHtml(kind, list.children.length, "", reportType));
+      const field = list.lastElementChild.querySelector("textarea");
+      if (field) resizeReportTextarea(field);
+      fitReportPreview();
+      field?.focus();
+      return;
+    }
+    const removePointButton = event.target.closest("[data-remove-report-point]");
+    if (removePointButton) {
+      const list = removePointButton.closest("ol");
+      if (list.children.length <= 1) {
+        const field = removePointButton.closest("li").querySelector("textarea");
+        field.value = "";
+        resizeReportTextarea(field);
+        fitReportPreview();
+        return;
+      }
+      removePointButton.closest("li").remove();
+      const kind = list.id === "professionalReportObjectives" ? "objectives" : "outcomes";
+      renumberPoints(list, kind);
+      fitReportPreview();
+      return;
+    }
+    if (event.target.closest("[data-add-report-attendee]")) {
+      attendeeBody.insertAdjacentHTML("beforeend", professionalCommunityAttendeeHtml(attendeeBody.rows.length));
+      attendeeBody.lastElementChild.querySelectorAll("textarea").forEach(resizeReportTextarea);
+      fitReportPreview();
+      attendeeBody.lastElementChild.querySelector("textarea")?.focus();
+      return;
+    }
+    const removeAttendeeButton = event.target.closest("[data-remove-report-attendee]");
+    if (removeAttendeeButton) {
+      if (attendeeBody.rows.length <= 1) {
+        removeAttendeeButton.closest("tr").querySelectorAll("textarea").forEach((field) => { field.value = "";resizeReportTextarea(field); });
+        fitReportPreview();
+        return;
+      }
+      removeAttendeeButton.closest("tr").remove();
+      renumberAttendees();
+      fitReportPreview();
+    }
+  });
+  modalRoot.onkeydown = (event) => { if (event.key === "Escape") closeReportBuilder(); };
+  requestAnimationFrame(resizeAllReportTextareas);
+  document.getElementById("closeProfessionalReport").focus();
+}
+
+function strategyReportCard(item) {
+  return `<article class="strategy-report-card">
+    <div class="strategy-report-date"><small>تاريخ التنفيذ</small><strong>${escapeHtml(formatDate(item.implementationDate))}</strong></div>
+    <div class="strategy-report-copy">
+      <div class="strategy-report-kicker"><span>${escapeHtml(item.strategyName)}</span><span>${formatPlanningNumber(item.evidenceCount)} شاهد</span></div>
+      <h3>${escapeHtml(item.lessonName)}</h3>
+      <p><span aria-hidden="true">◎</span> الفئة المستهدفة: <strong>${escapeHtml(item.targetAudience)}</strong></p>
+    </div>
+    <div class="strategy-report-actions">
+      <a class="btn btn-primary" href="${escapeHtml(item.reportUrl)}" target="_blank" rel="noopener">فتح التقرير</a>
+      <button class="btn btn-danger btn-sm" type="button" data-strategy-report-delete="${item.id}">حذف</button>
+    </div>
+  </article>`;
+}
+
+function strategyReportLibrary(state) {
+  if(!state.migrationReady) return `<div class="card planning-migration-notice strategy-migration-notice"><span aria-hidden="true">⚙️</span><div><h3>يلزم تفعيل تقارير الاستراتيجيات</h3><p>شغّلي ملف <code>${escapeHtml(state.migration || "migration_20260813_teacher_strategy_reports.sql")}</code> مرة واحدة بعد مراجعته. لم تُنفّذ أي تغييرات على قاعدة البيانات تلقائيًا.</p></div></div>`;
+  if(!state.items.length) return "";
+  return `<section class="strategy-report-library" aria-labelledby="strategyReportLibraryTitle"><header><div><small>سجل التنفيذ</small><h2 id="strategyReportLibraryTitle">تقارير الاستراتيجيات</h2></div><span>${formatPlanningNumber(state.items.length)} تقرير</span></header><div class="strategy-report-list">${state.items.map(strategyReportCard).join("")}</div></section>`;
+}
+
+function strategyContentMatchesAcademicSelection(item) {
+  const selection = normalizeAcademicSelection("strategies");
+  const itemStage = String(item.stage || "").trim();
+  const itemGrade = String(item.gradeLabel || "").trim();
+  if (selection.stage !== "all" && itemStage !== selection.stage) return false;
+  if (selection.gradeLabel !== "all"
+      && normalizeGradeKey(itemStage || selection.stage, itemGrade) !== normalizeGradeKey(selection.stage, selection.gradeLabel)) return false;
+  const selectedClass = selectedAcademicClass("strategies");
+  if (!selectedClass) return true;
+  const targets = [...(item.publicationTargets || []), ...(item.parentPublicationTargets || [])];
+  return targets.some((target) => Number(target.classId) === Number(selectedClass.id));
+}
+
+function strategyUploadedContentLibrary(items) {
+  return `<section class="strategy-uploaded-library" aria-labelledby="strategyUploadedContentTitle">
+    <header class="planning-library-head strategy-uploaded-library-head"><div><small>محتوى التخطيط</small><h2 id="strategyUploadedContentTitle">المحتوى المرفوع</h2></div><span>${formatPlanningNumber(items.length)} محتوى</span></header>
+    ${planningContentLibrary(items, "لا يوجد محتوى مرفوع للاستراتيجيات")}
+  </section>`;
+}
+
+function bindStrategyReports() {
+  bindPlanningTabs();
+  contentEl.querySelectorAll("[data-strategy-report-delete]").forEach((button) => {
+    button.onclick = () => {
+      const item=strategyReportState.items.find((row)=>Number(row.id)===Number(button.dataset.strategyReportDelete));
+      confirmAction(`هل تريدين حذف تقرير «${item?.strategyName || "الاستراتيجية"}» لدرس «${item?.lessonName || "الدرس"}»؟`,async()=>{
+        await api(`/planning-content/strategies/${button.dataset.strategyReportDelete}`,{method:"DELETE"});
+        strategyReportState.loaded=false;toast("تم حذف تقرير الاستراتيجية.");await renderTeacherPlanning("strategies");
+      });
+    };
+  });
+}
+
+async function loadStrategyReports(force=false) {
+  if(!strategyReportState.loaded||force) {
+    const data=await api("/planning-content/strategies",{cache:"no-store"});
+    strategyReportState={...data,items:Array.isArray(data.items)?data.items:[],loaded:true};
+  }
+  return strategyReportState;
+}
+
+function strategyReportToday() {
+  const now=new Date();const local=new Date(now.getTime()-now.getTimezoneOffset()*60000);return local.toISOString().slice(0,10);
+}
+
+function openStrategyReportModal() {
+  openModal(`<form id="strategyReportForm" class="strategy-report-form" enctype="multipart/form-data">
+    <header class="planning-publish-head strategy-report-modal-head"><span aria-hidden="true">✦</span><div><small>توثيق التعلم النشط</small><h3>تقرير استراتيجية تعليمية</h3><p>أدخلي بيانات التنفيذ وأضيفي الشواهد المصورة، ثم سيُنشئ مدار التقرير المنسق.</p></div></header>
+    <div id="strategyReportMessage" aria-live="polite"></div>
+    <div class="form-grid two strategy-report-fields">
+      <label class="field">اسم الدرس<input name="lessonName" maxlength="190" required autocomplete="off" placeholder="مثال: النسبة المئوية"></label>
+      <label class="field">الفئة المستهدفة<input name="targetAudience" maxlength="190" required autocomplete="off" placeholder="مثال: الصف السادس الابتدائي"></label>
+      <label class="field">تاريخ التنفيذ<input name="implementationDate" type="date" required value="${strategyReportToday()}"></label>
+      <label class="field">الاستراتيجية<input name="strategyName" list="strategyReportSuggestions" maxlength="190" required autocomplete="off" placeholder="اكتبي أو اختاري استراتيجية"><datalist id="strategyReportSuggestions"><option value="التعلم التعاوني"><option value="فكر–زاوج–شارك"><option value="العصف الذهني"><option value="حل المشكلات"><option value="الصف المقلوب"><option value="لعب الأدوار"><option value="خرائط المفاهيم"></datalist></label>
+      <label class="field full-span">الهدف الأساسي<textarea name="primaryGoal" maxlength="2000" required rows="3" placeholder="ما الهدف التعليمي الذي تسعى الاستراتيجية إلى تحقيقه؟"></textarea></label>
+      <label class="field full-span">الفكرة<textarea name="idea" maxlength="5000" required rows="4" placeholder="صفي خطوات تطبيق الاستراتيجية باختصار واضح."></textarea></label>
+    </div>
+    <section class="strategy-evidence-picker" aria-labelledby="strategyEvidenceTitle">
+      <label><input id="strategyEvidenceInput" name="evidence[]" type="file" accept=".png,.jpg,.jpeg,.webp" multiple><span aria-hidden="true">▧</span><strong id="strategyEvidenceTitle">الشواهد المصورة</strong><small>اختاري حتى 10 صور PNG أو JPG أو WebP · 5MB للصورة</small></label>
+      <div class="strategy-evidence-preview" id="strategyEvidencePreview"><p>لم تختاري صورًا بعد.</p></div>
+    </section>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelStrategyReport" type="button">إلغاء</button><button class="btn btn-primary" id="saveStrategyReport" type="submit">تم</button></div>
+  </form>`,"strategy-report-modal");
+  document.getElementById("cancelStrategyReport").onclick=closeModal;
+  const input=document.getElementById("strategyEvidenceInput");const preview=document.getElementById("strategyEvidencePreview");let selected=[];let previewUrls=[];
+  const syncInput=()=>{const transfer=new DataTransfer();selected.forEach((file)=>transfer.items.add(file));input.files=transfer.files;};
+  const renderPreview=()=>{
+    previewUrls.forEach((url)=>URL.revokeObjectURL(url));previewUrls=[];
+    if(!selected.length){preview.innerHTML="<p>لم تختاري صورًا بعد.</p>";return;}
+    preview.innerHTML=selected.map((file,index)=>{const url=URL.createObjectURL(file);previewUrls.push(url);return `<figure><img src="${escapeHtml(url)}" alt="معاينة الشاهد ${index+1}"><figcaption><span>${index+1}</span><button type="button" aria-label="إزالة ${escapeHtml(file.name)}" data-remove-evidence="${index}">×</button></figcaption></figure>`;}).join("");
+    preview.querySelectorAll("[data-remove-evidence]").forEach((button)=>{button.onclick=()=>{selected.splice(Number(button.dataset.removeEvidence),1);syncInput();renderPreview();};});
+  };
+  input.onchange=()=>{
+    const incoming=[...(input.files||[])];const allowed=new Set(["image/png","image/jpeg","image/webp"]);const message=document.getElementById("strategyReportMessage");
+    if(incoming.some((file)=>!allowed.has(file.type)||file.size>5242880)){input.value="";message.innerHTML='<div class="form-error">اختاري صور PNG أو JPG أو WebP، ولا يتجاوز حجم الصورة 5 ميجابايت.</div>';return;}
+    const merged=[...selected,...incoming];const total=merged.reduce((sum,file)=>sum+file.size,0);
+    if(merged.length>10||total>31457280){input.value="";message.innerHTML='<div class="form-error">الحد الأقصى 10 صور، وبحجم إجمالي لا يتجاوز 30 ميجابايت.</div>';return;}
+    selected=merged;message.innerHTML="";syncInput();renderPreview();
+  };
+  document.getElementById("strategyReportForm").onsubmit=async(event)=>{
+    event.preventDefault();const button=document.getElementById("saveStrategyReport");const message=document.getElementById("strategyReportMessage");
+    button.disabled=true;button.textContent="جارٍ إنشاء التقرير…";message.innerHTML='<div class="planning-inline-status">يتم حفظ التقرير والشواهد في التخزين الخاص.</div>';
+    try {
+      const result=await api("/planning-content/strategies",{method:"POST",body:new FormData(event.currentTarget)});
+      previewUrls.forEach((url)=>URL.revokeObjectURL(url));strategyReportState.loaded=false;closeModal();toast(result.message||"تم إنشاء تقرير الاستراتيجية.");await renderTeacherPlanning("strategies");
+    } catch(error){message.innerHTML=`<div class="form-error">${escapeHtml(error.message)}</div>`;button.disabled=false;button.textContent="تم";}
+  };
+}
+
+function bindPlanningCards() {
+  contentEl.querySelectorAll("[data-planning-copy-link]").forEach((button) => {
+    button.onclick = async () => {
+      const url = new URL(button.dataset.planningCopyLink, window.location.origin).href;
+      try { await navigator.clipboard.writeText(url); toast("تم نسخ رابط العرض."); }
+      catch (_) { window.prompt("انسخي رابط العرض:", url); }
+    };
+  });
+  contentEl.querySelectorAll("[data-planning-publish]").forEach((button) => {
+    button.onclick = () => openPlanningPublish(Number(button.dataset.planningPublish));
+  });
+  contentEl.querySelectorAll("[data-planning-publish-parents]").forEach((button) => {
+    button.onclick = () => openPlanningParentPublish(Number(button.dataset.planningPublishParents));
+  });
+  contentEl.querySelectorAll("[data-planning-settings]").forEach((button) => {
+    button.onclick = () => openPlanningContentSettings(Number(button.dataset.planningSettings));
+  });
+  contentEl.querySelectorAll("[data-planning-delete]").forEach((button) => {
+    button.onclick = () => {
+      const item = teacherPlanningState.items.find((row) => Number(row.id) === Number(button.dataset.planningDelete));
+      confirmAction(`هل تريدين حذف «${item?.name || "المحتوى"}»؟ سيختفي فورًا من حسابات الطالبات.`, async () => {
+        await api(`/planning-content/${button.dataset.planningDelete}`, { method: "DELETE" });
+        teacherPlanningState.loaded = false; toast("تم حذف المحتوى وإيقاف نشره."); await renderTeacherPlanning(teacherPlanningMode);
+      });
+    };
+  });
+}
+
+function openPlanningContentSettings(contentId) {
+  const item = teacherPlanningState.items.find((row) => Number(row.id) === Number(contentId));if (!item) return;
+  const selectedOption = (value, selected, label) => `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  const stageOptions = Object.keys(ACADEMIC_GRADES).map((stage) => selectedOption(stage, item.stage, stage)).join("");
+  const gradeOptions = (ACADEMIC_GRADES[item.stage] || []).map((grade) => selectedOption(grade, item.gradeLabel, grade)).join("");
+  const contentTypeOptions = Object.entries(PLANNING_CONTENT_LABELS).map(([value, label]) => selectedOption(value, item.contentType, label)).join("");
+  const destinationOptions = Object.entries(PLANNING_DESTINATION_LABELS).map(([value, label]) => selectedOption(value, item.destination, label)).join("");
+  const coverPreview = item.hasCover
+    ? `<img id="planningSettingsCoverPreview" src="${escapeHtml(item.coverUrl)}" alt="صورة الغلاف الحالية لـ ${escapeHtml(item.name)}">`
+    : '<div id="planningSettingsCoverPreview" class="planning-settings-cover-empty"><span aria-hidden="true">▧</span><strong>لا توجد صورة غلاف</strong></div>';
+  openModal(`<form id="planningContentSettingsForm" class="planning-settings-form" enctype="multipart/form-data">
+    <header class="planning-publish-head planning-settings-head"><span aria-hidden="true">⚙</span><div><small>المحتوى المرفوع</small><h3>إعدادات المحتوى</h3><p>عدّلي بيانات العرض وغلافه؛ ملف المحتوى نفسه وحالة النشر لن يتغيرا.</p></div></header>
+    <div id="planningSettingsMessage" aria-live="polite"></div>
+    <div class="form-grid two planning-form-grid">
+      <label class="field full-span">اسم المحتوى<input name="name" maxlength="190" required value="${escapeHtml(item.name)}"></label>
+      <label class="field">المرحلة<select name="stage" id="planningSettingsStage">${stageOptions}</select></label>
+      <label class="field">الصف<select name="gradeLabel" id="planningSettingsGrade">${gradeOptions}</select></label>
+      <label class="field">رقم الوحدة<input name="unitNumber" type="number" min="1" max="999" required value="${Number(item.unitNumber)}"></label>
+      <label class="field">رقم الدرس<input name="lessonNumber" type="number" min="1" max="999" required value="${Number(item.lessonNumber)}"></label>
+      <label class="field full-span">اسم الدرس<input name="lessonName" maxlength="190" required value="${escapeHtml(item.lessonName)}"></label>
+      <label class="field">نوع المحتوى<select name="contentType">${contentTypeOptions}</select></label>
+      <label class="field">التوجيه إلى<select name="destination">${destinationOptions}</select></label>
+    </div>
+    <section class="planning-settings-cover" aria-labelledby="planningSettingsCoverTitle">
+      <div class="planning-settings-cover-preview">${coverPreview}</div>
+      <div class="planning-settings-cover-controls">
+        <strong id="planningSettingsCoverTitle">صورة الغلاف</strong>
+        <p>${item.hasCover ? "ستبقى الصورة الحالية ما لم تختاري بديلًا أو تزيليها." : "يمكنكِ إضافة غلاف اختياري للمحتوى."}</p>
+        <label class="planning-settings-cover-picker"><input name="cover" id="planningSettingsCover" type="file" accept=".png,.jpg,.jpeg,.webp"><span>اختيار صورة جديدة</span><small id="planningSettingsCoverName">PNG أو JPG أو WebP · حتى 5MB</small></label>
+        ${item.hasCover ? '<label class="planning-settings-remove-cover"><input name="removeCover" id="planningSettingsRemoveCover" type="checkbox" value="1"><span>إزالة صورة الغلاف</span></label>' : ""}
+      </div>
+    </section>
+    <div class="planning-settings-note"><span aria-hidden="true">i</span><p>عند تغيير المرحلة أو الصف، سيتوقف النشر فقط عن الفصول التي لم تعد مطابقة.</p></div>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelPlanningSettings" type="button">إلغاء</button><button class="btn btn-primary" id="savePlanningSettings" type="submit">حفظ الإعدادات</button></div>
+  </form>`, "planning-settings-modal");
+  document.getElementById("cancelPlanningSettings").onclick = closeModal;
+  const stage = document.getElementById("planningSettingsStage");const grade = document.getElementById("planningSettingsGrade");
+  stage.onchange = () => { grade.innerHTML = (ACADEMIC_GRADES[stage.value] || []).map((value) => selectedOption(value, "", value)).join(""); };
+  const coverInput = document.getElementById("planningSettingsCover");const removeCover = document.getElementById("planningSettingsRemoveCover");let objectUrl = "";
+  coverInput.onchange = () => {
+    const file = coverInput.files?.[0];if (!file) return;
+    const message = document.getElementById("planningSettingsMessage");
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 5242880) {
+      coverInput.value = "";message.innerHTML = '<div class="form-error">اختاري صورة PNG أو JPG أو WebP لا يتجاوز حجمها 5 ميجابايت.</div>';return;
+    }
+    message.innerHTML = "";if (removeCover) removeCover.checked = false;
+    document.getElementById("planningSettingsCoverName").textContent = `${file.name} · ${(file.size / 1048576).toFixed(1)}MB`;
+    if (objectUrl) URL.revokeObjectURL(objectUrl);objectUrl = URL.createObjectURL(file);
+    const previewContainer = document.querySelector(".planning-settings-cover-preview");previewContainer.classList.remove("is-removed");previewContainer.innerHTML = `<img id="planningSettingsCoverPreview" src="${escapeHtml(objectUrl)}" alt="معاينة صورة الغلاف الجديدة">`;
+  };
+  if (removeCover) removeCover.onchange = () => {
+    const previewContainer = document.querySelector(".planning-settings-cover-preview");previewContainer.classList.toggle("is-removed", removeCover.checked);
+    if (removeCover.checked) {coverInput.value = "";document.getElementById("planningSettingsCoverName").textContent = "سيُستخدم الغلاف الافتراضي بعد الحفظ";if (objectUrl) {URL.revokeObjectURL(objectUrl);objectUrl = "";}}
+  };
+  document.getElementById("planningContentSettingsForm").onsubmit = async (event) => {
+    event.preventDefault();const button = document.getElementById("savePlanningSettings");const message = document.getElementById("planningSettingsMessage");
+    button.disabled = true;button.textContent = "جارٍ الحفظ…";message.innerHTML = "";
+    try {
+      const result = await api(`/planning-content/${contentId}/settings`, { method: "POST", body: new FormData(event.currentTarget) });
+      if (result.item) teacherPlanningState.items = teacherPlanningState.items.map((row) => Number(row.id) === Number(contentId) ? result.item : row);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);closeModal();toast(result.message || "تم حفظ إعدادات المحتوى.");await (item.destination.startsWith("library-") ? renderLibraryPanel() : renderTeacherPlanning(teacherPlanningMode));
+    } catch (error) {message.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;button.disabled = false;button.textContent = "حفظ الإعدادات";}
+  };
+}
+
+async function loadTeacherPlanningContent(force = false) {
+  if (!teacherPlanningState.loaded || force) {
+    const data = await api("/planning-content", { cache: "no-store" });
+    teacherPlanningState = { ...data, items: Array.isArray(data.items) ? data.items : [], classes: Array.isArray(data.classes) ? data.classes : [], loaded: true };
+  }
+  return teacherPlanningState;
+}
+
+function planningUploadStudio() {
+  const defaultStage = "ابتدائي";
+  return `<div class="planning-studio-layout">
+    <section class="card planning-upload-panel">
+      <header class="planning-panel-head"><span aria-hidden="true">↥</span><div><small>استديو مدار</small><h2>رفع محتوى جديد</h2><p>احفظيه كمسودة، عاينيه بأمان، ثم اختاري الفصول المناسبة للنشر.</p></div></header>
+      <form id="planningContentUploadForm" enctype="multipart/form-data">
+        <div id="planningUploadMessage" aria-live="polite"></div>
+        <div class="form-grid two planning-form-grid">
+          <label class="field full-span">اسم المحتوى<input name="name" maxlength="190" required placeholder="مثال: استكشاف النسب المتكافئة"></label>
+          <label class="field">المرحلة<select name="stage" id="planningStage">${Object.keys(ACADEMIC_GRADES).map((stage) => `<option value="${stage}">${stage}</option>`).join("")}</select></label>
+          <label class="field">الصف<select name="gradeLabel" id="planningGrade">${(ACADEMIC_GRADES[defaultStage] || []).map((grade) => `<option value="${grade}">${grade}</option>`).join("")}</select></label>
+          <label class="field">رقم الوحدة<input name="unitNumber" type="number" min="1" max="999" required></label>
+          <label class="field">رقم الدرس<input name="lessonNumber" type="number" min="1" max="999" required></label>
+          <label class="field full-span">اسم الدرس<input name="lessonName" maxlength="190" required></label>
+          <label class="field">نوع المحتوى<select name="contentType"><option value="presentation">عرض تقديمي</option><option value="activity">نشاط</option><option value="explanation">شرح</option><option value="game">لعبة</option></select></label>
+          <label class="field">التوجيه إلى<select name="destination"><option value="semester-plans">الخطط الفصلية</option><option value="curriculum-distribution">توزيع المنهج</option><option value="strategies">الاستراتيجيات</option><option value="interactive-presentations">العروض التفاعلية</option><option value="professional-community">المجتمع المهني — تنظيم خاص في حسابي</option></select></label>
+        </div>
+        <div class="planning-file-pickers">
+          <label class="planning-file-picker"><input name="file" id="planningMainFile" type="file" accept=".html,.htm,.zip,.pdf,.png,.jpg,.jpeg,.webp,.gif" required><span aria-hidden="true">▣</span><strong>ملف المحتوى</strong><small id="planningMainFileName">HTML أو ZIP أو PDF أو صورة · حتى 20MB</small></label>
+          <label class="planning-file-picker optional"><input name="cover" id="planningCoverFile" type="file" accept=".png,.jpg,.jpeg,.webp"><span aria-hidden="true">▧</span><strong>صورة الغلاف <em>اختيارية</em></strong><small id="planningCoverFileName">PNG أو JPG أو WebP · حتى 5MB</small></label>
+        </div>
+        <aside class="planning-upload-guide"><strong>أي صيغة أختار؟</strong><p><b>HTML</b> لملف ويب واحد ذاتي الاكتفاء، <b>ZIP</b> لصفحة معها صور وCSS وJavaScript، و<b>PDF أو صورة</b> للمحتوى الثابت. تُفتح صفحات الويب داخل إطار آمن معزول عن صفحات مدار.</p></aside>
+        <button class="btn btn-primary planning-save-button" id="planningUploadButton" type="submit">رفع وحفظ كمسودة</button>
+      </form>
+    </section>
+    <section class="planning-library-panel">
+      <header class="planning-library-head"><div><small>مكتبتكِ</small><h2>المحتوى المرفوع</h2></div><span>${teacherPlanningState.items.length} محتوى</span></header>
+      ${planningContentLibrary(teacherPlanningState.items, "لم ترفعي محتوى بعد")}
+    </section>
+  </div>`;
+}
+
+function bindPlanningUpload() {
+  const stage = document.getElementById("planningStage");const grade = document.getElementById("planningGrade");
+  stage.onchange = () => { grade.innerHTML = (ACADEMIC_GRADES[stage.value] || []).map((value) => `<option value="${value}">${value}</option>`).join(""); };
+  [["planningMainFile", "planningMainFileName"], ["planningCoverFile", "planningCoverFileName"]].forEach(([inputId, labelId]) => {
+    document.getElementById(inputId).onchange = (event) => { const file = event.target.files?.[0]; if (file) document.getElementById(labelId).textContent = `${file.name} · ${(file.size / 1048576).toFixed(1)}MB`; };
+  });
+  document.getElementById("planningContentUploadForm").onsubmit = async (event) => {
+    event.preventDefault();const button = document.getElementById("planningUploadButton");const message = document.getElementById("planningUploadMessage");
+    button.disabled = true;button.textContent = "جارٍ فحص الملف ورفعه…";message.innerHTML = '<div class="planning-inline-status">يتم الآن التحقق من الملف وحفظه في التخزين الخاص.</div>';
+    try {
+      const result = await api("/planning-content", { method: "POST", body: new FormData(event.currentTarget) });
+      teacherPlanningState.loaded = false;toast(result.message || "تم حفظ المحتوى كمسودة.");await renderTeacherPlanning("planning-settings");
+    } catch (error) {
+      message.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;button.disabled = false;button.textContent = "رفع وحفظ كمسودة";
+    }
+  };
+}
+
+function openPlanningPublish(contentId) {
+  const item = teacherPlanningState.items.find((row) => Number(row.id) === Number(contentId));if (!item) return;
+  const eligible = teacherPlanningState.classes.filter((row) => row.level === item.stage && normalizeGradeKey(row.level, row.grade_label) === normalizeGradeKey(item.stage, item.gradeLabel));
+  const selected = new Set((item.publicationTargets || []).map((row) => String(row.classId)));const initialSemester = item.publicationTargets?.[0]?.semester || schoolSettings?.currentSemester || "first";
+  openModal(`<form id="planningPublishForm" class="planning-publish-form">
+    <div class="planning-publish-head"><span aria-hidden="true">◉</span><div><small>نشر المحتوى</small><h3>${escapeHtml(item.name)}</h3><p>${escapeHtml(item.stage)} · ${escapeHtml(item.gradeLabel)}</p></div></div>
+    <div id="planningPublishMessage"></div>
+    <label class="field">الفصل الدراسي<select id="planningPublishSemester"><option value="first" ${initialSemester !== "second" ? "selected" : ""}>الترم الأول</option><option value="second" ${initialSemester === "second" ? "selected" : ""}>الترم الثاني</option></select></label>
+    <fieldset class="planning-class-picker"><legend>اختاري الفصول</legend>${eligible.length ? eligible.map((row) => `<label><input type="checkbox" name="planningClass" value="${row.id}" ${selected.has(String(row.id)) ? "checked" : ""}><span><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(row.academic_year || "العام الحالي")}</small></span></label>`).join("") : '<p>لا توجد فصول مطابقة للمرحلة والصف. أضيفي الفصل أولًا من قائمة الطالبات.</p>'}</fieldset>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelPlanningPublish" type="button">إلغاء</button>${item.publishedClassCount ? '<button class="btn btn-danger" id="unpublishPlanningContent" type="button">إيقاف النشر</button>' : ''}<button class="btn btn-primary" type="submit" ${eligible.length ? "" : "disabled"}>حفظ النشر</button></div>
+  </form>`, "planning-publish-modal");
+  document.getElementById("cancelPlanningPublish").onclick = closeModal;
+  document.getElementById("unpublishPlanningContent")?.addEventListener("click", async () => {
+    await api(`/planning-content/${contentId}/unpublish`, { method: "POST", body: JSON.stringify({}) });closeModal();teacherPlanningState.loaded = false;toast("تم إيقاف النشر.");await (item.destination.startsWith("library-") ? renderLibraryPanel() : renderTeacherPlanning(teacherPlanningMode));
+  });
+  document.getElementById("planningPublishForm").onsubmit = async (event) => {
+    event.preventDefault();const classIds = [...event.currentTarget.querySelectorAll('[name="planningClass"]:checked')].map((input) => Number(input.value));
+    try {
+      await api(`/planning-content/${contentId}/publish`, { method: "POST", body: JSON.stringify({ semester: document.getElementById("planningPublishSemester").value, classIds }) });
+      closeModal();teacherPlanningState.loaded = false;toast("تم نشر المحتوى للفصول المختارة.");await (item.destination.startsWith("library-") ? renderLibraryPanel() : renderTeacherPlanning(teacherPlanningMode));
+    } catch (error) { document.getElementById("planningPublishMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`; }
+  };
+}
+
+function openPlanningParentPublish(contentId) {
+  const item = teacherPlanningState.items.find((row) => Number(row.id) === Number(contentId));if (!item || item.destination !== "semester-plans") return;
+  if (!teacherPlanningState.parentPublicationReady) { toast(`يلزم تشغيل ${teacherPlanningState.parentPublicationMigration || "ملف ترحيل نشر أولياء الأمور"} أولًا.`);return; }
+  const eligible = teacherPlanningState.classes.filter((row) => row.level === item.stage && normalizeGradeKey(row.level, row.grade_label) === normalizeGradeKey(item.stage, item.gradeLabel));
+  const selected = new Set((item.parentPublicationTargets || []).map((row) => String(row.classId)));const initialSemester = item.parentPublicationTargets?.[0]?.semester || schoolSettings?.currentSemester || "first";
+  openModal(`<form id="planningParentPublishForm" class="planning-publish-form">
+    <div class="planning-publish-head planning-parent-publish-head"><span aria-hidden="true">⌂</span><div><small>مشاركة مع الأسرة</small><h3>نشر الخطة لأولياء الأمور</h3><p>${escapeHtml(item.name)} · ${escapeHtml(item.stage)} · ${escapeHtml(item.gradeLabel)}</p></div></div>
+    <div id="planningParentPublishMessage" aria-live="polite"></div>
+    <label class="field">الفصل الدراسي<select id="planningParentPublishSemester"><option value="first" ${initialSemester !== "second" ? "selected" : ""}>الترم الأول</option><option value="second" ${initialSemester === "second" ? "selected" : ""}>الترم الثاني</option></select></label>
+    <fieldset class="planning-class-picker"><legend>اختاري فصول أولياء الأمور</legend>${eligible.length ? eligible.map((row) => `<label><input type="checkbox" name="planningParentClass" value="${row.id}" ${selected.has(String(row.id)) ? "checked" : ""}><span><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(row.academic_year || "العام الحالي")}</small></span></label>`).join("") : '<p>لا توجد فصول مطابقة للمرحلة والصف. أضيفي الفصل أولًا من قائمة الطالبات.</p>'}</fieldset>
+    <div class="modal-actions"><button class="btn btn-outline" id="cancelPlanningParentPublish" type="button">إلغاء</button>${item.publishedParentClassCount ? '<button class="btn btn-danger" id="unpublishPlanningParents" type="button">إيقاف نشر أولياء الأمور</button>' : ''}<button class="btn btn-primary" id="savePlanningParentPublish" type="submit" ${eligible.length ? "" : "disabled"}>حفظ النشر</button></div>
+  </form>`, "planning-publish-modal");
+  document.getElementById("cancelPlanningParentPublish").onclick = closeModal;
+  document.getElementById("unpublishPlanningParents")?.addEventListener("click", async () => {
+    try {await api(`/planning-content/${contentId}/unpublish-parents`, { method: "POST", body: JSON.stringify({}) });closeModal();teacherPlanningState.loaded = false;toast("تم إيقاف نشر الخطة لأولياء الأمور.");await renderTeacherPlanning(teacherPlanningMode);}
+    catch(error){document.getElementById("planningParentPublishMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;}
+  });
+  document.getElementById("planningParentPublishForm").onsubmit = async (event) => {
+    event.preventDefault();const classIds = [...event.currentTarget.querySelectorAll('[name="planningParentClass"]:checked')].map((input) => Number(input.value));const button=document.getElementById("savePlanningParentPublish");
+    button.disabled=true;button.textContent="جارٍ الحفظ…";
+    try {
+      await api(`/planning-content/${contentId}/publish-parents`, { method: "POST", body: JSON.stringify({ semester: document.getElementById("planningParentPublishSemester").value, classIds }) });
+      closeModal();teacherPlanningState.loaded = false;toast("تم نشر الخطة لأولياء أمور الفصول المختارة.");await renderTeacherPlanning(teacherPlanningMode);
+    } catch (error) { document.getElementById("planningParentPublishMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;button.disabled=false;button.textContent="حفظ النشر"; }
+  };
+}
+
+async function renderTeacherPlanning(mode = teacherPlanningMode) {
+  teacherPlanningMode = TEACHER_PLANNING_SECTIONS[mode] ? mode : "semester-plans";
+  const section = TEACHER_PLANNING_SECTIONS[teacherPlanningMode];
+  contentEl.innerHTML = `${teacherPlanningTabs()}<div class="card"><div class="loading">جارٍ تحميل محتوى التخطيط…</div></div>`;bindPlanningTabs();
+  const state = await loadTeacherPlanningContent();
+  if (!state.migrationReady) {
+    contentEl.innerHTML = `${teacherPlanningTabs()}<div class="card planning-migration-notice"><span>⚙️</span><div><h3>يلزم تفعيل استديو المحتوى</h3><p>شغّلي ملف <code>${escapeHtml(state.migration || "migration_20260812_teacher_planning_content.sql")}</code> مرة واحدة بعد مراجعته. لم تُنفّذ أي تغييرات على قاعدة البيانات تلقائيًا.</p></div></div>`;bindPlanningTabs();return;
+  }
+  if (teacherPlanningMode === "planning-settings") {
+    contentEl.innerHTML = `${teacherPlanningTabs()}${planningUploadStudio()}`;bindPlanningTabs();bindPlanningUpload();bindPlanningCards();return;
+  }
+  if (teacherPlanningMode === "strategies") {
+    const [reports]=await Promise.all([loadStrategyReports(),prepareAcademicSelection("strategies")]);
+    const strategyItems=state.items.filter((item)=>item.destination==="strategies"&&strategyContentMatchesAcademicSelection(item));
+    contentEl.innerHTML=`${teacherPlanningTabs()}<section class="planning-destination-hero strategy-report-hero"><span>${section.icon}</span><div><small>تخطيط المعلم</small><h1>${section.title}</h1><p>وثّقي تطبيق الاستراتيجية وارفقي شواهد التنفيذ، وسيجهز مدار تقرير HTML منسقًا للطباعة.</p></div><button class="btn btn-primary" type="button" data-open-strategy-report ${reports.migrationReady?"":"disabled"}>رفع محتوى</button></section>${academicSelectorHtml("strategies")}<div class="strategy-planning-libraries">${strategyReportLibrary(reports)}${strategyUploadedContentLibrary(strategyItems)}</div>`;
+    bindStrategyReports();bindAcademicSelector("strategies",()=>renderTeacherPlanning("strategies"));bindPlanningCards();return;
+  }
+  const items = state.items.filter((item) => item.destination === teacherPlanningMode);
+  const searchableMode = Object.hasOwn(teacherPlanningSearchState, teacherPlanningMode);
+  const library = searchableMode
+    ? planningSearchLibrary(items, section, teacherPlanningMode)
+    : planningContentLibrary(items, `لا يوجد محتوى في ${section.title}`);
+  const destinationActions = teacherPlanningMode === "professional-community"
+    ? `<div class="planning-destination-actions"><button class="btn btn-primary planning-create-content" type="button" data-open-professional-report="professional-community"><span aria-hidden="true">✦</span> إنشاء تقرير مجتمع مهني</button><button class="btn btn-secondary planning-create-workshop" type="button" data-open-professional-report="workshop"><span aria-hidden="true">＋</span> إنشاء تقرير ورشة عمل</button><button class="btn btn-outline" type="button" data-open-planning-studio><span aria-hidden="true">↥</span> رفع محتوى</button></div>`
+    : `<button class="btn btn-primary" type="button" data-open-planning-studio>رفع محتوى</button>`;
+  const professionalReports = teacherPlanningMode === "professional-community" ? professionalCommunityReportLibrary() : "";
+  contentEl.innerHTML = `${teacherPlanningTabs()}<section class="planning-destination-hero"><span>${section.icon}</span><div><small>تخطيط المعلم</small><h1>${section.title}</h1><p>${section.hint} يظهر هنا المحتوى الذي توجهينه إلى هذا القسم.</p></div>${destinationActions}</section>${professionalReports}${library}`;
+  bindPlanningTabs();bindPlanningCards();
+  if (searchableMode) bindPlanningLibrarySearch(teacherPlanningMode, items, section);
 }
 
 // ==========================================================================
@@ -3448,7 +5203,7 @@ function bindQuestionBankDesignWorkspace() {
     const previewButton = document.getElementById("previewDiagnosticTest");
     if (previewButton) previewButton.onclick = previewDiagnosticTestFromSkills;
     const sendButton = document.getElementById("sendDiagnosticToTests");
-    if (sendButton) sendButton.onclick = createDiagnosticTestFromSkills;
+    if (sendButton) sendButton.onclick = () => createDiagnosticTestFromSkills();
     return;
   }
   if (workspace.dataset.mode === "professional") {
@@ -3520,7 +5275,8 @@ function previewDiagnosticTestFromSkills() {
   document.getElementById("closeDiagnosticPreview").onclick = closeModal;
 }
 
-async function createDiagnosticTestFromSkills() {
+async function createDiagnosticTestFromSkills(approvePending = false) {
+  approvePending = approvePending === true;
   const selected = diagnosticSelectedSkillData();
   const skillIds = selected.ids;
   const title = document.getElementById("diagnosticBankTitle")?.value.trim() || "";
@@ -3544,6 +5300,7 @@ async function createDiagnosticTestFromSkills() {
       gradeLabel: questionBankSelection.gradeLabel,
       termLabel: questionBankSelection.termLabel,
       durationMinutes,
+      approvePending,
     }) });
     setQuestionBankInlineMessage(result.message || "تم إرسال الاختبار إلى خانة الاختبارات كمسودة.", "success");
     const classCount = Number(result.classCount || classIds.length);
@@ -3570,6 +5327,10 @@ async function createDiagnosticTestFromSkills() {
     setQuestionBankInlineMessage(error.message);
     button.disabled = false;
     button.textContent = "إرسال الاختبار إلى خانة الاختبارات";
+    if (!approvePending && error.data?.requiresApproval && error.data?.pendingSkills?.length) {
+      const pendingNames = error.data.pendingSkills.join("، ");
+      confirmAction(`الأسئلة المرتبطة بالمهارات التالية موجودة لكنها بانتظار الاعتماد: ${pendingNames}. هل تريدين اعتمادها وإنشاء الاختبار الآن؟`, () => createDiagnosticTestFromSkills(true));
+    }
   }
 }
 
@@ -4284,9 +6045,16 @@ const EDUCATIONAL_CONTENT = {
     description: "مساحة إعداد المسابقات الصفية والتحديات التحفيزية بين الطالبات.",
     hint: "يمكن إضافة نظام المسابقات والترتيب والجوائز في خطوة لاحقة.",
   },
+  "game-creator": {
+    icon: "🎮",
+    group: "الألعاب",
+    title: "إنشاء الألعاب",
+    description: "استديو إنشاء الألعاب واستيراد الحزم المبرمجة وإدارة نسخها.",
+    hint: "أنشئي لعبة من قالب أو استوردي حزمة مبرمجة.",
+  },
   "flipped-classroom": {
     icon: "🔄",
-    group: "الاستراتيجيات التعليمية",
+    group: "التعلم النشط",
     title: "الصف المقلوب",
     description: "مكان تجهيز المحتوى الذي تطّلع عليه الطالبة قبل الحصة، ثم تطبيقه ومناقشته داخل الفصل.",
     hint: "يمكن إضافة استراتيجيات تعليمية أخرى إلى هذا القسم لاحقًا.",
@@ -4303,7 +6071,14 @@ const EDUCATIONAL_CONTENT = {
     group: "الموارد المكتبية",
     title: "التدريبات",
     description: "مكتبة للتدريبات والتمارين التي تساعد الطالبات على ترسيخ المفاهيم وإتقانها.",
-    hint: "يمكن إضافة أوراق العمل والملفات التعليمية إلى المكتبة لاحقًا.",
+    hint: "ستظهر هنا التدريبات والتمارين التعليمية عند إضافتها.",
+  },
+  worksheets: {
+    icon: "📝",
+    group: "الموارد المكتبية",
+    title: "أوراق العمل",
+    description: "مكتبة لتنظيم أوراق العمل والأنشطة الصفية التي تدعم الدروس والمهارات.",
+    hint: "ستظهر هنا أوراق العمل التعليمية عند إضافتها.",
   },
 };
 
@@ -4314,24 +6089,55 @@ function openGamesPanel(mode = "interactive-games") {
   navigate("games-panel");
 }
 
+let locksMessageHandler=null;
+async function renderLocksCompetition(panel){
+ panel.innerHTML='<p role="status">جارٍ تحميل طلابك…</p>';
+ try{
+ const data=await api('/motivation',{cache:'no-store'});
+ if(!document.body.contains(panel))return;
+ const students=data.students||[];const used=new Set();
+ const frame=document.createElement('iframe');frame.title='مسابقة الأقفال';frame.style.cssText='width:100%;height:1100px;border:0;border-radius:18px';
+ frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-modals');
+ if(locksMessageHandler)window.removeEventListener('message',locksMessageHandler);
+ locksMessageHandler=async event=>{
+ if(event.source!==frame.contentWindow||event.origin!==location.origin||!document.body.contains(frame)||event.data?.type!=='madar-locks-award')return;
+ const {key,studentId}=event.data;if(typeof key!=='string'||key.length>100||used.has(key)||!students.some(s=>Number(s.id)===Number(studentId)))return;used.add(key);
+ let ok=false;try{await api('/motivation/'+Number(studentId),{method:'POST',body:JSON.stringify({points:10,category:'other',reason:'مسابقة الأقفال — إجابة صحيحة',details:'النظير الجمعي · '+key})});ok=true;}catch(error){toast(error.message);}
+ frame.contentWindow?.postMessage({type:'madar-locks-award-result',key,ok},location.origin);
+ };
+ window.addEventListener('message',locksMessageHandler);
+ frame.onload=()=>frame.contentWindow.postMessage({type:'madar-locks-roster',students:students.map(({id,name,class_id,class_name,grade_label,stage})=>({id,name,class_id,class_name,grade_label,stage}))},location.origin);
+ frame.srcdoc="<!DOCTYPE html>\n<html lang=\"ar\" dir=\"rtl\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>مسابقة الأقفال 🔐 | النظير الجمعي</title>\n<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">\n<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n<link href=\"https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap\" rel=\"stylesheet\">\n<style>\n*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}\n\n:root{\n  --blue:#3b82f6;\n  --blue-light:#60a5fa;\n  --blue-dark:#1e40af;\n  --blue-glow:rgba(59,130,246,.5);\n  --red:#ef4444;\n  --red-light:#f87171;\n  --red-dark:#991b1b;\n  --red-glow:rgba(239,68,68,.5);\n  --gold:#fbbf24;\n  --gold-light:#fde68a;\n  --gold-dark:#b45309;\n  --green:#22c55e;\n  --green-dark:#15803d;\n  --bg-1:#070b1c;\n  --bg-2:#111634;\n  --bg-3:#0a0f26;\n  --card:rgba(255,255,255,.045);\n  --card-hover:rgba(255,255,255,.08);\n  --border:rgba(255,255,255,.12);\n  --border-strong:rgba(255,255,255,.2);\n  --text:#e2e8f0;\n  --text-bright:#f8fafc;\n  --muted:#94a3b8;\n  --shadow-lg:0 25px 70px rgba(0,0,0,.55);\n  --shadow-md:0 12px 30px rgba(0,0,0,.4);\n}\n\nhtml,body{min-height:100%}\nbody{\n  font-family:\"Tajawal\",system-ui,-apple-system,sans-serif;\n  color:var(--text);\n  background:\n    radial-gradient(ellipse 60% 50% at 12% 8%, rgba(59,130,246,.22), transparent 60%),\n    radial-gradient(ellipse 60% 50% at 88% 92%, rgba(239,68,68,.22), transparent 60%),\n    radial-gradient(ellipse 80% 60% at 50% 50%, rgba(99,102,241,.1), transparent 70%),\n    linear-gradient(160deg,var(--bg-1) 0%,var(--bg-3) 50%,var(--bg-2) 100%);\n  min-height:100vh;\n  padding:14px;\n  overflow-x:hidden;\n  position:relative;\n}\n\n/* خطوط شبكة خفيفة */\nbody::before{\n  content:\"\";\n  position:fixed;inset:0;\n  background-image:\n    linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),\n    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);\n  background-size:60px 60px;\n  pointer-events:none;\n  z-index:0;\n  mask-image:radial-gradient(ellipse at center, black 30%, transparent 80%);\n}\n\n/* كرات ضوئية */\n.orb{position:fixed;border-radius:50%;filter:blur(90px);pointer-events:none;z-index:0;opacity:.5}\n.orb-blue{width:400px;height:400px;background:var(--blue);top:-150px;right:-120px;animation:float1 18s ease-in-out infinite}\n.orb-red{width:400px;height:400px;background:var(--red);bottom:-150px;left:-120px;animation:float2 18s ease-in-out infinite}\n@keyframes float1{0%,100%{transform:translate(0,0)}50%{transform:translate(-30px,30px)}}\n@keyframes float2{0%,100%{transform:translate(0,0)}50%{transform:translate(30px,-30px)}}\n\n.game{\n  position:relative;\n  z-index:1;\n  max-width:1280px;\n  margin:0 auto;\n  width:100%;\n}\n\n/* ============================================================\n   الهيدر\n   ============================================================ */\n.game-header{\n  text-align:center;\n  margin-bottom:20px;\n  padding:16px 20px;\n  border-radius:22px;\n  background:rgba(255,255,255,.03);\n  border:1px solid var(--border);\n  backdrop-filter:blur(20px);\n  box-shadow:var(--shadow-md);\n}\n.game-title{\n  font-size:clamp(1.4rem,3.4vw,2.1rem);\n  font-weight:900;\n  color:var(--text-bright);\n  margin:0 0 6px;\n  display:flex;\n  align-items:center;\n  justify-content:center;\n  gap:10px;\n  flex-wrap:wrap;\n}\n.game-title .emoji{\n  display:inline-block;\n  animation:sparkle 2.4s ease-in-out infinite;\n  filter:drop-shadow(0 0 12px rgba(251,191,36,.6));\n}\n@keyframes sparkle{\n  0%,100%{transform:scale(1) rotate(0)}\n  50%{transform:scale(1.15) rotate(-8deg)}\n}\n.game-subtitle{\n  font-size:clamp(.85rem,1.6vw,1rem);\n  color:var(--muted);\n  font-weight:700;\n  margin:0;\n}\n\n/* ============================================================\n   صف المجموعتين\n   ============================================================ */\n.teams-row{\n  display:grid;\n  grid-template-columns:1fr 1fr;\n  gap:16px;\n  margin-bottom:18px;\n}\n\n.team{\n  position:relative;\n  padding:20px 18px;\n  border-radius:24px;\n  background:var(--card);\n  border:1.5px solid var(--border);\n  backdrop-filter:blur(20px);\n  transition:.4s cubic-bezier(.22,1,.36,1);\n  overflow:hidden;\n}\n.team::before{\n  content:\"\";\n  position:absolute;top:0;right:0;left:0;height:4px;\n  background:linear-gradient(90deg, transparent, var(--team-color), transparent);\n  opacity:.7;\n  transition:opacity .4s;\n}\n.team.blue{--team-color:var(--blue);--team-glow:var(--blue-glow)}\n.team.red{--team-color:var(--red);--team-glow:var(--red-glow)}\n\n.team.active{\n  border-color:var(--team-color);\n  background:linear-gradient(180deg, var(--card), rgba(255,255,255,.06));\n  box-shadow:\n    0 0 0 1px var(--team-color),\n    0 0 40px var(--team-glow),\n    var(--shadow-lg);\n  transform:translateY(-4px);\n}\n.team.active::before{opacity:1}\n\n.team-head{\n  display:flex;\n  align-items:center;\n  justify-content:space-between;\n  gap:10px;\n  margin-bottom:14px;\n}\n.team-name{\n  font-size:clamp(1rem,2vw,1.25rem);\n  font-weight:900;\n  color:var(--text-bright);\n  display:flex;\n  align-items:center;\n  gap:8px;\n}\n.team-icon{\n  font-size:1.3em;\n  filter:drop-shadow(0 0 8px var(--team-glow));\n}\n.team-turn-badge{\n  padding:6px 12px;\n  border-radius:999px;\n  font-size:.72rem;\n  font-weight:900;\n  background:var(--team-color);\n  color:#fff;\n  box-shadow:0 4px 14px var(--team-glow);\n  opacity:0;\n  transform:scale(.6);\n  transition:.3s cubic-bezier(.34,1.56,.64,1);\n  white-space:nowrap;\n}\n.team.active .team-turn-badge{\n  opacity:1;\n  transform:scale(1);\n  animation:badgePulse 1.4s ease-in-out infinite;\n}\n@keyframes badgePulse{\n  0%,100%{box-shadow:0 4px 14px var(--team-glow)}\n  50%{box-shadow:0 4px 22px var(--team-glow), 0 0 30px var(--team-glow)}\n}\n\n.team-score-row{\n  display:flex;\n  align-items:baseline;\n  justify-content:center;\n  gap:8px;\n  margin-bottom:14px;\n}\n.team-score{\n  font-size:clamp(2.2rem,5vw,3.2rem);\n  font-weight:900;\n  color:var(--team-color);\n  line-height:1;\n  font-variant-numeric:tabular-nums;\n  text-shadow:0 0 20px var(--team-glow);\n  transition:transform .3s cubic-bezier(.34,1.56,.64,1);\n}\n.team-score.bump{animation:scoreBump .6s cubic-bezier(.34,1.56,.64,1)}\n@keyframes scoreBump{\n  0%{transform:scale(1)}\n  40%{transform:scale(1.35)}\n  100%{transform:scale(1)}\n}\n.team-score-label{\n  font-size:.85rem;\n  font-weight:700;\n  color:var(--muted);\n}\n\n/* القلوب/الأقفال */\n.team-locks{\n  display:flex;\n  justify-content:center;\n  gap:8px;\n  margin-bottom:12px;\n}\n.lock-mini{\n  width:36px;\n  height:44px;\n  flex-shrink:0;\n  transition:.4s;\n}\n.lock-mini .shackle{\n  fill:none;\n  stroke:var(--team-color);\n  stroke-width:11;\n  stroke-linecap:round;\n  transition:transform .7s cubic-bezier(.34,1.56,.64,1), stroke .4s;\n}\n.lock-mini .body{\n  fill:var(--team-color);\n  opacity:.55;\n  transition:fill .4s, opacity .4s, filter .4s;\n}\n.lock-mini .keyhole{fill:rgba(0,0,0,.4);transition:fill .4s}\n.lock-mini .keyhole-stem{fill:rgba(0,0,0,.4);transition:fill .4s}\n\n.lock-mini.unlocked .shackle{\n  transform:translate(-10px,-24px) rotate(-25deg);\n  transform-origin:78% 100%;\n  stroke:var(--gold);\n  filter:drop-shadow(0 0 8px rgba(251,191,36,.7));\n}\n.lock-mini.unlocked .body{\n  fill:var(--green);\n  opacity:1;\n  filter:drop-shadow(0 0 12px rgba(34,197,94,.6));\n}\n.lock-mini.unlocked .keyhole,\n.lock-mini.unlocked .keyhole-stem{fill:rgba(0,0,0,.55)}\n\n/* شريط التقدم */\n.team-progress{\n  height:8px;\n  border-radius:99px;\n  background:rgba(255,255,255,.06);\n  overflow:hidden;\n  margin-bottom:8px;\n}\n.team-progress-bar{\n  height:100%;\n  width:0%;\n  border-radius:inherit;\n  background:linear-gradient(90deg, var(--team-color), var(--team-light, var(--team-color)));\n  box-shadow:0 0 12px var(--team-glow);\n  transition:width .7s cubic-bezier(.22,1,.36,1);\n}\n.team.blue .team-progress-bar{--team-light:var(--blue-light)}\n.team.red .team-progress-bar{--team-light:var(--red-light)}\n\n.team-locks-count{\n  text-align:center;\n  font-size:.82rem;\n  font-weight:700;\n  color:var(--muted);\n}\n.team-locks-count strong{\n  color:var(--team-color);\n  font-size:1rem;\n  font-weight:900;\n}\n\n/* ============================================================\n   منطقة اللعب\n   ============================================================ */\n.play-area{\n  padding:22px;\n  border-radius:26px;\n  background:var(--card);\n  border:1.5px solid var(--border);\n  backdrop-filter:blur(20px);\n  box-shadow:var(--shadow-lg);\n  transition:.4s;\n}\n.play-area.blue-active{border-color:rgba(59,130,246,.4);box-shadow:0 0 0 1px rgba(59,130,246,.3), var(--shadow-lg)}\n.play-area.red-active{border-color:rgba(239,68,68,.4);box-shadow:0 0 0 1px rgba(239,68,68,.3), var(--shadow-lg)}\n\n/* شارة الدور */\n.turn-banner{\n  display:flex;\n  align-items:center;\n  justify-content:center;\n  gap:10px;\n  padding:12px 20px;\n  border-radius:16px;\n  background:rgba(255,255,255,.04);\n  border:1px solid var(--border);\n  margin-bottom:18px;\n  font-size:clamp(.95rem,1.9vw,1.15rem);\n  font-weight:800;\n  color:var(--muted);\n  transition:.4s;\n}\n.turn-banner.blue{\n  color:var(--blue-light);\n  border-color:rgba(59,130,246,.35);\n  background:linear-gradient(90deg, rgba(59,130,246,.12), rgba(59,130,246,.03));\n}\n.turn-banner.red{\n  color:var(--red-light);\n  border-color:rgba(239,68,68,.35);\n  background:linear-gradient(90deg, rgba(239,68,68,.12), rgba(239,68,68,.03));\n}\n.turn-dot{\n  width:12px;height:12px;border-radius:50%;\n  background:currentColor;\n  box-shadow:0 0 12px currentColor;\n  animation:pulseDot 1.3s ease-in-out infinite;\n}\n@keyframes pulseDot{\n  0%,100%{transform:scale(1);opacity:1}\n  50%{transform:scale(1.5);opacity:.6}\n}\n.turn-banner strong{\n  color:inherit;\n  font-weight:900;\n  font-size:1.1em;\n}\n\n/* بطاقة السؤال */\n.question-card{\n  padding:26px 18px 22px;\n  border-radius:20px;\n  background:linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,.1));\n  border:1px solid var(--border);\n  margin-bottom:18px;\n}\n\n.question-hint{\n  text-align:center;\n  font-size:.92rem;\n  font-weight:700;\n  color:var(--muted);\n  margin-bottom:16px;\n  letter-spacing:.3px;\n}\n\n.question-equation{\n  display:flex;\n  align-items:center;\n  justify-content:center;\n  gap:clamp(8px,1.6vw,18px);\n  flex-wrap:wrap;\n  margin-bottom:6px;\n}\n\n.eq-tile{\n  display:inline-flex;\n  align-items:center;\n  justify-content:center;\n  min-width:clamp(80px,13vw,116px);\n  height:clamp(80px,13vw,116px);\n  padding:0 clamp(12px,2vw,20px);\n  border-radius:22px;\n  background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.02));\n  border:2px solid var(--border-strong);\n  color:var(--text-bright);\n  font-size:clamp(2rem,5vw,3rem);\n  font-weight:900;\n  font-variant-numeric:tabular-nums;\n  transition:.3s;\n  box-shadow:inset 0 -8px 20px rgba(0,0,0,.3);\n}\n.eq-tile.known{\n  border-color:rgba(255,255,255,.25);\n  text-shadow:0 0 20px rgba(255,255,255,.3);\n}\n.eq-tile.unknown{\n  background:linear-gradient(180deg, rgba(251,191,36,.18), rgba(251,191,36,.05));\n  border-color:var(--gold);\n  border-style:dashed;\n  color:var(--gold-light);\n  text-shadow:0 0 24px rgba(251,191,36,.7);\n  animation:pulseUnknown 1.8s ease-in-out infinite;\n}\n@keyframes pulseUnknown{\n  0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(251,191,36,.5), inset 0 -8px 20px rgba(0,0,0,.3)}\n  50%{transform:scale(1.04);box-shadow:0 0 0 14px rgba(251,191,36,0), inset 0 -8px 20px rgba(0,0,0,.3)}\n}\n.eq-tile.result{\n  border-color:var(--gold);\n  color:var(--gold);\n  text-shadow:0 0 20px rgba(251,191,36,.6);\n}\n\n.eq-op,.eq-eq{\n  font-size:clamp(1.6rem,3.5vw,2.4rem);\n  font-weight:900;\n  color:var(--muted);\n  padding:0 4px;\n}\n\n/* خيارات الإجابة */\n.answers-grid{\n  display:grid;\n  grid-template-columns:repeat(4,1fr);\n  gap:12px;\n  margin-top:22px;\n}\n\n.answer-btn{\n  position:relative;\n  display:flex;\n  align-items:center;\n  justify-content:center;\n  min-height:clamp(72px,11vw,96px);\n  padding:12px 8px;\n  border-radius:18px;\n  border:2px solid var(--border-strong);\n  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));\n  color:var(--text-bright);\n  font-family:inherit;\n  font-size:clamp(1.4rem,3.4vw,2rem);\n  font-weight:900;\n  font-variant-numeric:tabular-nums;\n  cursor:pointer;\n  transition:.22s cubic-bezier(.22,1,.36,1);\n  overflow:hidden;\n  box-shadow:0 6px 18px rgba(0,0,0,.3);\n}\n.answer-btn::before{\n  content:\"\";\n  position:absolute;\n  inset:0;\n  border-radius:inherit;\n  background:radial-gradient(circle at center, rgba(255,255,255,.15), transparent 70%);\n  opacity:0;\n  transition:opacity .3s;\n  pointer-events:none;\n}\n.answer-btn:hover:not(:disabled){\n  transform:translateY(-4px);\n  border-color:var(--team-color, var(--blue));\n  box-shadow:0 12px 30px rgba(0,0,0,.4), 0 0 20px var(--team-glow, var(--blue-glow));\n}\n.answer-btn:hover:not(:disabled)::before{opacity:1}\n.answer-btn:active:not(:disabled){transform:translateY(-1px)}\n\n.answer-btn.correct{\n  background:linear-gradient(180deg, rgba(34,197,94,.25), rgba(34,197,94,.1));\n  border-color:var(--green);\n  color:#d1fae5;\n  box-shadow:0 0 0 2px var(--green), 0 0 30px rgba(34,197,94,.5);\n  animation:popCorrect .6s cubic-bezier(.34,1.56,.64,1);\n}\n.answer-btn.wrong{\n  background:linear-gradient(180deg, rgba(220,38,38,.25), rgba(220,38,38,.1));\n  border-color:#dc2626;\n  color:#fee2e2;\n  box-shadow:0 0 0 2px #dc2626, 0 0 20px rgba(220,38,38,.4);\n  animation:shake .55s ease;\n}\n.answer-btn:disabled{cursor:default;opacity:.85}\n.answer-btn.dim{opacity:.35;filter:grayscale(.6)}\n\n@keyframes popCorrect{\n  0%{transform:scale(1)}\n  45%{transform:scale(1.14)}\n  100%{transform:scale(1)}\n}\n@keyframes shake{\n  0%,100%{transform:translateX(0)}\n  15%{transform:translateX(-9px)}\n  30%{transform:translateX(9px)}\n  45%{transform:translateX(-7px)}\n  60%{transform:translateX(7px)}\n  75%{transform:translateX(-4px)}\n}\n\n/* التغذية الراجعة */\n.feedback{\n  margin-top:18px;\n  padding:16px 20px;\n  border-radius:18px;\n  font-weight:800;\n  font-size:clamp(.95rem,1.9vw,1.1rem);\n  line-height:1.7;\n  text-align:center;\n  opacity:0;\n  transform:translateY(10px);\n  transition:.4s cubic-bezier(.22,1,.36,1);\n  pointer-events:none;\n}\n.feedback.show{opacity:1;transform:none;pointer-events:auto}\n.feedback.correct{\n  background:linear-gradient(135deg, rgba(34,197,94,.15), rgba(34,197,94,.06));\n  border:2px solid rgba(34,197,94,.5);\n  color:#bbf7d0;\n}\n.feedback.wrong{\n  background:linear-gradient(135deg, rgba(220,38,38,.15), rgba(220,38,38,.06));\n  border:2px solid rgba(220,38,38,.5);\n  color:#fecaca;\n}\n.feedback .big{\n  display:block;\n  font-size:1.35em;\n  font-weight:900;\n  margin-bottom:6px;\n}\n.feedback .equation-reveal{\n  display:inline-block;\n  margin-top:8px;\n  padding:8px 18px;\n  border-radius:12px;\n  background:rgba(0,0,0,.4);\n  border:1px solid rgba(255,255,255,.15);\n  font-family:\"Tajawal\",monospace;\n  font-size:1.15em;\n  color:var(--gold-light);\n  letter-spacing:.5px;\n}\n\n/* الأزرار السفلية */\n.actions{\n  display:flex;\n  gap:12px;\n  margin-top:18px;\n  justify-content:center;\n  flex-wrap:wrap;\n}\n\n.btn{\n  display:inline-flex;\n  align-items:center;\n  justify-content:center;\n  gap:8px;\n  padding:14px 28px;\n  border:0;\n  border-radius:16px;\n  font-family:inherit;\n  font-size:clamp(.95rem,1.8vw,1.05rem);\n  font-weight:900;\n  cursor:pointer;\n  transition:.25s cubic-bezier(.22,1,.36,1);\n  color:#fff;\n  min-height:52px;\n}\n.btn.next{\n  background:linear-gradient(135deg, var(--green), var(--green-dark));\n  box-shadow:0 10px 24px rgba(34,197,94,.35);\n  flex:1;\n  max-width:340px;\n}\n.btn.next:hover:not(:disabled){\n  transform:translateY(-3px);\n  box-shadow:0 16px 34px rgba(34,197,94,.5);\n}\n.btn.next:disabled{\n  opacity:.35;\n  cursor:not-allowed;\n  transform:none;\n  box-shadow:none;\n  background:linear-gradient(135deg, #475569, #334155);\n}\n.btn.restart{\n  background:transparent;\n  border:2px solid var(--border-strong);\n  color:var(--muted);\n}\n.btn.restart:hover{\n  border-color:var(--purple-500, #8b5cf6);\n  color:var(--text-bright);\n  transform:translateY(-2px);\n}\n\n/* ============================================================\n   شاشة الفائز\n   ============================================================ */\n.winner-overlay{\n  position:fixed;\n  inset:0;\n  z-index:100;\n  display:none;\n  align-items:center;\n  justify-content:center;\n  padding:20px;\n  background:rgba(5,8,20,.85);\n  backdrop-filter:blur(14px);\n  overflow-y:auto;\n}\n.winner-overlay.show{\n  display:flex;\n  animation:fadeIn .4s ease both;\n}\n@keyframes fadeIn{from{opacity:0}to{opacity:1}}\n\n.winner-card{\n  position:relative;\n  max-width:640px;\n  width:100%;\n  padding:clamp(28px,4vw,48px) clamp(22px,3.5vw,42px);\n  border-radius:32px;\n  background:\n    radial-gradient(ellipse at top, rgba(251,191,36,.18), transparent 60%),\n    linear-gradient(180deg, #1a1f3e, #0f142e);\n  border:2px solid rgba(251,191,36,.4);\n  box-shadow:\n    0 0 0 1px rgba(251,191,36,.3),\n    0 0 80px rgba(251,191,36,.25),\n    0 40px 100px rgba(0,0,0,.7);\n  text-align:center;\n  animation:winnerIn .8s cubic-bezier(.34,1.56,.64,1) both;\n}\n@keyframes winnerIn{\n  from{opacity:0;transform:scale(.85) translateY(40px)}\n  to{opacity:1;transform:none}\n}\n.winner-card::before{\n  content:\"\";\n  position:absolute;\n  top:-2px;left:20%;right:20%;\n  height:3px;\n  background:linear-gradient(90deg, transparent, var(--gold), transparent);\n  border-radius:3px;\n}\n\n.trophy-icon{\n  font-size:clamp(4rem,10vw,6rem);\n  display:inline-block;\n  margin-bottom:10px;\n  animation:trophyBounce 2s ease-in-out infinite;\n  filter:drop-shadow(0 0 30px rgba(251,191,36,.7));\n}\n@keyframes trophyBounce{\n  0%,100%{transform:translateY(0) rotate(-3deg)}\n  50%{transform:translateY(-12px) rotate(3deg)}\n}\n\n.winner-card h2{\n  font-size:clamp(1.4rem,3.2vw,2rem);\n  font-weight:900;\n  color:var(--gold);\n  margin:0 0 12px;\n  text-shadow:0 0 24px rgba(251,191,36,.5);\n  letter-spacing:.5px;\n}\n\n.winner-name{\n  font-size:clamp(1.6rem,4vw,2.4rem);\n  font-weight:900;\n  color:var(--text-bright);\n  margin:0 0 6px;\n  display:flex;\n  align-items:center;\n  justify-content:center;\n  gap:12px;\n}\n.winner-name .icon{\n  font-size:1.2em;\n  filter:drop-shadow(0 0 16px currentColor);\n}\n.winner-name.blue{color:var(--blue-light)}\n.winner-name.red{color:var(--red-light)}\n\n.winner-score{\n  display:inline-block;\n  margin:8px auto 24px;\n  padding:10px 28px;\n  border-radius:999px;\n  background:rgba(251,191,36,.12);\n  border:1.5px solid rgba(251,191,36,.4);\n  color:var(--gold-light);\n  font-size:clamp(1.1rem,2.2vw,1.35rem);\n  font-weight:900;\n  font-variant-numeric:tabular-nums;\n}\n\n.secret-box{\n  margin:16px auto 24px;\n  padding:22px 20px;\n  border-radius:22px;\n  background:linear-gradient(135deg, rgba(59,130,246,.14), rgba(239,68,68,.14));\n  border:1.5px solid rgba(255,255,255,.15);\n  position:relative;\n  overflow:hidden;\n}\n.secret-box::before{\n  content:\"\";\n  position:absolute;top:0;right:0;left:0;height:3px;\n  background:linear-gradient(90deg, var(--blue), var(--gold), var(--red));\n}\n.secret-title{\n  font-size:clamp(1.05rem,2.2vw,1.2rem);\n  font-weight:900;\n  color:var(--gold);\n  margin-bottom:10px;\n  display:flex;\n  align-items:center;\n  justify-content:center;\n  gap:8px;\n}\n.secret-text{\n  font-size:clamp(.95rem,1.9vw,1.1rem);\n  font-weight:800;\n  color:var(--text);\n  margin-bottom:12px;\n  line-height:1.7;\n}\n.secret-example{\n  display:inline-block;\n  padding:10px 22px;\n  border-radius:14px;\n  background:rgba(0,0,0,.35);\n  border:1px solid rgba(255,255,255,.15);\n  font-family:\"Tajawal\",monospace;\n  font-size:clamp(1.1rem,2.4vw,1.4rem);\n  font-weight:900;\n  color:var(--gold-light);\n  letter-spacing:1px;\n  text-shadow:0 0 16px rgba(251,191,36,.5);\n}\n\n.btn.replay{\n  background:linear-gradient(135deg, var(--gold), var(--gold-dark));\n  color:#1a0e00;\n  font-size:clamp(1rem,2vw,1.15rem);\n  padding:16px 36px;\n  box-shadow:0 12px 30px rgba(251,191,36,.4);\n  width:100%;\n  max-width:360px;\n  margin:0 auto;\n}\n.btn.replay:hover{\n  transform:translateY(-3px);\n  box-shadow:0 18px 40px rgba(251,191,36,.55);\n}\n\n/* ============================================================\n   الكونفيتي\n   ============================================================ */\n.confetti-layer{\n  position:fixed;\n  inset:0;\n  pointer-events:none;\n  z-index:99;\n  overflow:hidden;\n}\n.confetti-piece{\n  position:absolute;\n  top:-30px;\n  width:10px;\n  height:16px;\n  border-radius:3px;\n  animation:confettiFall 3.2s ease-in forwards;\n}\n@keyframes confettiFall{\n  to{\n    transform:translate(var(--drift, 0), 105vh) rotate(720deg);\n    opacity:.15;\n  }\n}\n\n/* ============================================================\n   الاستجابة للجوال\n   ============================================================ */\n@media (max-width:760px){\n  body{padding:10px}\n  .teams-row{grid-template-columns:1fr 1fr;gap:10px}\n  .team{padding:14px 12px;border-radius:20px}\n  .team-name{font-size:.92rem}\n  .team-icon{font-size:1.1em}\n  .team-turn-badge{font-size:.62rem;padding:4px 8px}\n  .lock-mini{width:26px;height:32px}\n  .team-locks{gap:5px}\n  .team-score{font-size:2rem}\n  .play-area{padding:16px 14px;border-radius:22px}\n  .question-card{padding:20px 12px 16px}\n  .answers-grid{grid-template-columns:1fr 1fr;gap:10px}\n  .answer-btn{min-height:70px;font-size:1.5rem}\n  .btn{padding:12px 18px;font-size:.92rem}\n  .winner-card{padding:26px 20px}\n}\n\n@media (max-width:420px){\n  .team-name{font-size:.82rem}\n  .team-locks-count{font-size:.72rem}\n  .lock-mini{width:22px;height:28px}\n  .eq-tile{min-width:64px;height:64px;font-size:1.7rem}\n  .eq-op,.eq-eq{font-size:1.4rem}\n  .answers-grid{gap:8px}\n  .answer-btn{min-height:60px;font-size:1.3rem}\n}\n\n.teacher-pick{margin:16px 0;padding:16px;border:1px solid #64748b;border-radius:16px;background:#172033;color:white}.teacher-pick select{width:100%;padding:12px;margin:6px 0;border-radius:9px;background:#fff;color:#172033;font:inherit}.teacher-pick p{line-height:1.8}.player-label{font-size:16px;color:#fde68a;margin-top:10px}button:focus-visible,select:focus-visible{outline:3px solid #fbbf24;outline-offset:4px}\n</style>\n</head>\n<body>\n\n<div class=\"orb orb-blue\" aria-hidden=\"true\"></div>\n<div class=\"orb orb-red\" aria-hidden=\"true\"></div>\n\n<div class=\"game\">\n\n  <header class=\"game-header\">\n    <h1 class=\"game-title\">\n      <span class=\"emoji\">🔐</span>\n      مسابقة الأقفال\n      <span class=\"emoji\">🔓</span>\n    </h1>\n    <p class=\"game-subtitle\">خمس جولات متكافئة لكل مجموعة؛ الأكثر فتحًا للأقفال يفوز!</p>\n  </header>\n\n<section class=\"teacher-pick\"><label for=\"classPick\">اختيار الفصل</label><select id=\"classPick\"><option value=\"\">جارٍ تحميل الطلاب…</option></select><p>اختاري طالبًا لكل مجموعة قبل الإجابة. يمكنك تغيير المجيب بين الأسئلة. كل إجابة صحيحة تمنح المجيب ١٠ نقاط تحفيز.</p><p id=\"pointsStatus\" role=\"status\" aria-live=\"polite\"></p><button class=\"btn\" id=\"soundToggle\" type=\"button\" aria-pressed=\"false\">🔊 الصوت</button></section>\n  <!-- المجموعتان -->\n  <div class=\"teams-row\">\n    <div class=\"team blue\" id=\"teamBlue\">\n      <div class=\"team-head\">\n        <div class=\"team-name\"><span class=\"team-icon\">🔵</span> المجموعة الأولى</div>\n        <span class=\"team-turn-badge\">دورك الآن</span>\n      </div>\n      <div class=\"team-score-row\">\n        <span class=\"team-score\" id=\"blueScore\">٠</span>\n        <span class=\"team-score-label\">نقطة</span>\n      </div>\n      <label class=\"player-label\" for=\"bluePlayer\">الطالب المجيب</label><select id=\"bluePlayer\" style=\"width:100%;padding:10px;border-radius:10px;font:inherit\"><option value=\"\">اختاري الطالب</option></select><div class=\"team-locks\" id=\"blueLocks\"></div>\n      <div class=\"team-progress\"><div class=\"team-progress-bar\" id=\"blueBar\"></div></div>\n      <div class=\"team-locks-count\">أقفال مفتوحة: <strong><span id=\"blueOpened\">٠</span> / ٥</strong></div>\n    </div>\n\n    <div class=\"team red\" id=\"teamRed\">\n      <div class=\"team-head\">\n        <div class=\"team-name\"><span class=\"team-icon\">🔴</span> المجموعة الثانية</div>\n        <span class=\"team-turn-badge\">دورك الآن</span>\n      </div>\n      <div class=\"team-score-row\">\n        <span class=\"team-score\" id=\"redScore\">٠</span>\n        <span class=\"team-score-label\">نقطة</span>\n      </div>\n      <label class=\"player-label\" for=\"redPlayer\">الطالب المجيب</label><select id=\"redPlayer\" style=\"width:100%;padding:10px;border-radius:10px;font:inherit\"><option value=\"\">اختاري الطالب</option></select><div class=\"team-locks\" id=\"redLocks\"></div>\n      <div class=\"team-progress\"><div class=\"team-progress-bar\" id=\"redBar\"></div></div>\n      <div class=\"team-locks-count\">أقفال مفتوحة: <strong><span id=\"redOpened\">٠</span> / ٥</strong></div>\n    </div>\n  </div>\n\n  <!-- منطقة اللعب -->\n  <div class=\"play-area\" id=\"playArea\">\n    <div class=\"turn-banner blue\" id=\"turnBanner\">\n      <span class=\"turn-dot\"></span>\n      دور: <strong id=\"turnTeamName\">المجموعة الأولى</strong>\n    </div>\n\n    <div class=\"question-card\">\n      <p class=\"question-hint\">اختاري العدد الذي يجعل المجموع = ٠</p>\n      <div class=\"question-equation\" id=\"questionEquation\"></div>\n      <div class=\"answers-grid\" id=\"answersGrid\"></div>\n      <div class=\"feedback\" id=\"feedback\"></div>\n    </div>\n\n    <div class=\"actions\">\n      <button class=\"btn next\" id=\"nextBtn\" disabled>السؤال التالي ←</button>\n      <button class=\"btn restart\" id=\"restartBtn\">إعادة اللعبة ↻</button>\n    </div>\n  </div>\n\n</div>\n\n<!-- شاشة الفائز -->\n<div class=\"winner-overlay\" id=\"winnerOverlay\">\n  <div class=\"winner-card\">\n    <div class=\"trophy-icon\">🏆</div>\n    <h2>المجموعة الفائزة</h2>\n    <div class=\"winner-name\" id=\"winnerName\">—</div>\n    <div class=\"winner-score\" id=\"winnerScore\">٠ نقطة</div>\n\n    <div class=\"secret-box\">\n      <div class=\"secret-title\">🔐 سر شفرة الصفر</div>\n      <div class=\"secret-text\">العدد ونظيره الجمعي مجموعهما يساوي صفرًا.</div>\n      <div class=\"secret-example\">٥ + (−٥) = ٠</div>\n    </div>\n\n    <button class=\"btn replay\" id=\"playAgainBtn\">إعادة اللعبة 🔁</button>\n  </div>\n</div>\n\n<div class=\"confetti-layer\" id=\"confetti\"></div>\n\n<script>\n/* ============================================================\n   أدوات مساعدة\n   ============================================================ */\nconst AR = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];\nfunction ar(n){\n  return String(n).replace('-','−').replace(/\\d/g, d => AR[+d]);\n}\nfunction shuffle(arr){\n  const a = arr.slice();\n  for(let i=a.length-1;i>0;i--){\n    const j = Math.floor(Math.random()*(i+1));\n    [a[i],a[j]]=[a[j],a[i]];\n  }\n  return a;\n}\n\n/* ============================================================\n   الأصوات\n   ============================================================ */\nlet audioCtx = null;\nlet muted=false;\nfunction ensureAudio(){\n  if(!audioCtx){\n    try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){}\n  }\n  if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();\n  return audioCtx;\n}\nfunction playTones(notes){\n  if(muted)return;\n  const ctx = ensureAudio();\n  if(!ctx) return;\n  const now = ctx.currentTime;\n  notes.forEach(([freq, start, dur, vol = 0.12]) => {\n    const osc = ctx.createOscillator();\n    const gain = ctx.createGain();\n    osc.type = 'sine';\n    osc.frequency.value = freq;\n    osc.connect(gain); gain.connect(ctx.destination);\n    gain.gain.setValueAtTime(0.0001, now + start);\n    gain.gain.exponentialRampToValueAtTime(vol, now + start + 0.02);\n    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);\n    osc.start(now + start);\n    osc.stop(now + start + dur + 0.05);\n  });\n}\nfunction sndSuccess(){\n  playTones([[523,0,.1,.13],[659,.08,.1,.13],[784,.16,.22,.14]]);\n}\nfunction sndWrong(){\n  playTones([[220,0,.14,.11],[165,.11,.22,.1]]);\n}\nfunction sndUnlock(){\n  playTones([[600,0,.05,.1],[700,.06,.05,.1],[850,.12,.08,.1],[1100,.2,.3,.13]]);\n}\nfunction sndVictory(){\n  playTones([\n    [523,0,.15,.14],[659,.14,.15,.14],[784,.28,.15,.14],[1047,.42,.4,.15],\n    [784,.55,.15,.12],[1047,.68,.6,.14]\n  ]);\n}\n\n/* ============================================================\n   بيانات الأسئلة\n   ============================================================ */\nconst QUESTIONS = {\n  blue: [\n    { a: 3,   answer: -3,  distractors: [3, -2, 2] },\n    { a: -5,  answer: 5,   distractors: [-5, 4, -4] },\n    { a: 8,   answer: -8,  distractors: [8, -7, 7] },\n    { a: -12, answer: 12,  distractors: [-12, 11, -11] },\n    { a: 6,   answer: -6,  distractors: [6, -5, 5] },\n  ],\n  red: [\n    { a: -9,  answer: 9,   distractors: [-9, 8, -8] },\n    { a: 11,  answer: -11, distractors: [11, -10, 10] },\n    { a: -4,  answer: 4,   distractors: [-4, 3, -3] },\n    { a: 7,   answer: -7,  distractors: [7, -6, 6] },\n    { a: -10, answer: 10,  distractors: [-10, 9, -9] },\n  ],\n};\n\nconst TOTAL_LOCKS = 5;\nconst POINTS_PER_CORRECT = 10;\n\n/* ============================================================\n   حالة اللعبة\n   ============================================================ */\nlet state = createInitialState();\n\nfunction createInitialState(){\n  return {\n    currentTeam: 'blue',\n    blueIndex: 0,\n    redIndex: 0,\n    blueScore: 0,\n    redScore: 0,\n    blueLocks: 0,\n    redLocks: 0,\n    awaitingNext: false,\n    answered: false,\n    gameOver: false,\n  };\n}\n\n/* ============================================================\n   عناصر DOM\n   ============================================================ */\nconst el = {\n  teamBlue: document.getElementById('teamBlue'),\n  teamRed: document.getElementById('teamRed'),\n  blueScore: document.getElementById('blueScore'),\n  redScore: document.getElementById('redScore'),\n  blueLocks: document.getElementById('blueLocks'),\n  redLocks: document.getElementById('redLocks'),\n  blueBar: document.getElementById('blueBar'),\n  redBar: document.getElementById('redBar'),\n  blueOpened: document.getElementById('blueOpened'),\n  redOpened: document.getElementById('redOpened'),\n  turnBanner: document.getElementById('turnBanner'),\n  turnTeamName: document.getElementById('turnTeamName'),\n  playArea: document.getElementById('playArea'),\n  questionEquation: document.getElementById('questionEquation'),\n  answersGrid: document.getElementById('answersGrid'),\n  feedback: document.getElementById('feedback'),\n  nextBtn: document.getElementById('nextBtn'),\n  restartBtn: document.getElementById('restartBtn'),\n  winnerOverlay: document.getElementById('winnerOverlay'),\n  winnerName: document.getElementById('winnerName'),\n  winnerScore: document.getElementById('winnerScore'),\n  playAgainBtn: document.getElementById('playAgainBtn'),\n  confetti: document.getElementById('confetti'),\n};\n\n/* ============================================================\n   بناء الأقفال الخمسة لكل مجموعة\n   ============================================================ */\nfunction lockSVG(){\n  return `\n    <svg class=\"lock-mini\" viewBox=\"0 0 100 130\" xmlns=\"http://www.w3.org/2000/svg\">\n      <path class=\"shackle\" d=\"M25 62 V42 A25 25 0 0 1 75 42 V62\"/>\n      <rect class=\"body\" x=\"10\" y=\"62\" width=\"80\" height=\"58\" rx=\"12\"/>\n      <circle class=\"keyhole\" cx=\"50\" cy=\"88\" r=\"7\"/>\n      <rect class=\"keyhole-stem\" x=\"47\" y=\"88\" width=\"6\" height=\"16\" rx=\"3\"/>\n    </svg>\n  `;\n}\nfunction buildLocks(container){\n  container.innerHTML = Array.from({length: TOTAL_LOCKS}, () => lockSVG()).join('');\n}\nbuildLocks(el.blueLocks);\nbuildLocks(el.redLocks);\n\n/* ============================================================\n   رسم واجهة المجموعة\n   ============================================================ */\nfunction updateTeamUI(){\n  // الألوان\n  const teamColor = state.currentTeam === 'blue' ? 'var(--blue)' : 'var(--red)';\n  const teamGlow = state.currentTeam === 'blue' ? 'var(--blue-glow)' : 'var(--red-glow)';\n  document.documentElement.style.setProperty('--team-color', teamColor);\n  document.documentElement.style.setProperty('--team-glow', teamGlow);\n\n  // النقاط\n  el.blueScore.textContent = ar(state.blueScore);\n  el.redScore.textContent = ar(state.redScore);\n\n  // الأقفال المفتوحة\n  el.blueOpened.textContent = ar(state.blueLocks);\n  el.redOpened.textContent = ar(state.redLocks);\n\n  // شريط التقدم\n  el.blueBar.style.width = (state.blueLocks / TOTAL_LOCKS * 100) + '%';\n  el.redBar.style.width = (state.redLocks / TOTAL_LOCKS * 100) + '%';\n\n  // تفعيل بطاقة المجموعة الحالية\n  el.teamBlue.classList.toggle('active', state.currentTeam === 'blue' && !state.gameOver);\n  el.teamRed.classList.toggle('active', state.currentTeam === 'red' && !state.gameOver);\n\n  // شارة الدور\n  el.turnBanner.classList.remove('blue', 'red');\n  el.turnBanner.classList.add(state.currentTeam);\n  el.turnTeamName.textContent = state.currentTeam === 'blue' ? 'المجموعة الأولى 🔵' : 'المجموعة الثانية 🔴';\n\n  // حدود منطقة اللعب\n  el.playArea.classList.remove('blue-active', 'red-active');\n  el.playArea.classList.add(state.currentTeam + '-active');\n\n  // فتح الأقفال بصرياً\n  openLocksVisually(el.blueLocks, state.blueLocks);\n  openLocksVisually(el.redLocks, state.redLocks);\n}\n\nfunction openLocksVisually(container, count){\n  const locks = container.querySelectorAll('.lock-mini');\n  locks.forEach((lock, i) => {\n    if(i < count) lock.classList.add('unlocked');\n    else lock.classList.remove('unlocked');\n  });\n}\n\n/* ============================================================\n   رسم السؤال\n   ============================================================ */\nfunction currentQuestionList(){\n  return QUESTIONS[state.currentTeam];\n}\nfunction currentQuestionIndex(){\n  return state.currentTeam === 'blue' ? state.blueIndex : state.redIndex;\n}\n\nfunction renderQuestion(){\n  const list = currentQuestionList();\n  const idx = currentQuestionIndex();\n  const q = list[idx];\n  if(!q) return;\n\n  // معادلة السؤال\n  el.questionEquation.innerHTML = `\n    <span class=\"eq-tile known\">${ar(q.a)}</span>\n    <span class=\"eq-op\">+</span>\n    <span class=\"eq-tile unknown\">؟</span>\n    <span class=\"eq-eq\">=</span>\n    <span class=\"eq-tile result\">٠</span>\n  `;\n\n  // الخيارات (مخلوطة)\n  const options = shuffle([q.answer, ...q.distractors]);\n  el.answersGrid.innerHTML = options.map((v, i) => `\n    <button class=\"answer-btn\" data-value=\"${v}\" data-index=\"${i}\">${ar(v)}</button>\n  `).join('');\n\n  el.answersGrid.querySelectorAll('.answer-btn').forEach(btn => {\n    btn.addEventListener('click', () => handleAnswer(btn));\n  });\n\n  // تنظيف\n  el.feedback.classList.remove('show', 'correct', 'wrong');\n  el.feedback.innerHTML = '';\n  el.nextBtn.disabled = true;\n  el.nextBtn.textContent = 'السؤال التالي ←';\n\n  state.awaitingNext = false;\n  state.answered = false;\n  document.getElementById(\"bluePlayer\").disabled=false;document.getElementById(\"redPlayer\").disabled=false;\n  updateAnswerAvailability();\n}\n\n/* ============================================================\n   معالجة الإجابة\n   ============================================================ */\nfunction handleAnswer(btn){\n  if(!selectedPlayer())return;\n  if(state.answered || state.gameOver) return;\n  state.answered = true;\n  const answeringStudent=selectedPlayer();\n  document.getElementById(\"bluePlayer\").disabled=true;document.getElementById(\"redPlayer\").disabled=true;document.getElementById(\"classPick\").disabled=true;\n\n  const list = currentQuestionList();\n  const idx = currentQuestionIndex();\n  const q = list[idx];\n  const value = Number(btn.dataset.value);\n  const isCorrect = value === q.answer;\n\n  const allBtns = el.answersGrid.querySelectorAll('.answer-btn');\n  allBtns.forEach(b => b.disabled = true);\n\n  // تسليط الضوء على الإجابة الصحيحة\n  allBtns.forEach(b => {\n    if(Number(b.dataset.value) === q.answer){\n      b.classList.add('correct');\n    } else if(b === btn){\n      b.classList.add('wrong');\n    } else {\n      b.classList.add('dim');\n    }\n  });\n\n  if(isCorrect){\n    // ✅ صحيح\n    sndSuccess();\n    awardAnswer(answeringStudent);\n    setTimeout(sndUnlock, 350);\n\n    // زيادة النقاط والقفل\n    if(state.currentTeam === 'blue'){\n      state.blueScore += POINTS_PER_CORRECT;\n      state.blueLocks += 1;\n    } else {\n      state.redScore += POINTS_PER_CORRECT;\n      state.redLocks += 1;\n    }\n    // تأثير على الرقم\n    const scoreEl = state.currentTeam === 'blue' ? el.blueScore : el.redScore;\n    scoreEl.classList.remove('bump');\n    void scoreEl.offsetWidth;\n    scoreEl.classList.add('bump');\n\n    // فتح القفل بصرياً\n    setTimeout(() => {\n      const locksContainer = state.currentTeam === 'blue' ? el.blueLocks : el.redLocks;\n      openLocksVisually(locksContainer, state.currentTeam === 'blue' ? state.blueLocks : state.redLocks);\n      updateTeamUI();\n    }, 200);\n\n    // عرض رسالة النجاح مع المعادلة كاملة\n    const equationHTML = `${ar(q.a)} <span style=\"color:#fbbf24\">+</span> (${ar(q.answer)}) <span style=\"color:#22c55e\">=</span> ٠`;\n    el.feedback.classList.add('show', 'correct');\n    el.feedback.innerHTML = `\n      <span class=\"big\">✅ أحسنتنّ! تم فتح القفل</span>\n      <span class=\"equation-reveal\">${equationHTML}</span>\n    `;\n\n    state.awaitingNext = true;\n    el.nextBtn.disabled = false;\n  } else {\n    // ❌ خطأ\n    sndWrong();\n    el.feedback.classList.add('show', 'wrong');\n    el.feedback.innerHTML = `\n      <span class=\"big\">❌ إجابة غير صحيحة</span>\n      حاولنّ التفكير في العدد الذي يجعل المجموع صفرًا.\n      <br>\n      <span class=\"equation-reveal\">${ar(q.a)} + (${ar(q.answer)}) = ٠</span>\n    `;\n\n    state.awaitingNext = true;\n    el.nextBtn.disabled = false;\n  }\n}\n\n/* ============================================================\n   زر السؤال التالي\n   ============================================================ */\nel.nextBtn.addEventListener('click', () => {\n  if(!state.awaitingNext || state.gameOver) return;\n\n  // تقدم المؤشر للمجموعة الحالية\n  if(state.currentTeam === 'blue') state.blueIndex += 1;\n  else state.redIndex += 1;\n\n  // هل انتهت اللعبة؟\n\n  // هل انتهت أسئلة المجموعتين؟\n  if(state.blueIndex >= QUESTIONS.blue.length && state.redIndex >= QUESTIONS.red.length){\n    endGame();\n    return;\n  }\n\n  // تبديل الدور\n  state.currentTeam = state.currentTeam === 'blue' ? 'red' : 'blue';\n\n  // لو الفريق اللي جا دوره خلص أسئلته، نعطيه الدور للثاني\n  const nextIdx = state.currentTeam === 'blue' ? state.blueIndex : state.redIndex;\n  const nextList = QUESTIONS[state.currentTeam];\n  if(nextIdx >= nextList.length){\n    state.currentTeam = state.currentTeam === 'blue' ? 'red' : 'blue';\n  }\n\n  updateTeamUI();\n  renderQuestion();\n});\n\n/* ============================================================\n   نهاية اللعبة\n   ============================================================ */\nfunction endGame(){\n  state.gameOver = true;\n  el.nextBtn.disabled = true;\n  el.teamBlue.classList.remove('active');\n  el.teamRed.classList.remove('active');\n\n  // تحديد الفائز: الأقفال أولاً، ثم النقاط\n  let winner, winnerScore;\n  if(state.blueLocks > state.redLocks){\n    winner = 'blue'; winnerScore = state.blueScore;\n  } else if(state.redLocks > state.blueLocks){\n    winner = 'red'; winnerScore = state.redScore;\n  } else if(state.blueScore > state.redScore){\n    winner = 'blue'; winnerScore = state.blueScore;\n  } else if(state.redScore > state.blueScore){\n    winner = 'red'; winnerScore = state.redScore;\n  } else {\n    winner = 'tie';\n  }\n\n  if(winner === 'tie'){\n    el.winnerName.className = 'winner-name';\n    el.winnerName.textContent = '🤝 تعادل بين المجموعتين!';\n    el.winnerScore.textContent = `${ar(state.blueScore)} نقطة لكل مجموعة`;\n  } else {\n    el.winnerName.className = 'winner-name ' + winner;\n    el.winnerName.innerHTML = winner === 'blue'\n      ? '<span class=\"icon\">🔵</span> المجموعة الأولى'\n      : '<span class=\"icon\">🔴</span> المجموعة الثانية';\n    el.winnerScore.textContent = `${ar(winnerScore)} نقطة`;\n  }\n\n  // عرض الشاشة\n  setTimeout(() => {\n    el.winnerOverlay.classList.add('show');\n    sndVictory();\n    launchConfetti(120);\n  }, 500);\n}\n\n/* ============================================================\n   الكونفيتي\n   ============================================================ */\nfunction launchConfetti(count = 80){\n  const colors = ['#3b82f6','#ef4444','#fbbf24','#22c55e','#8b5cf6','#f472b6','#22d3ee'];\n  for(let i=0;i<count;i++){\n    const p = document.createElement('span');\n    p.className = 'confetti-piece';\n    p.style.left = Math.random()*100 + '%';\n    p.style.background = colors[Math.floor(Math.random()*colors.length)];\n    p.style.animationDelay = (Math.random()*0.8) + 's';\n    p.style.animationDuration = (2.6 + Math.random()*1.6) + 's';\n    p.style.setProperty('--drift', ((Math.random()-0.5)*260) + 'px');\n    p.style.transform = `rotate(${Math.random()*360}deg)`;\n    el.confetti.appendChild(p);\n    setTimeout(()=>p.remove(), 4600);\n  }\n}\n\n/* ============================================================\n   إعادة اللعبة\n   ============================================================ */\nfunction restartGame(){\n  if(!state.gameOver && (state.blueIndex||state.redIndex||state.answered) && !confirm(\"بدء جولة جديدة؟ النقاط المسجلة سابقًا تبقى محفوظة.\"))return;\n  state = createInitialState();\n  document.getElementById(\"classPick\").disabled=false;\n  el.winnerOverlay.classList.remove('show');\n  el.confetti.innerHTML = '';\n  updateTeamUI();\n  renderQuestion();\n}\nel.restartBtn.addEventListener('click', restartGame);\nel.playAgainBtn.addEventListener('click', restartGame);\n\n/* ============================================================\n   التشغيل الأولي\n   ============================================================ */\n\nlet roster=[];let awardPending=0;const pendingAwards=new Set();\nconst sessionId=crypto.randomUUID();let answerSequence=0;\nfunction selectedPlayer(){\n const a=document.getElementById('bluePlayer').value,b=document.getElementById('redPlayer').value;\n if(!a||!b||a===b)return null;\n return roster.find(s=>String(s.id)===document.getElementById(state.currentTeam+'Player').value)||null;\n}\nfunction updateAnswerAvailability(){el.answersGrid.querySelectorAll('button').forEach(b=>b.disabled=state.answered||state.gameOver||!selectedPlayer());}\nfunction populatePlayers(){\n const classId=document.getElementById('classPick').value;\n for(const team of ['blue','red']){const select=document.getElementById(team+'Player');select.replaceChildren(new Option('اختاري الطالب',''));for(const s of roster.filter(s=>String(s.class_id)===classId))select.add(new Option(s.name,String(s.id)));}\n updateAnswerAvailability();\n}\nwindow.addEventListener('message',event=>{\n if(event.source!==parent)return;\n if(event.data?.type==='madar-locks-roster'){\n roster=event.data.students||[];const select=document.getElementById('classPick');select.replaceChildren(new Option('اختاري الفصل',''));\n const classes=new Map(roster.map(s=>[String(s.class_id),[s.stage,s.grade_label,s.class_name].filter(Boolean).join(' — ')]));\n for(const [id,name]of classes)select.add(new Option(name,id));\n if(!roster.length)document.getElementById('pointsStatus').textContent='لا يوجد طلاب مسجلون في فصولك.';\n }\n if(event.data?.type==='madar-locks-award-result'&&pendingAwards.delete(event.data.key)){\n awardPending--;document.getElementById('pointsStatus').textContent=event.data.ok?'تم تسجيل ١٠ نقاط تحفيز للمجيب.':'تعذر تأكيد حفظ النقاط؛ راجعي سجل التحفيز قبل إضافتها يدويًا.';\n }\n});\nfunction awardAnswer(student){const key=sessionId+'-'+(++answerSequence);pendingAwards.add(key);awardPending++;document.getElementById('pointsStatus').textContent='جارٍ تسجيل نقاط التحفيز…';parent.postMessage({type:'madar-locks-award',key,studentId:student.id},new URL(document.baseURI).origin);}\ndocument.getElementById('classPick').addEventListener('change',populatePlayers);\nfor(const team of ['blue','red'])document.getElementById(team+'Player').addEventListener('change',()=>{const same=document.getElementById('bluePlayer').value&&document.getElementById('bluePlayer').value===document.getElementById('redPlayer').value;document.getElementById('pointsStatus').textContent=same?'اختاري طالبين مختلفين للمجموعتين.':'';updateAnswerAvailability();});\ndocument.getElementById('soundToggle').onclick=()=>{muted=!muted;document.getElementById('soundToggle').textContent=muted?'🔇 الصوت مكتوم':'🔊 الصوت';document.getElementById('soundToggle').setAttribute('aria-pressed',String(muted));};\nwindow.addEventListener('beforeunload',event=>{if(awardPending){event.preventDefault();event.returnValue='';}});\n\nupdateTeamUI();\nrenderQuestion();\n\n// تفعيل الأصوات عند أول تفاعل\n['click','touchstart','keydown'].forEach(evt => {\n  document.addEventListener(evt, () => ensureAudio(), { once: true });\n});\n</script>\n</body>\n</html>";
+ panel.replaceChildren(frame);
+ }catch(error){panel.textContent='تعذر تحميل الطلاب: '+error.message;}
+}
+
 async function renderGamesPanel() {
   contentEl.innerHTML = `
     <div class="student-panel-tabs" role="tablist" aria-label="أقسام الألعاب">
       <button class="tab-btn ${gamesPanelMode === "interactive-games" ? "active" : ""}" data-games-panel="interactive-games">الألعاب التفاعلية</button>
+      <button class="tab-btn ${gamesPanelMode === "locks" ? "active" : ""}" data-games-panel="locks">🔐 مسابقة الأقفال</button>
       <button class="tab-btn ${gamesPanelMode === "competitions" ? "active" : ""}" data-games-panel="competitions">المسابقات</button>
+      <button class="tab-btn ${gamesPanelMode === "game-creator" ? "active" : ""}" data-games-panel="game-creator">إنشاء الألعاب</button>
     </div>
     <div id="gamesPanelContent"></div>
   `;
   document.querySelectorAll("[data-games-panel]").forEach((button) => {
     button.onclick = () => {
+      if (button.dataset.gamesPanel !== "competitions") teacherLiveCompetitions.stop();
       gamesPanelMode = button.dataset.gamesPanel;
       renderGamesPanel();
     };
   });
   const panel = document.getElementById("gamesPanelContent");
+  if(gamesPanelMode === "locks"){await renderLocksCompetition(panel);return;}
   panel.innerHTML = '<div class="empty-state">جارٍ تحميل إعدادات اللعبة…</div>';
   try { await Promise.all([loadSchoolSettings(), loadInteractiveGames()]); } catch (_) {}
   if (!document.body.contains(panel)) return;
+  if (gamesPanelMode === "competitions") {
+    teacherLiveCompetitions.render(panel);
+    return;
+  }
   renderEducationalContent(gamesPanelMode, panel);
 }
 
@@ -4339,15 +6145,106 @@ function openStrategiesPanel() {
   navigate("strategies-panel");
 }
 
+let flippedClassroomHeightListener = null;
+
 async function renderStrategiesPanel() {
   try { await loadSchoolSettings(); } catch (_) {}
+  const selection = normalizeAcademicSelection("strategies");
+  const availableClasses = academicClasses(selection);
+  if (!selection.classId && availableClasses.length === 1) {
+    selection.classId = String(availableClasses[0].id);
+    sessionStorage.setItem("madarAcademicStrategies", JSON.stringify(selection));
+  }
+  const selectedClass = selectedAcademicClass("strategies");
+  const context = {
+    classId: String(selectedClass?.id || selection.classId || ""),
+    className: selectedClass?.name || (selection.classId ? "الفصل المختار" : "لا يوجد فصل مسجل"),
+    stage: selectedClass?.level || selectedClass?.stage || selection.stage || "",
+    grade: selectedClass?.grade_label || actualAcademicGradeLabel("strategies") || "",
+    semester: schoolSettings?.currentSemester || "first",
+  };
+  const frameQuery = new URLSearchParams({ ...context, v: "16" }).toString();
+  const frameSrc = `flipped-classroom.html?${frameQuery}`;
+  const expectedFrameUrl = new URL(frameSrc, window.location.href).href;
   contentEl.innerHTML = `
-    <div class="student-panel-tabs" role="tablist" aria-label="أقسام الاستراتيجيات">
+    ${academicSelectorHtml("strategies")}
+    <div class="student-panel-tabs" role="tablist" aria-label="أقسام التعلم النشط">
       <button class="tab-btn active" type="button" aria-selected="true">الصف المقلوب</button>
     </div>
-    <div id="strategiesPanelContent"></div>
+    <section class="flipped-frame-shell" aria-label="استديو الصف المقلوب">
+      <div class="flipped-frame-loading" id="flippedFrameLoading"><span aria-hidden="true">◌</span><strong>جارٍ تجهيز استديو الصف المقلوب…</strong><small>يمكن إعداد الدرس وحفظه ونشره للفصل من داخل حساب المعلمة.</small></div>
+      <iframe class="flipped-classroom-frame" id="flippedClassroomFrame" title="استديو الصف المقلوب" loading="eager"></iframe>
+      <div class="flipped-frame-error" id="flippedFrameError" hidden><strong>تعذر فتح الاستديو</strong><span>حدّثي الصفحة ثم حاولي مرة أخرى.</span></div>
+    </section>
   `;
-  renderEducationalContent("flipped-classroom", document.getElementById("strategiesPanelContent"));
+  bindAcademicSelector("strategies", renderStrategiesPanel);
+  const frame = document.getElementById("flippedClassroomFrame");
+  const loading = document.getElementById("flippedFrameLoading");
+  const error = document.getElementById("flippedFrameError");
+  let frameSettled = false;
+  const markFrameReady = () => {
+    if (frameSettled) return;
+    frameSettled = true;
+    loading.hidden = true;
+    error.hidden = true;
+    frame.classList.add("is-ready");
+    frame.contentWindow?.postMessage({ source: "madar-teacher", type: "context", context }, window.location.origin);
+  };
+  const markFrameFailed = () => {
+    if (frameSettled) return;
+    frameSettled = true;
+    loading.hidden = true;
+    error.hidden = false;
+  };
+  frame.addEventListener("load", markFrameReady, { once: true });
+  frame.addEventListener("error", markFrameFailed, { once: true });
+  if (flippedClassroomHeightListener) window.removeEventListener("message", flippedClassroomHeightListener);
+  flippedClassroomHeightListener = (event) => {
+    if (event.origin !== window.location.origin || event.source !== frame.contentWindow || event.data?.source !== "madar-flipped-classroom") return;
+    if (event.data.type === "api") {
+      const requestId = String(event.data.requestId || "");
+      const path = String(event.data.path || "");
+      const method = String(event.data.method || "GET").toUpperCase();
+      if (!requestId || !/^\/flipped-classroom(?:\/\d+(?:\/(?:video|publish|close|reopen|results|active-learning))?|\/submissions\/\d+\/review)?(?:\?.*)?$/.test(path) || !["GET","POST","DELETE"].includes(method)) {
+        frame.contentWindow?.postMessage({ source: "madar-teacher", type: "api-result", requestId, error: "طلب غير مسموح." }, window.location.origin);
+        return;
+      }
+      const options = { method };
+      const uploadFile = event.data.file;
+      const hasUploadFile = uploadFile
+        && typeof uploadFile === "object"
+        && typeof uploadFile.name === "string"
+        && Number.isFinite(Number(uploadFile.size))
+        && Number(uploadFile.size) > 0
+        && typeof uploadFile.slice === "function";
+      if (hasUploadFile) {
+        const formData = new FormData();
+        formData.set("video", uploadFile, uploadFile.name || "video.mp4");
+        formData.set("duration", String(event.data.duration || 0));
+        formData.set("trimStart", String(event.data.trimStart || 0));
+        formData.set("trimEnd", String(event.data.trimEnd || event.data.duration || 0));
+        options.body = formData;
+      } else if (event.data.body !== undefined && method !== "GET") {
+        options.body = JSON.stringify(event.data.body);
+      }
+      api(path, options).then((data) => {
+        frame.contentWindow?.postMessage({ source: "madar-teacher", type: "api-result", requestId, data }, window.location.origin);
+      }).catch((requestError) => {
+        frame.contentWindow?.postMessage({ source: "madar-teacher", type: "api-result", requestId, error: requestError.message || "تعذّر تنفيذ الطلب." }, window.location.origin);
+      });
+      return;
+    }
+    if (event.data.type !== "height") return;
+    const requestedHeight = Number(event.data.height || 0);
+    if (Number.isFinite(requestedHeight) && requestedHeight > 0) frame.style.height = `${Math.max(760, Math.min(2400, requestedHeight + 8))}px`;
+  };
+  window.addEventListener("message", flippedClassroomHeightListener);
+  frame.src = frameSrc;
+  requestAnimationFrame(() => {
+    try {
+      if (frame.contentWindow?.location.href === expectedFrameUrl && frame.contentDocument?.readyState === "complete") markFrameReady();
+    } catch (_) {}
+  });
 }
 
 let libraryPanelMode = "videos";
@@ -4358,39 +6255,70 @@ function openLibraryPanel(mode = "videos") {
 }
 
 async function renderLibraryPanel() {
-  try { await loadSchoolSettings(); } catch (_) {}
-  contentEl.innerHTML = `
-    <div class="student-panel-tabs" role="tablist" aria-label="أقسام الموارد المكتبية">
-      <button class="tab-btn ${libraryPanelMode === "videos" ? "active" : ""}" data-library-panel="videos">الفيديوهات</button>
-      <button class="tab-btn ${libraryPanelMode === "training" ? "active" : ""}" data-library-panel="training">التدريبات</button>
-    </div>
-    <div id="libraryPanelContent"></div>
-  `;
-  document.querySelectorAll("[data-library-panel]").forEach((button) => {
-    button.onclick = () => {
-      libraryPanelMode = button.dataset.libraryPanel;
-      renderLibraryPanel();
-    };
-  });
-  renderEducationalContent(libraryPanelMode, document.getElementById("libraryPanelContent"));
+  await loadSchoolSettings().catch(() => {});
+  contentEl.innerHTML = `<div class="student-panel-tabs" aria-label="أقسام الموارد المكتبية">${[['videos','الفيديوهات'],['training','التدريبات'],['worksheets','أوراق عمل']].map(([key,label]) => `<button class="tab-btn ${libraryPanelMode===key?'active':''}" data-library-panel="${key}">${label}</button>`).join('')}<button class="btn btn-primary" id="libraryCreate">+ إنشاء</button></div><div id="libraryPanelContent" aria-live="polite">جارٍ تحميل المحتوى…</div>`;
+  document.querySelectorAll('[data-library-panel]').forEach(button => button.onclick=()=>{libraryPanelMode=button.dataset.libraryPanel;renderLibraryPanel();});
+  document.getElementById('libraryCreate').onclick=openLibraryCreate;
+  const target=document.getElementById('libraryPanelContent');
+  try {
+    await loadTeacherPlanningContent(true);
+    if(!target.isConnected)return;
+    const items=teacherPlanningState.items.filter(item=>item.destination===`library-${libraryPanelMode}`);
+    target.innerHTML=items.length?planningContentLibrary(items,'لا يوجد محتوى في هذا القسم'):'<div class="card empty-state"><h3>لا يوجد محتوى بعد</h3><p>اضغطي «إنشاء» لرفع ملف وإرساله إلى طالبات الفصل.</p></div>';
+    target.querySelectorAll('[data-planning-publish]').forEach(button=>button.onclick=()=>openPlanningPublish(Number(button.dataset.planningPublish)));
+    target.querySelectorAll('[data-planning-settings]').forEach(button=>button.onclick=()=>openPlanningContentSettings(Number(button.dataset.planningSettings)));
+    target.querySelectorAll('[data-planning-delete]').forEach(button=>button.onclick=()=>confirmAction('هل تريدين حذف المحتوى وإيقاف عرضه للطالبات؟',async()=>{await api(`/planning-content/${button.dataset.planningDelete}`,{method:'DELETE'});await renderLibraryPanel();}));
+  }catch(error){if(target.isConnected)target.textContent=error.message;}
 }
 
-let knowledgeExchangeMode = "worksheet";
+async function openLibraryCreate() {
+  try {await loadTeacherPlanningContent(true);}catch(error){toast(error.message);return;}
+  const classes=teacherPlanningState.classes;
+  openModal(`<form id="libraryCreateForm"><h3>إنشاء محتوى</h3><div id="libraryCreateMessage" role="status"></div><div class="form-grid two"><label class="field full-span">اسم المحتوى<input name="name" maxlength="190" required></label><label class="field">القسم<select name="destination">${[['worksheets','أوراق العمل'],['training','التدريبات'],['videos','الفيديوهات']].map(([key,label])=>`<option value="library-${key}" ${key===libraryPanelMode?'selected':''}>${label}</option>`).join('')}</select></label><label class="field">إرسال إلى الفصل<select name="classId" required><option value="">اختاري الفصل</option>${classes.map(row=>`<option value="${Number(row.id)}">${escapeHtml(row.name)} — ${escapeHtml(row.level)} — ${escapeHtml(row.grade_label)}</option>`).join('')}</select></label><label class="field">الفصل الدراسي<select name="semester"><option value="first" ${schoolSettings?.currentSemester!=='second'?'selected':''}>الأول</option><option value="second" ${schoolSettings?.currentSemester==='second'?'selected':''}>الثاني</option></select></label><label class="field">رقم الوحدة<input name="unitNumber" type="number" min="1" max="999" value="1" required></label><label class="field">رقم الدرس<input name="lessonNumber" type="number" min="1" max="999" value="1" required></label><label class="field">اسم الدرس (اختياري)<input name="lessonName" maxlength="190"></label><label class="field full-span">الملف<input name="file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.html,.htm,.zip,.mp4,.webm" required><small>PDF أو صورة أو HTML أو ZIP أو فيديو MP4 / WebM — حتى 20 ميجابايت</small></label></div>${classes.length?'':'<p>أضيفي فصلًا من قائمة الطالبات أولًا.</p>'}<div class="modal-actions"><button type="button" class="btn btn-outline" id="libraryCreateCancel">إلغاء</button><button type="submit" class="btn btn-primary" ${classes.length?'':'disabled'}>رفع وإرسال</button></div></form>`);
+  document.getElementById('libraryCreateCancel').onclick=closeModal;
+  let uploadedId=null;
+  document.getElementById('libraryCreateForm').onsubmit=async event=>{
+    event.preventDefault();const form=event.currentTarget;const button=form.querySelector('[type="submit"]');const message=document.getElementById('libraryCreateMessage');const data=new FormData(form);
+    const row=classes.find(item=>String(item.id)===data.get('classId'));
+    if(!row){message.textContent='اختاري الفصل أولًا.';return;}
+    if(!uploadedId&&data.get('file').size>20971520){message.textContent='حجم الملف أكبر من 20 ميجابايت.';return;}
+    button.disabled=true;message.textContent=uploadedId?'جارٍ إعادة محاولة الإرسال…':'جارٍ رفع المحتوى…';
+    try {
+      if(!uploadedId){
+        data.set('stage',row.level);data.set('gradeLabel',row.grade_label);data.set('lessonName',data.get('lessonName')||data.get('name'));data.set('contentType',data.get('destination')==='library-videos'?'explanation':'activity');
+        const result=await api('/planning-content',{method:'POST',body:data});uploadedId=result.item.id;
+        form.querySelectorAll('input,select').forEach(input=>input.disabled=true);
+      }
+      await api(`/planning-content/${uploadedId}/publish`,{method:'POST',body:JSON.stringify({classIds:[Number(row.id)],semester:data.get('semester')})});
+      libraryPanelMode=String(data.get('destination')).replace('library-','');closeModal();toast('تم رفع المحتوى وإرساله إلى محتوى معلمتي.');await renderLibraryPanel();
+    }catch(error){message.textContent=(uploadedId?'تم حفظ الملف كمسودة، لكن تعذّر الإرسال. أغلقي النافذة ثم استخدمي «نشر» لإعادة المحاولة. ':'')+error.message;button.disabled=Boolean(uploadedId);}
+  };
+}
+
+
+let knowledgeExchangeMode = "summary";
 
 const KNOWLEDGE_META = {
-  worksheet: { label: "أوراق عمل", icon: "📝", hint: "ارفعي ورقة عمل بصيغة PDF أو صورة." },
   summary: { label: "ملخصات", icon: "📄", hint: "ارفعي ملخصًا بصيغة PDF أو صورة." },
   video: { label: "فيديوهات", icon: "🎬", hint: "أضيفي رابطًا من يوتيوب أو أي موقع فيديو آخر." },
+  nafes: { label: "نافس", icon: "🎯", hint: "أرسلي ملفًا أو رابطًا؛ سيظهر تلقائيًا لطالبات الابتدائي والمتوسط فقط.", audience: "الابتدائي والمتوسط" },
+  tahsili_abilities: { label: "التحصيلي والقدرات", icon: "🏆", hint: "أرسلي ملفًا أو رابطًا؛ سيظهر تلقائيًا لطالبات المرحلة الثانوية فقط.", audience: "الثانوي" },
 };
 
 async function renderKnowledgeExchange() {
   const [data] = await Promise.all([api("/knowledge-exchange"), loadSchoolSettings()]);
   const meta = KNOWLEDGE_META[knowledgeExchangeMode];
   const resources = data.resources.filter((item) => item.category === knowledgeExchangeMode);
+  const targetedMode = Boolean(meta.audience);
+  const resourceInput = targetedMode
+    ? `<div class="form-grid two"><label class="field">نوع المادة<select id="knowledgeResourceKind"><option value="file">ملف PDF أو صورة</option><option value="link">رابط إلكتروني</option></select></label><div class="field"><span>الفئة المستهدفة</span><strong style="display:block;margin-top:9px;color:var(--purple-950)">${escapeHtml(meta.audience)}</strong></div></div><label class="field knowledge-file-field" id="knowledgeTargetFileField">اختيار ملف PDF أو صورة<input id="knowledgeFile" type="file" accept="application/pdf,image/*"><small>الحد الأقصى 15 ميجابايت.</small></label><label class="field" id="knowledgeTargetUrlField" hidden>الرابط الإلكتروني<input id="knowledgeUrl" type="url" inputmode="url" dir="ltr" placeholder="https://example.com"></label>`
+    : knowledgeExchangeMode === "video"
+      ? '<label class="field">رابط الفيديو<input id="knowledgeUrl" type="url" inputmode="url" required dir="ltr" placeholder="https://www.youtube.com/watch?v=..."></label>'
+      : '<label class="field knowledge-file-field">اختيار ملف PDF أو صورة<input id="knowledgeFile" type="file" accept="application/pdf,image/*" required><small>الحد الأقصى 15 ميجابايت.</small></label>';
   contentEl.innerHTML = `
     <section class="knowledge-hero">
       <span aria-hidden="true">🤝</span>
-      <div><small>مشاركة المحتوى مع الطالبات</small><h2>تبادل المعرفة</h2><p>أضيفي أوراق العمل والملخصات وروابط الفيديو لتظهر مباشرة في حسابات طالباتكِ.</p></div>
+      <div><small>مشاركة المحتوى مع الطالبات</small><h2>تبادل المعرفة</h2><p>${targetedMode ? `النشر مضبوط تلقائيًا لفئة ${escapeHtml(meta.audience)} حسب الزر المختار.` : "أضيفي الملخصات وروابط الفيديو لتظهر مباشرة في حسابات طالباتكِ."}</p></div>
     </section>
     ${academicSelectorHtml("knowledgeExchange")}
     <div class="student-panel-tabs knowledge-tabs" role="tablist" aria-label="أقسام تبادل المعرفة">
@@ -4401,17 +6329,15 @@ async function renderKnowledgeExchange() {
         <div class="knowledge-card-heading"><span aria-hidden="true">${meta.icon}</span><div><h3>إضافة ${meta.label}</h3><p>${meta.hint}</p></div></div>
         <label class="field">العنوان<input id="knowledgeTitle" maxlength="190" required placeholder="اكتبي عنوان المورد"></label>
         <label class="field">وصف مختصر <small>اختياري</small><textarea id="knowledgeDescription" maxlength="1000" placeholder="اكتبي وصفًا يساعد الطالبة على معرفة محتوى المورد"></textarea></label>
-        ${knowledgeExchangeMode === "video"
-          ? '<label class="field">رابط الفيديو<input id="knowledgeUrl" type="url" inputmode="url" required dir="ltr" placeholder="https://www.youtube.com/watch?v=..."></label>'
-          : '<label class="field knowledge-file-field">اختيار ملف PDF أو صورة<input id="knowledgeFile" type="file" accept="application/pdf,image/*" required><small>الحد الأقصى 15 ميجابايت.</small></label>'}
+        ${resourceInput}
         <div id="knowledgeFormMessage"></div>
-        <button class="btn btn-primary knowledge-submit" type="submit">${knowledgeExchangeMode === "video" ? "إضافة رابط الفيديو" : "رفع المورد"}</button>
+        <button class="btn btn-primary knowledge-submit" type="submit">${targetedMode ? `إرسال إلى طالبات ${escapeHtml(meta.audience)}` : knowledgeExchangeMode === "video" ? "إضافة رابط الفيديو" : "رفع المورد"}</button>
       </form>
       <section class="card knowledge-list-card">
         <div class="knowledge-card-heading"><span aria-hidden="true">📚</span><div><h3>${meta.label} المضافة</h3><p>${resources.length} مورد</p></div></div>
         <div class="knowledge-resource-list">${resources.length ? resources.map((item) => {
           const action = item.resourceType === "link"
-            ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">مشاهدة الفيديو</a>`
+            ? `<a class="btn btn-secondary btn-sm" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${item.category === "video" ? "مشاهدة الفيديو" : "فتح الرابط"}</a>`
             : `<a class="btn btn-secondary btn-sm" href="/api/teacher/knowledge-exchange/${item.id}/file" target="_blank" rel="noopener">معاينة الملف</a>`;
           return `<article class="knowledge-resource-item"><span class="knowledge-resource-icon" aria-hidden="true">${meta.icon}</span><div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.description || "بدون وصف")}</p><small>${formatDate(item.createdAt)}${item.originalName ? ` · ${escapeHtml(item.originalName)}` : ""}</small></div><div class="knowledge-resource-actions">${action}<button class="btn btn-outline btn-sm" type="button" data-delete-knowledge="${item.id}">حذف</button></div></article>`;
         }).join("") : `<div class="empty-state"><div class="ic">${meta.icon}</div>لم تُضف ${meta.label} بعد.</div>`}</div>
@@ -4428,6 +6354,15 @@ async function renderKnowledgeExchange() {
       renderKnowledgeExchange().catch((error) => { contentEl.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`; });
     };
   });
+  const resourceKind = document.getElementById("knowledgeResourceKind");
+  if (resourceKind) {
+    const syncTargetResourceKind = () => {
+      document.getElementById("knowledgeTargetFileField").hidden = resourceKind.value !== "file";
+      document.getElementById("knowledgeTargetUrlField").hidden = resourceKind.value !== "link";
+    };
+    resourceKind.onchange = syncTargetResourceKind;
+    syncTargetResourceKind();
+  }
   document.querySelectorAll("[data-delete-knowledge]").forEach((button) => {
     button.onclick = () => confirmAction("هل تريدين حذف هذا المورد من حسابات الطالبات؟", async () => {
       await api(`/knowledge-exchange/${button.dataset.deleteKnowledge}`, { method: "DELETE" });
@@ -4443,11 +6378,19 @@ async function renderKnowledgeExchange() {
     formData.set("category", knowledgeExchangeMode);
     formData.set("title", document.getElementById("knowledgeTitle").value.trim());
     formData.set("description", document.getElementById("knowledgeDescription").value.trim());
-    if (knowledgeExchangeMode === "video") formData.set("url", document.getElementById("knowledgeUrl").value.trim());
-    else if (document.getElementById("knowledgeFile").files[0]) formData.set("file", document.getElementById("knowledgeFile").files[0]);
+    const selectedResourceKind = targetedMode ? document.getElementById("knowledgeResourceKind").value : (knowledgeExchangeMode === "video" ? "link" : "file");
+    if (selectedResourceKind === "link") {
+      const url = document.getElementById("knowledgeUrl").value.trim();
+      if (!url) { document.getElementById("knowledgeFormMessage").innerHTML = '<div class="form-error">أضيفي الرابط الإلكتروني.</div>'; submit.disabled = false; return; }
+      formData.set("url", url);
+    } else {
+      const file = document.getElementById("knowledgeFile").files[0];
+      if (!file) { document.getElementById("knowledgeFormMessage").innerHTML = '<div class="form-error">اختاري ملف PDF أو صورة.</div>'; submit.disabled = false; return; }
+      formData.set("file", file);
+    }
     try {
       await api("/knowledge-exchange", { method: "POST", body: formData });
-      toast(`تمت إضافة ${meta.label} إلى تبادل المعرفة.`);
+      toast(targetedMode ? `تم إرسال ${meta.label} إلى طالبات ${meta.audience}.` : `تمت إضافة ${meta.label} إلى تبادل المعرفة.`);
       await renderKnowledgeExchange();
     } catch (error) {
       document.getElementById("knowledgeFormMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
@@ -4458,6 +6401,7 @@ async function renderKnowledgeExchange() {
 
 
 let parentPanelMode = "accounts";
+let parentCommunityFilter = "all";
 
 function parentRequestStatusLabel(status) {
   return ({ pending: "بانتظار المراجعة", approved: "تم الاعتماد", rejected: "مرفوض" })[status] || status;
@@ -4481,20 +6425,23 @@ async function renderParentPanel() {
   contentEl.innerHTML = `
     <section class="parent-tool-hero">
       <span class="parent-tool-icon">👨‍👩‍👧</span>
-      <div><small>التواصل الأسري</small><h2>ولي الأمر</h2><p>إدارة حسابات أولياء أمور طالباتك وإرسال الإعلانات لهم من مجمع مدار.</p></div>
+      <div><small>التواصل الأسري</small><h2>ولي الأمر</h2><p>إدارة الحسابات، إعداد الإعلانات، ومراجعة إنجازات أولياء الأمور في مجتمع الفصل.</p></div>
     </section>
     <div class="parent-tool-tabs">
       <button type="button" class="${parentPanelMode === "accounts" ? "active" : ""}" data-parent-mode="accounts"><span>👤</span><strong>إدارة حساب ولي الأمر</strong><small>الطلبات والحسابات والربط</small></button>
-      <button type="button" class="${parentPanelMode === "community" ? "active" : ""}" data-parent-mode="community"><span>💬</span><strong>مجمع مدار</strong><small>رسائل وإعلانات أولياء الأمور</small></button>
+      <button type="button" class="${parentPanelMode === "announcement" ? "active" : ""}" data-parent-mode="announcement"><span>📣</span><strong>إعداد إعلان</strong><small>كتابة إعلان ونشره لأولياء الأمور</small></button>
+      <button type="button" class="${parentPanelMode === "community" ? "active" : ""}" data-parent-mode="community"><span>🖼️</span><strong>مجمع مدار</strong><small>مراجعة الصور والفيديوهات قبل نشرها</small></button>
     </div>
     <section id="parentToolBody"><div class="card loading-state">جارٍ تحميل بيانات أولياء الأمور...</div></section>`;
   document.querySelectorAll("[data-parent-mode]").forEach((button) => {
     button.onclick = async () => {
       parentPanelMode = button.dataset.parentMode;
-      await renderParentPanel();
+      try { await renderParentPanel(); }
+      catch (error) { document.getElementById("parentToolBody").innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`; }
     };
   });
   if (parentPanelMode === "community") await renderParentCommunity();
+  else if (parentPanelMode === "announcement") await renderParentAnnouncement();
   else await renderParentAccounts();
 }
 
@@ -4530,14 +6477,14 @@ async function renderParentAccounts() {
       </section>
     </div>
     <section class="card parent-accounts-card">
-      <div class="parent-card-title"><span>👥</span><div><h3>حسابات أولياء الأمور</h3><p>كل حساب في هذه القائمة مرتبط بطالبة واحدة على الأقل من فصولك.</p></div></div>
+      <div class="parent-card-title"><span>👥</span><div><h3>حسابات أولياء الأمور</h3><p>تظهر الحسابات والروابط التي أنشأتها، حتى بعد انتقال الطالبة أو حذفها من الفصل.</p></div></div>
       <div class="parent-account-list">${data.parents.length ? data.parents.map((parent) => {
         const available = data.students.filter((student) => !parent.children.some((child) => child.id === student.id));
         return `<article class="parent-account-item">
           <div class="parent-account-main"><span class="parent-account-avatar">${escapeHtml(parent.name.trim().charAt(0) || "و")}</span><div><h4>${escapeHtml(parent.name)}</h4><small>الدخول بالاسم الأول والأخير · ${parent.status === "active" ? "الحساب مفعّل" : "الحساب معطّل"}${parent.sharedWithOtherTeachers ? " · مرتبط أيضًا بمعلمة أخرى" : ""}</small></div></div>
-          <div class="parent-linked-children">${parent.children.map((child) => `<span>${escapeHtml(child.name)} <button type="button" title="إلغاء الربط" data-unlink-parent="${parent.id}" data-unlink-student="${child.id}">×</button></span>`).join("")}</div>
+          <div class="parent-linked-children">${parent.children.map((child) => `<span>${escapeHtml(child.name)}${child.deleted ? " · محذوفة" : ""} <button type="button" title="إلغاء الربط" data-unlink-parent="${parent.id}" data-unlink-student="${child.id}">×</button></span>`).join("")}</div>
           <div class="parent-link-row"><select data-parent-link-select="${parent.id}"><option value="">اختاري طالبة لإضافتها</option>${available.map((student) => `<option value="${student.id}">${escapeHtml(student.name)} · ${escapeHtml(student.className)}</option>`).join("")}</select><button class="btn btn-secondary btn-sm" type="button" data-link-parent="${parent.id}" ${available.length ? "" : "disabled"}>ربط طالبة</button></div>
-          <div class="parent-account-actions"><button class="btn btn-outline btn-sm" type="button" data-reset-parent="${parent.id}" ${parent.sharedWithOtherTeachers ? "disabled" : ""}>إعادة كلمة المرور</button><button class="btn ${parent.status === "active" ? "btn-danger" : "btn-primary"} btn-sm" type="button" data-toggle-parent="${parent.id}" data-parent-status="${parent.status}" ${parent.sharedWithOtherTeachers ? "disabled" : ""}>${parent.status === "active" ? "تعطيل" : "تفعيل"}</button></div>
+          <div class="parent-account-actions"><button class="btn btn-outline btn-sm" type="button" data-reset-parent="${parent.id}" ${parent.sharedWithOtherTeachers ? "disabled" : ""}>إعادة كلمة المرور</button><button class="btn ${parent.status === "active" ? "btn-danger" : "btn-primary"} btn-sm" type="button" data-toggle-parent="${parent.id}" data-parent-status="${parent.status}" ${parent.sharedWithOtherTeachers ? "disabled" : ""}>${parent.status === "active" ? "تعطيل" : "تفعيل"}</button><button class="btn btn-danger btn-sm" type="button" data-delete-parent="${parent.id}" ${parent.sharedWithOtherTeachers ? "disabled" : ""}>حذف</button></div>
         </article>`;
       }).join("") : '<div class="parent-empty-mini">لم تُنشأ حسابات أولياء أمور بعد.</div>'}</div>
     </section>`;
@@ -4568,6 +6515,13 @@ async function renderParentAccounts() {
     const next = button.dataset.parentStatus === "active" ? "disabled" : "active";
     confirmAction(`${next === "disabled" ? "تعطيل" : "تفعيل"} حساب ولي الأمر؟`, async () => { await api(`/parents/${button.dataset.toggleParent}`, { method: "PUT", body: JSON.stringify({ status: next }) }); toast(`تم ${next === "disabled" ? "تعطيل" : "تفعيل"} الحساب.`); await renderParentAccounts(); });
   });
+  document.querySelectorAll("[data-delete-parent]").forEach((button) => button.onclick = () =>
+    confirmAction("حذف حساب ولي الأمر؟ سيُعطّل الحساب ويختفي من قائمة المعلمة، ويمكن لمالكة الموقع استعادته.", async () => {
+      await api(`/parents/${button.dataset.deleteParent}`, { method: "DELETE", body: "{}" });
+      toast("تم حذف حساب ولي الأمر.");
+      await renderParentAccounts();
+    })
+  );
 }
 
 function openParentPasswordModal(parentId) {
@@ -4578,7 +6532,7 @@ function openParentPasswordModal(parentId) {
   };
 }
 
-async function renderParentCommunity() {
+async function renderParentAnnouncement() {
   const data = await api("/parent-community");
   const body = document.getElementById("parentToolBody");
   body.innerHTML = `
@@ -4598,14 +6552,81 @@ async function renderParentCommunity() {
   document.getElementById("parentCommunityForm").onsubmit = async (event) => {
     event.preventDefault();
     const message = document.getElementById("parentPostMessage");
-    try { await api("/parent-community", { method: "POST", body: JSON.stringify({ title: document.getElementById("parentPostTitle").value.trim(), body: document.getElementById("parentPostBody").value.trim(), classId: Number(document.getElementById("parentPostClass").value || 0) }) }); toast("تم نشر الإعلان في مجمع مدار."); await renderParentCommunity(); } catch (error) { message.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`; }
+    try { await api("/parent-community", { method: "POST", body: JSON.stringify({ title: document.getElementById("parentPostTitle").value.trim(), body: document.getElementById("parentPostBody").value.trim(), classId: Number(document.getElementById("parentPostClass").value || 0) }) }); toast("تم نشر الإعلان في مجمع مدار."); await renderParentAnnouncement(); } catch (error) { message.innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`; }
   };
-  document.querySelectorAll("[data-delete-parent-post]").forEach((button) => button.onclick = () => confirmAction("حذف هذا الإعلان من مجمع مدار؟", async () => { await api(`/parent-community/${button.dataset.deleteParentPost}`, { method: "DELETE", body: "{}" }); toast("تم حذف الإعلان."); await renderParentCommunity(); }));
+  document.querySelectorAll("[data-delete-parent-post]").forEach((button) => button.onclick = () => confirmAction("حذف هذا الإعلان من مجمع مدار؟", async () => { await api(`/parent-community/${button.dataset.deleteParentPost}`, { method: "DELETE", body: "{}" }); toast("تم حذف الإعلان."); await renderParentAnnouncement(); }));
+}
+
+function parentMediaStatusLabel(status) {
+  return ({ pending: "بانتظار الاعتماد", published: "منشور", rejected: "مرفوض", archived: "مؤرشف" })[status] || status;
+}
+
+function teacherParentMediaCard(post) {
+  const media = post.mediaKind === "video"
+    ? `<video controls preload="metadata" src="${escapeHtml(post.mediaUrl)}" aria-label="فيديو ${escapeHtml(post.title)}"></video>`
+    : `<img src="${escapeHtml(post.mediaUrl)}" alt="${escapeHtml(post.title)}" loading="lazy">`;
+  const initial = escapeHtml((post.senderName || "و").trim().charAt(0) || "و");
+  const actions = post.status === "pending"
+    ? `<button class="btn btn-primary btn-sm" type="button" data-community-review="approve" data-community-id="${post.id}">اعتماد</button><button class="btn btn-outline btn-sm is-danger" type="button" data-community-review="reject" data-community-id="${post.id}">رفض</button>`
+    : post.status === "published"
+      ? `<button class="btn btn-outline btn-sm" type="button" data-community-review="archive" data-community-id="${post.id}">أرشفة</button>`
+      : post.status === "rejected"
+        ? `<button class="btn btn-primary btn-sm" type="button" data-community-review="approve" data-community-id="${post.id}">اعتماد الآن</button><button class="btn btn-outline btn-sm" type="button" data-community-review="archive" data-community-id="${post.id}">أرشفة</button>`
+        : "";
+  return `<article class="parent-media-card">
+    <div class="parent-media-visual">${media}<span class="parent-media-status is-${escapeHtml(post.status)}">${parentMediaStatusLabel(post.status)}</span></div>
+    <div class="parent-media-copy"><div class="parent-media-sender"><span>${initial}</span><div><strong>${escapeHtml(post.senderName)}</strong><small>${escapeHtml(post.className)} · ${formatDate(post.createdAt)}</small></div></div>
+    <h3>${escapeHtml(post.title)}</h3>${post.description ? `<p>${escapeHtml(post.description).replace(/\n/g,"<br>")}</p>` : ""}
+    <div class="parent-media-detail"><span>عن الطالبة: ${escapeHtml(post.studentName || "—")}</span><span>${post.mediaKind === "video" ? "فيديو" : "صورة"}</span></div>
+    ${actions ? `<div class="parent-media-actions">${actions}</div>` : ""}</div>
+  </article>`;
+}
+
+function teacherAnnouncementWallCard(post) {
+  return `<article class="parent-media-card is-announcement"><div class="parent-media-announcement-mark">📣</div><div class="parent-media-copy"><span class="parent-media-status is-published">إعلان المعلمة</span><h3>${escapeHtml(post.title)}</h3><p>${escapeHtml(post.body).replace(/\n/g,"<br>")}</p><div class="parent-media-detail"><span>${escapeHtml(post.className || "جميع الفصول")}</span><span>${formatDate(post.createdAt)}</span></div></div></article>`;
+}
+
+async function renderParentCommunity() {
+  const query = parentCommunityFilter === "all" ? "" : `?status=${encodeURIComponent(parentCommunityFilter)}`;
+  const [mediaData, announcementData] = await Promise.all([api(`/parent-community/media${query}`), api("/parent-community")]);
+  const counts = mediaData.counts || {};
+  const showAnnouncements = parentCommunityFilter === "all" || parentCommunityFilter === "published";
+  const cards = [
+    ...(showAnnouncements ? (announcementData.posts || []).map(teacherAnnouncementWallCard) : []),
+    ...(mediaData.posts || []).map(teacherParentMediaCard),
+  ];
+  const body = document.getElementById("parentToolBody");
+  body.innerHTML = `<section class="parent-community-dashboard">
+    <header class="parent-community-heading"><div><span>لوحة إنجاز الفصل</span><h3>مجمع مدار</h3><p>راجعي مشاركات أولياء الأمور قبل أن تظهر لبقية أسر الفصل.</p></div><label>عرض الحالة<select id="parentCommunityFilter"><option value="all">جميع الحالات</option><option value="pending">بانتظار الاعتماد</option><option value="published">المنشور</option><option value="rejected">المرفوض</option><option value="archived">المؤرشف</option></select></label></header>
+    <div class="parent-community-metrics">
+      <article class="is-pending"><span>⏳</span><div><strong>${counts.pending || 0}</strong><small>بانتظار الاعتماد</small></div></article>
+      <article class="is-published"><span>✓</span><div><strong>${counts.published || 0}</strong><small>مشاركة منشورة</small></div></article>
+      <article><span>▦</span><div><strong>${counts.total || 0}</strong><small>إجمالي المشاركات</small></div></article>
+    </div>
+    ${cards.length ? `<div class="parent-community-wall">${cards.join("")}</div>` : `<div class="card parent-community-empty"><span>🖼️</span><h3>لا توجد مشاركات في هذه الحالة</h3><p>ستظهر هنا الصور والفيديوهات التي يرسلها أولياء الأمور.</p></div>`}
+  </section>`;
+  document.getElementById("parentCommunityFilter").value = parentCommunityFilter;
+  document.getElementById("parentCommunityFilter").onchange = async (event) => { parentCommunityFilter = event.target.value; await renderParentCommunity(); };
+  document.querySelectorAll("[data-community-review]").forEach((button) => {
+    button.onclick = async () => {
+      const action = button.dataset.communityReview;
+      const run = async () => {
+        button.disabled = true;
+        try {
+          await api(`/parent-community/media/${button.dataset.communityId}/${action}`, { method: "POST", body: "{}" });
+          toast(action === "approve" ? "تم اعتماد المشاركة ونشرها." : action === "reject" ? "تم رفض المشاركة." : "تمت أرشفة المشاركة.");
+          await renderParentCommunity();
+        } catch (error) { button.disabled = false; toast(error.message); }
+      };
+      if (action === "approve") await run();
+      else confirmAction(action === "reject" ? "رفض هذه المشاركة؟" : "أرشفة هذه المشاركة؟",run);
+    };
+  });
 }
 
 function renderEducationalContent(key, target = contentEl) {
   const section = EDUCATIONAL_CONTENT[key];
-  if (key === "interactive-games") {
+  if (key === "interactive-games" || key === "game-creator") {
     const gameAcademicContext = academicSelectorHtml("games");
     const formatGameNumber = (value) => new Intl.NumberFormat("ar-SA", { useGrouping: false }).format(value);
     const allInteractiveGames = Array.isArray(interactiveGamesState.games) ? interactiveGamesState.games : [];
@@ -4617,22 +6638,34 @@ function renderEducationalContent(key, target = contentEl) {
       : normalizeGradeKey(selectedGameStage, actualAcademicGradeLabel("games"));
     const allBuilderGames = Array.isArray(interactiveGamesState.builderGames) ? interactiveGamesState.builderGames : [];
     const builderGameKeys = new Set(allBuilderGames.map((game) => game.gameKey));
-    const games = allInteractiveGames.filter((game) => !builderGameKeys.has(game.gameKey)).filter((game) => {
+    const gameMatchesSelection = (game) => {
       const gameStage = String(game.stage || "all").trim();
       const gameGrade = String(game.gradeLabel || "all").trim();
       const stageMatches = selectedGameStage === "all" || gameStage === "all" || gameStage === selectedGameStage;
       const gradeMatches = selectedGameGrade === "all" || gameGrade === "all"
         || normalizeGradeKey(gameStage === "all" ? selectedGameStage : gameStage, gameGrade) === selectedGameGrade;
       return stageMatches && gradeMatches;
-    });
-    const builderGames = allBuilderGames.filter((game) => {
-      const gameStage = String(game.stage || "all").trim();
-      const gameGrade = String(game.gradeLabel || "all").trim();
-      const stageMatches = selectedGameStage === "all" || gameStage === "all" || gameStage === selectedGameStage;
-      const gradeMatches = selectedGameGrade === "all" || gameGrade === "all"
-        || normalizeGradeKey(gameStage === "all" ? selectedGameStage : gameStage, gameGrade) === selectedGameGrade;
-      return stageMatches && gradeMatches;
-    });
+    };
+    const games = allInteractiveGames.filter((game) => !builderGameKeys.has(game.gameKey)).filter(gameMatchesSelection);
+    const builderGames = key === "game-creator" ? allBuilderGames : allBuilderGames.filter(gameMatchesSelection);
+    const publicationTargetMatches = (target) => {
+      const targetStage = String(target?.stage || "").trim();
+      const targetGrade = String(target?.gradeLabel || "").trim();
+      const targetSemester = String(target?.semester || "").trim();
+      const currentSemester = String(schoolSettings?.currentSemester || "").trim();
+      const classMatches = !selectedGamesClass || Number(target?.classId) === Number(selectedGamesClass.id);
+      const semesterMatches = !currentSemester || !targetSemester || targetSemester === currentSemester;
+      const stageMatches = selectedGameStage === "all" || targetStage === selectedGameStage;
+      const gradeMatches = selectedGameGrade === "all"
+        || normalizeGradeKey(targetStage || selectedGameStage, targetGrade) === selectedGameGrade;
+      return classMatches && semesterMatches && stageMatches && gradeMatches;
+    };
+    const builderLibraryGames = allBuilderGames.filter((game) => {
+      if (game.validationStatus !== "ready") return false;
+      const targets = Array.isArray(game.publicationTargets) ? game.publicationTargets : [];
+      return game.status === "published" && targets.length ? targets.some(publicationTargetMatches) : gameMatchesSelection(game);
+    }).map((game) => ({ ...game, isBuilderGame: true }));
+    const availableGames = [...games, ...builderLibraryGames];
     const publicationReady = interactiveGamesState.publicationReady !== false;
     const publicationMissingColumns = Array.isArray(interactiveGamesState.publicationMissingColumns) ? interactiveGamesState.publicationMissingColumns : [];
     const gameIsPublished = (game) => game?.isActive === true || Number(game?.isActive) === 1;
@@ -4644,7 +6677,7 @@ function renderEducationalContent(key, target = contentEl) {
     const publicationNotice = publicationReady ? "" : `<div class="form-error game-publication-notice">يلزم تشغيل ملف <b dir="ltr">migration_20260808_interactive_game_publication.sql</b> مرة واحدة لتفعيل نشر الألعاب.${publicationMissingColumns.length ? ` الأعمدة الناقصة: ${escapeHtml(publicationMissingColumns.join("، "))}.` : ""}</div>`;
     const builderReady = interactiveGamesState.builderReady === true;
     const builderNotice = builderReady ? "" : `<div class="form-error game-builder-migration-notice">يلزم تشغيل ملف <b dir="ltr">${escapeHtml(interactiveGamesState.builderMigration || "migration_20260810_interactive_game_builder.sql")}</b> مرة واحدة لتفعيل إنشاء واستيراد الألعاب. تم إنشاء الملف فقط ولم يتم تشغيله.</div>`;
-    target.innerHTML = `
+    const gameBuilderStudio = `
       <section class="game-builder-shell">
         <div class="game-builder-heading"><div><span>استديو ألعاب مدار</span><h2>أنشئي لعبة أو استوردي حزمة مبرمجة</h2><p>القوالب والشهادة والنقاط والنتائج تعمل من نظام مشترك، وتبقى كل نسخة محفوظة مع نتائجها.</p></div><div class="game-builder-create-actions"><button class="btn btn-primary" id="createTemplateGame" type="button" ${builderReady ? "" : "disabled"}>إنشاء لعبة من قالب</button><button class="btn btn-secondary" id="importProgrammedGame" type="button" ${builderReady ? "" : "disabled"}>استيراد لعبة مبرمجة ZIP</button></div></div>
         ${builderNotice}
@@ -4656,40 +6689,48 @@ function renderEducationalContent(key, target = contentEl) {
             const unitLesson = game.unitNumber && game.lessonNumber ? `${formatGameNumber(game.unitNumber)}-${formatGameNumber(game.lessonNumber)}` : "—";
             return `<article class="game-builder-card" data-builder-game="${game.id}">
               <div class="game-builder-cover">${game.coverUrl ? `<img src="${escapeHtml(game.coverUrl)}" alt="غلاف ${escapeHtml(game.name)}">` : `<strong>${escapeHtml(unitLesson)}</strong>`}</div>
-              <div class="game-builder-card-body"><div class="game-builder-card-top"><span class="game-builder-status is-${escapeHtml(game.status)}">${statusLabel}</span><small>الإصدار ${formatGameNumber(game.versionNumber || 1)}</small></div><h3>${escapeHtml(game.name)}</h3><p>${escapeHtml(game.description || game.lessonName)}</p><div class="game-builder-meta"><span>${escapeHtml(sourceLabel)}</span><span>${escapeHtml(game.lessonName || "—")}</span><span>${escapeHtml(game.subjectName || "—")}</span><span>${escapeHtml(game.stage === "all" ? "كل المراحل" : game.stage)}</span><span>${game.timeMode === "timed" ? `${formatGameNumber(game.timePerQuestionSeconds)} ثانية` : "وقت مفتوح"}</span><span>${(game.difficulties || []).map((level) => level === "easy" ? "بسيط" : level === "hard" ? "متقدم" : "متوسط").join("، ") || "—"}</span><span>${formatGameNumber(game.publicationCount || 0)} فصل</span></div>${ready ? "" : `<div class="game-builder-warning">تحتاج تهيئة: ${escapeHtml(game.validationMessage || "لم يتم العثور على اتصال MadarGameBridge داخل الحزمة.")}</div>`}<div class="game-builder-card-actions"><a class="btn btn-primary btn-sm" href="${escapeHtml(game.previewUrl)}" target="_blank" rel="noopener">معاينة</a><button class="btn btn-secondary btn-sm" type="button" data-builder-publish="${game.id}" ${ready ? "" : "disabled"}>${game.status === "published" ? "تعديل النشر" : "نشر"}</button><button class="btn btn-outline btn-sm" type="button" data-builder-edit="${game.id}">${game.sourceType === "package" ? "رفع إصدار" : "تعديل"}</button><button class="btn btn-outline btn-sm" type="button" data-builder-copy="${game.id}">نسخ</button><button class="btn btn-outline btn-sm" type="button" data-builder-status="${game.id}" data-status="${game.status === "disabled" ? "draft" : "disabled"}">${game.status === "disabled" ? "إعادة التفعيل" : "إيقاف"}</button><button class="btn btn-danger btn-sm" type="button" data-builder-delete="${game.id}">أرشفة</button></div></div>
+              <div class="game-builder-card-body"><div class="game-builder-card-top"><span class="game-builder-status is-${escapeHtml(game.status)}">${statusLabel}</span><small>الإصدار ${formatGameNumber(game.versionNumber || 1)}</small></div><h3>${escapeHtml(game.name)}</h3><p>${escapeHtml(game.description || game.lessonName)}</p><div class="game-builder-meta"><span>${escapeHtml(sourceLabel)}</span><span>${escapeHtml(game.lessonName || "—")}</span><span>${escapeHtml(game.subjectName || "—")}</span><span>${escapeHtml(game.stage === "all" ? "كل المراحل" : game.stage)}</span><span>${game.timeMode === "timed" ? `${formatGameNumber(game.timePerQuestionSeconds)} ثانية` : "وقت مفتوح"}</span><span>${(game.difficulties || []).map((level) => level === "easy" ? "بسيط" : level === "hard" ? "متقدم" : "متوسط").join("، ") || "—"}</span><span>${formatGameNumber(game.publicationCount || 0)} فصل</span></div>${ready ? "" : `<div class="game-builder-warning">تحتاج تهيئة: ${escapeHtml(game.validationMessage || "لم يتم العثور على اتصال MadarGameBridge داخل الحزمة.")}</div>`}<div class="game-builder-card-actions"><a class="btn btn-primary btn-sm" href="${escapeHtml(game.previewUrl)}" target="_blank" rel="noopener">معاينة</a><button class="btn btn-secondary btn-sm" type="button" data-builder-publish="${game.id}" ${ready ? "" : "disabled"}>${game.status === "published" ? "تعديل النشر" : "نشر"}</button><button class="btn btn-outline btn-sm" type="button" data-builder-edit="${game.id}">${game.sourceType === "package" ? "رفع إصدار" : "تعديل"}</button><button class="btn btn-outline btn-sm" type="button" data-builder-copy="${game.id}">نسخ</button><button class="btn btn-outline btn-sm" type="button" data-builder-status="${game.id}" data-status="${game.status === "disabled" ? "draft" : "disabled"}">${game.status === "disabled" ? "إعادة التفعيل" : "إيقاف"}</button><button class="btn btn-danger btn-sm" type="button" data-builder-delete="${game.id}" aria-label="حذف سجل لعبة ${escapeHtml(game.name)}">حذف السجل</button></div></div>
             </article>`;
-          }).join("") || (builderReady ? '<div class="game-builder-empty"><strong>لا توجد ألعاب منشأة بعد</strong><p>ابدئي بقالب جاهز أو استوردي ZIP يحتوي game.json.</p></div>' : "")}
+          }).join("") || (builderReady ? '<div class="game-builder-empty"><strong>لا توجد ألعاب منشأة بعد</strong><p>ابدئي بقالب جاهز أو استوردي حزمة ZIP مبرمجة.</p></div>' : "")}
         </div>
-      </section>
+      </section>`;
+    const interactiveGamesLibrary = `
       <section class="games-library-grid" aria-label="الألعاب التفاعلية المتاحة">
         ${gameAcademicContext}
         ${publicationNotice}
-        ${games.map((game) => {
+        ${availableGames.map((game) => {
+          const isBuilderGame = game.isBuilderGame === true;
           const unitNumber = Number(game.unitNumber);
           const lessonNumber = Number(game.lessonNumber);
-          const configured = Boolean(game.configured) && Number.isInteger(unitNumber) && unitNumber > 0 && Number.isInteger(lessonNumber) && lessonNumber > 0 && String(game.lessonName || "").trim() !== "";
+          const configured = (isBuilderGame || Boolean(game.configured)) && Number.isInteger(unitNumber) && unitNumber > 0 && Number.isInteger(lessonNumber) && lessonNumber > 0 && String(game.lessonName || "").trim() !== "";
           const lessonMeta = configured ? `${formatGameNumber(unitNumber)}-${formatGameNumber(lessonNumber)}` : "—";
           const timeMode = game.timeMode === "timed" ? "timed" : "open";
-          const isPublished = gameIsPublished(game);
-          const playUrl = `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1&from=teacher`;
-          const studentUrl = `${game.playPath}?game=${encodeURIComponent(game.gameKey)}&play=1`;
+          const isPublished = isBuilderGame ? game.status === "published" : gameIsPublished(game);
+          const baseStudentUrl = isBuilderGame ? game.playUrl : `${game.playPath}?game=${encodeURIComponent(game.gameKey)}`;
+          const studentQueryJoiner = baseStudentUrl.includes("?") ? "&" : "?";
+          const playUrl = isBuilderGame ? game.previewUrl : `${baseStudentUrl}${studentQueryJoiner}play=1&from=teacher`;
+          const studentUrl = `${baseStudentUrl}${studentQueryJoiner}play=1`;
+          const gameTitle = isBuilderGame ? String(game.name || game.lessonName || "لعبة تفاعلية") : (configured ? String(game.name || `تحدي ${game.lessonName}`) : "إعداد درس اللعبة غير مكتمل");
+          const publicationTargets = isBuilderGame && Array.isArray(game.publicationTargets) ? game.publicationTargets : [];
+          const targetLabels = [...new Set(publicationTargets.map((target) => `${target.stage || "—"} · ${target.gradeLabel || "—"}`))];
+          const audienceLabel = targetLabels.length ? targetLabels.join("، ") : `${game.stage === "all" ? "جميع المراحل" : game.stage} · ${game.gradeLabel === "all" ? "جميع الصفوف" : game.gradeLabel}`;
           return `<article class="card teacher-game-card" data-game-card="${escapeHtml(game.gameKey)}">
             <div class="teacher-game-lesson-number">${escapeHtml(lessonMeta)}</div>
             <div class="teacher-game-copy">
-              <h3>${configured ? `تحدي ${escapeHtml(game.lessonName)}` : "إعداد درس اللعبة غير مكتمل"}</h3>
-              <p>${configured ? "لعبة تفاعلية متدرجة مع تصحيح فوري وحفظ المحاولات والنتائج في حساب الطالبة." : "أكملي رقم الوحدة ورقم الدرس واسم الدرس قبل إتاحة الشهادة للطالبات."}</p>
+              <h3>${escapeHtml(gameTitle)}</h3>
+              <p>${configured ? escapeHtml(isBuilderGame && game.description ? game.description : "لعبة تفاعلية متدرجة مع تصحيح فوري وحفظ المحاولات والنتائج في حساب الطالبة.") : "أكملي رقم الوحدة ورقم الدرس واسم الدرس قبل إتاحة الشهادة للطالبات."}</p>
               <div class="teacher-game-publication-row"><span class="teacher-game-publication-status${isPublished ? " is-published" : " is-unpublished"}" role="status">${isPublished ? "منشورة" : "غير منشورة"}</span></div>
-              <div class="teacher-game-features" aria-label="مميزات اللعبة"><span>✦ أسئلة متجددة</span><span>🏆 نقاط ومستويات</span><span>🎓 ${game.stage === "all" ? "جميع المراحل" : escapeHtml(game.stage)} · ${game.gradeLabel === "all" ? "جميع الصفوف" : escapeHtml(game.gradeLabel)}</span><span>${timeMode === "timed" ? `⏱ ${formatGameNumber(game.timePerQuestionSeconds)} ثانية` : "⌁ وقت مفتوح"}</span></div>
+              <div class="teacher-game-features" aria-label="مميزات اللعبة"><span>✦ أسئلة متجددة</span><span>🏆 نقاط ومستويات</span><span>🎓 ${escapeHtml(audienceLabel)}</span><span>${timeMode === "timed" ? `⏱ ${formatGameNumber(game.timePerQuestionSeconds)} ثانية` : "⌁ وقت مفتوح"}</span></div>
               <div class="teacher-game-actions">
                 <a class="btn btn-primary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">فتح اللعبة</a>
                 <button class="btn btn-secondary" type="button" data-copy-game-link="${escapeHtml(studentUrl)}">نسخ رابط اللعبة</button>
-                <button class="btn btn-outline" type="button" data-configure-game="${escapeHtml(game.gameKey)}">إعداد اللعبة</button>
-                <button class="btn teacher-game-timer-toggle${timeMode === "timed" ? " is-active" : ""}" type="button" data-game-timer="${escapeHtml(game.gameKey)}" aria-pressed="${timeMode === "timed"}">مؤقت</button>
+                ${isBuilderGame ? `<button class="btn btn-outline" type="button" data-builder-configure="${game.id}">إعداد اللعبة</button><button class="btn teacher-game-timer-toggle${timeMode === "timed" ? " is-active" : ""}" type="button" data-builder-timer="${game.id}" aria-pressed="${timeMode === "timed"}">مؤقت</button>` : `<button class="btn btn-outline" type="button" data-configure-game="${escapeHtml(game.gameKey)}">إعداد اللعبة</button><button class="btn teacher-game-timer-toggle${timeMode === "timed" ? " is-active" : ""}" type="button" data-game-timer="${escapeHtml(game.gameKey)}" aria-pressed="${timeMode === "timed"}">مؤقت</button>`}
               </div>
             </div>
           </article>`;
         }).join("") || '<div class="empty-state">لا توجد ألعاب مناسبة للمرحلة والصف المحددين.</div>'}
       </section>`;
+    target.innerHTML = key === "game-creator" ? gameBuilderStudio : interactiveGamesLibrary;
     bindAcademicSelector("games", () => renderGamesPanel());
     document.getElementById("createTemplateGame")?.addEventListener("click", () => openInteractiveTemplateEditor());
     document.getElementById("importProgrammedGame")?.addEventListener("click", () => openInteractivePackageImporter());
@@ -4698,12 +6739,24 @@ function renderEducationalContent(key, target = contentEl) {
       if (game?.sourceType === "package") openInteractivePackageImporter(Number(game.id));
       else openInteractiveTemplateEditor(Number(button.dataset.builderEdit));
     }; });
+    target.querySelectorAll("[data-builder-configure]").forEach((button) => { button.onclick = () => openInteractiveBuilderSettings(Number(button.dataset.builderConfigure)); });
+    target.querySelectorAll("[data-builder-timer]").forEach((button) => { button.onclick = () => openInteractiveBuilderTimer(Number(button.dataset.builderTimer)); });
     target.querySelectorAll("[data-builder-publish]").forEach((button) => { button.onclick = () => openInteractiveGamePublication(Number(button.dataset.builderPublish)); });
     target.querySelectorAll("[data-builder-copy]").forEach((button) => { button.onclick = () => openInteractiveGameCopy(Number(button.dataset.builderCopy)); });
     target.querySelectorAll("[data-builder-status]").forEach((button) => { button.onclick = async () => {
       try { await api(`/interactive-games/builder/library/${button.dataset.builderStatus}/status`, { method: "POST", body: JSON.stringify({ status: button.dataset.status }) }); toast(button.dataset.status === "disabled" ? "تم إيقاف اللعبة مع بقاء النتائج." : "أعيدت اللعبة إلى المسودة."); await refreshGames(); } catch (error) { toast(error.message); }
     }; });
-    target.querySelectorAll("[data-builder-delete]").forEach((button) => { button.onclick = () => confirmAction("أرشفة اللعبة؟ ستتوقف عن الظهور مع الاحتفاظ بجميع النتائج والإصدارات.", async () => { await api(`/interactive-games/builder/library/${button.dataset.builderDelete}`, { method: "DELETE", body: "{}" }); toast("تمت أرشفة اللعبة دون حذف نتائجها."); await refreshGames(); }); });
+    target.querySelectorAll("[data-builder-delete]").forEach((button) => { button.onclick = () => {
+      const game = allBuilderGames.find((item) => Number(item.id) === Number(button.dataset.builderDelete));
+      if (!game) return;
+      const gameName = String(game.name || "هذه اللعبة");
+      confirmAction(`حذف سجل لعبة «${gameName}»؟ ستتوقف عن الظهور، مع الاحتفاظ بجميع النتائج والإصدارات.`, async () => {
+        await api(`/interactive-games/builder/library/${game.id}`, { method: "DELETE", body: "{}" });
+        interactiveGamesState.builderGames = interactiveGamesState.builderGames.filter((item) => Number(item.id) !== Number(game.id));
+        renderEducationalContent(key, target);
+        toast(`تم حذف سجل لعبة «${gameName}» بأمان مع الاحتفاظ بالنتائج.`);
+      });
+    }; });
     target.querySelectorAll("[data-copy-game-link]").forEach((copyButton) => { copyButton.onclick = async () => {
       const url = new URL(copyButton.dataset.copyGameLink, window.location.origin).href;
       try { await navigator.clipboard.writeText(url); toast("تم نسخ رابط اللعبة."); }
@@ -4712,7 +6765,7 @@ function renderEducationalContent(key, target = contentEl) {
 
     const refreshGames = async () => {
       await loadInteractiveGames();
-      renderEducationalContent("interactive-games", target);
+      renderEducationalContent(key, target);
     };
     const saveTimerSettings = async (gameKey, mode, seconds, button) => {
       if (button) button.disabled = true;
@@ -4775,6 +6828,7 @@ function renderEducationalContent(key, target = contentEl) {
           <h3>إعداد بيانات اللعبة</h3>
           <p>أدخلي بيانات الدرس الفعلية وحددي الترم المرتبط بهذه اللعبة.</p>
           <div id="gameConfigMessage"></div>
+          ${game.nameEditable === false ? "" : `<label class="field">اسم اللعبة<input id="gameName" maxlength="190" value="${escapeHtml(game.name || "")}" required /></label>`}
           <label class="field">اسم الدرس<input id="gameLessonName" maxlength="190" value="${escapeHtml(game.lessonName || "")}" required /></label>
           <div class="form-grid two"><label class="field">رقم الوحدة<input id="gameUnitNumber" type="number" min="1" max="999" value="${game.unitNumber || ""}" required /></label><label class="field">رقم الدرس<input id="gameLessonNumber" type="number" min="1" max="999" value="${game.lessonNumber || ""}" required /></label></div>
           <div class="form-grid two"><label class="field">المرحلة<select id="gameTargetStage" required>${GAME_TARGET_STAGES.map((stage) => `<option value="${stage}" ${stage === initialStage ? "selected" : ""}>${stage === "all" ? "الجميع" : stage}</option>`).join("")}</select></label><label class="field">الصف<select id="gameTargetGrade" required>${gameTargetGradeOptions(initialStage, initialGrade)}</select></label></div>
@@ -4815,6 +6869,7 @@ function renderEducationalContent(key, target = contentEl) {
           const selectedClassId = /^\d+$/.test(audience) ? Number(audience) : null;
           const publishThroughAudienceRoute = publish && (audience === "all" || selectedClassId !== null);
           await api(`/interactive-games/${encodeURIComponent(game.gameKey)}`, { method: "PUT", body: JSON.stringify({
+            ...(game.nameEditable === false ? {} : { name: document.getElementById("gameName").value.trim() }),
             lessonName: document.getElementById("gameLessonName").value.trim(),
             unitNumber: Number(document.getElementById("gameUnitNumber").value),
             lessonNumber: Number(document.getElementById("gameLessonNumber").value),
@@ -4873,6 +6928,7 @@ function renderEducationalContent(key, target = contentEl) {
     "flipped-classroom": "strategies",
     videos: "library",
     training: "library",
+    worksheets: "library",
   }[key];
   const selector = academicKind ? academicSelectorHtml(academicKind) : "";
   target.innerHTML = `
@@ -4990,7 +7046,7 @@ async function openInteractivePackageImporter(updateGameId = null) {
   let game = null;
   if (updateGameId) { try { game = (await api(`/interactive-games/builder/library/${updateGameId}`)).game; } catch (error) { toast(error.message); return; } }
   const stage = game?.stage || "all", grade = game?.gradeLabel || "all";
-  openModal(`<form class="game-builder-form" id="interactivePackageForm"><div class="game-builder-modal-head"><div><span>حزمة مبرمجة</span><h3>${game ? `رفع إصدار جديد لـ ${escapeHtml(game.name)}` : "استيراد لعبة مبرمجة ZIP"}</h3><p>يجب أن يحتوي ZIP على game.json وواجهة madar-game-bridge-v1. لن تصل اللعبة إلى Cookies أو CSRF.</p></div><button class="btn btn-outline btn-sm" type="button" id="cancelPackageImport">إغلاق</button></div><div id="interactivePackageMessage"></div><section class="game-builder-form-section"><label class="game-package-drop">ملف ZIP<input id="packageZip" type="file" accept=".zip,application/zip" required><span>اختاري حزمة اللعبة — الحد الأقصى 20 MB</span></label><p class="safe-note">الأنواع المسموحة: HTML وCSS وJavaScript وJSON والصور والأصوات والخطوط المحلية. تُرفض PHP والملفات التنفيذية والروابط الخارجية والمسارات الضارة.</p></section><section class="game-builder-form-section"><h4>بيانات اللعبة الدراسية</h4><div class="form-grid two"><label class="field">اسم اللعبة<input id="packageGameName" maxlength="190" value="${escapeHtml(game?.name || "")}" placeholder="يؤخذ من game.json إذا تُرك فارغًا"></label><label class="field">المادة<input id="packageSubject" maxlength="190" value="${escapeHtml(game?.subjectName || schoolSettings?.subjectName || "")}" required></label></div><label class="field">الوصف<textarea id="packageDescription" maxlength="2000">${escapeHtml(game?.description || "")}</textarea></label><div class="form-grid three"><label class="field">المرحلة<select id="packageStage">${GAME_TARGET_STAGES.map((item) => `<option value="${item}" ${item === stage ? "selected" : ""}>${item === "all" ? "الجميع" : item}</option>`).join("")}</select></label><label class="field">الصف<select id="packageGrade">${gameTargetGradeOptions(stage, grade)}</select></label><label class="field">الفصل الدراسي<select id="packageSemester"><option value="first" ${(game?.semester || schoolSettings?.currentSemester) !== "second" ? "selected" : ""}>الترم الأول</option><option value="second" ${(game?.semester || schoolSettings?.currentSemester) === "second" ? "selected" : ""}>الترم الثاني</option></select></label><label class="field">رقم الوحدة<input id="packageUnit" type="number" min="1" max="999" value="${game?.unitNumber || ""}" required></label><label class="field">رقم الدرس<input id="packageLesson" type="number" min="1" max="999" value="${game?.lessonNumber || ""}" required></label><label class="field">اسم الدرس<input id="packageLessonName" maxlength="190" value="${escapeHtml(game?.lessonName || "")}" required></label></div><div class="game-builder-skills" id="packageSkills">${interactiveGameSkillChecks(game?.skillIds || [], stage, grade)}</div></section><section class="game-builder-form-section"><h4>إعداد الجولة</h4><div class="form-grid three"><label class="field">عدد الأسئلة<input id="packageQuestionCount" type="number" min="1" max="200" value="${game?.questionCount || 10}" required></label><label class="field">الوقت<select id="packageTimeMode"><option value="open" ${game?.timeMode !== "timed" ? "selected" : ""}>وقت مفتوح</option><option value="timed" ${game?.timeMode === "timed" ? "selected" : ""}>مؤقت</option></select></label><label class="field" id="packageSecondsField" ${game?.timeMode === "timed" ? "" : "hidden"}>ثواني السؤال<input id="packageSeconds" type="number" min="1" max="600" value="${game?.timePerQuestionSeconds || 30}"></label></div><div class="game-builder-check-row"><span>المستويات:</span>${[["easy", "بسيط"], ["medium", "متوسط"], ["hard", "متقدم"]].map(([value, label]) => `<label><input name="packageDifficulty" type="checkbox" value="${value}" ${(game?.difficulties || ["easy", "medium", "hard"]).includes(value) ? "checked" : ""}> ${label}</label>`).join("")}</div><div class="game-builder-check-row"><label><input id="packageCertificate" type="checkbox" ${game?.certificateEnabled === false ? "" : "checked"}> السماح بالشهادة</label><label><input id="packagePoints" type="checkbox" ${game?.pointsEnabled ? "checked" : ""}> إضافة نقاط</label><label id="packagePointsField" ${game?.pointsEnabled ? "" : "hidden"}>النقاط <input id="packagePointsValue" type="number" min="1" max="1000" value="${game?.pointsValue || 1}"></label></div><label class="field">صورة الغلاف — اختيارية<input id="packageCover" type="file" accept="image/png,image/jpeg,image/webp"></label></section><div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelPackageImportBottom">إلغاء</button><button class="btn btn-primary" type="submit" id="runPackageImport">فحص واستيراد ZIP</button></div></form>`, "game-builder-modal");
+  openModal(`<form class="game-builder-form" id="interactivePackageForm"><div class="game-builder-modal-head"><div><span>حزمة مبرمجة</span><h3>${game ? `رفع إصدار جديد لـ ${escapeHtml(game.name)}` : "استيراد لعبة مبرمجة ZIP"}</h3><p>يُكتشف ملف التشغيل وتُضاف واجهة مدار ووضع التوافق المعزول تلقائيًا. ملف game.json اختياري.</p></div><button class="btn btn-outline btn-sm" type="button" id="cancelPackageImport">إغلاق</button></div><div id="interactivePackageMessage"></div><section class="game-builder-form-section"><label class="game-package-drop">ملف ZIP<input id="packageZip" type="file" accept=".zip,application/zip" required><span>اختاري حزمة اللعبة — الحد الأقصى 20 MB</span></label><p class="safe-note">تعمل JavaScript والتخزين المؤقت والتنقل المحلي داخل صندوق أمان. تُرفض PHP والملفات التنفيذية والاتصالات الخارجية والمسارات الضارة.</p></section><section class="game-builder-form-section"><h4>بيانات اللعبة الدراسية</h4><div class="form-grid two"><label class="field">اسم اللعبة<input id="packageGameName" maxlength="190" value="${escapeHtml(game?.name || "")}" placeholder="يُكتشف من game.json أو عنوان صفحة اللعبة إذا تُرك فارغًا"></label><label class="field">المادة<input id="packageSubject" maxlength="190" value="${escapeHtml(game?.subjectName || schoolSettings?.subjectName || "")}" required></label></div><label class="field">الوصف<textarea id="packageDescription" maxlength="2000">${escapeHtml(game?.description || "")}</textarea></label><div class="form-grid three"><label class="field">المرحلة<select id="packageStage">${GAME_TARGET_STAGES.map((item) => `<option value="${item}" ${item === stage ? "selected" : ""}>${item === "all" ? "الجميع" : item}</option>`).join("")}</select></label><label class="field">الصف<select id="packageGrade">${gameTargetGradeOptions(stage, grade)}</select></label><label class="field">الفصل الدراسي<select id="packageSemester"><option value="first" ${(game?.semester || schoolSettings?.currentSemester) !== "second" ? "selected" : ""}>الترم الأول</option><option value="second" ${(game?.semester || schoolSettings?.currentSemester) === "second" ? "selected" : ""}>الترم الثاني</option></select></label><label class="field">رقم الوحدة<input id="packageUnit" type="number" min="1" max="999" value="${game?.unitNumber || ""}" required></label><label class="field">رقم الدرس<input id="packageLesson" type="number" min="1" max="999" value="${game?.lessonNumber || ""}" required></label><label class="field">اسم الدرس<input id="packageLessonName" maxlength="190" value="${escapeHtml(game?.lessonName || "")}" required></label></div><div class="game-builder-skills" id="packageSkills">${interactiveGameSkillChecks(game?.skillIds || [], stage, grade)}</div></section><section class="game-builder-form-section"><h4>إعداد الجولة</h4><div class="form-grid three"><label class="field">عدد الأسئلة<input id="packageQuestionCount" type="number" min="1" max="200" value="${game?.questionCount || 10}" required></label><label class="field">الوقت<select id="packageTimeMode"><option value="open" ${game?.timeMode !== "timed" ? "selected" : ""}>وقت مفتوح</option><option value="timed" ${game?.timeMode === "timed" ? "selected" : ""}>مؤقت</option></select></label><label class="field" id="packageSecondsField" ${game?.timeMode === "timed" ? "" : "hidden"}>ثواني السؤال<input id="packageSeconds" type="number" min="1" max="600" value="${game?.timePerQuestionSeconds || 30}"></label></div><div class="game-builder-check-row"><span>المستويات:</span>${[["easy", "بسيط"], ["medium", "متوسط"], ["hard", "متقدم"]].map(([value, label]) => `<label><input name="packageDifficulty" type="checkbox" value="${value}" ${(game?.difficulties || ["easy", "medium", "hard"]).includes(value) ? "checked" : ""}> ${label}</label>`).join("")}</div><div class="game-builder-check-row"><label><input id="packageCertificate" type="checkbox" ${game?.certificateEnabled === false ? "" : "checked"}> السماح بالشهادة</label><label><input id="packagePoints" type="checkbox" ${game?.pointsEnabled ? "checked" : ""}> إضافة نقاط</label><label id="packagePointsField" ${game?.pointsEnabled ? "" : "hidden"}>النقاط <input id="packagePointsValue" type="number" min="1" max="1000" value="${game?.pointsValue || 1}"></label></div><label class="field">صورة الغلاف — اختيارية<input id="packageCover" type="file" accept="image/png,image/jpeg,image/webp"></label></section><div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelPackageImportBottom">إلغاء</button><button class="btn btn-primary" type="submit" id="runPackageImport">فحص واستيراد ZIP</button></div></form>`, "game-builder-modal");
   const refreshSkills = () => { document.getElementById("packageSkills").innerHTML = interactiveGameSkillChecks([], document.getElementById("packageStage").value, document.getElementById("packageGrade").value); };
   document.getElementById("packageStage").onchange = (event) => { document.getElementById("packageGrade").innerHTML = gameTargetGradeOptions(event.target.value, "all"); refreshSkills(); };
   document.getElementById("packageGrade").onchange = refreshSkills;
@@ -5003,8 +7059,184 @@ async function openInteractivePackageImporter(updateGameId = null) {
     const fields = { name: "packageGameName", description: "packageDescription", subjectName: "packageSubject", stage: "packageStage", gradeLabel: "packageGrade", semester: "packageSemester", unitNumber: "packageUnit", lessonNumber: "packageLesson", lessonName: "packageLessonName", questionCount: "packageQuestionCount", timeMode: "packageTimeMode", timePerQuestionSeconds: "packageSeconds", pointsValue: "packagePointsValue" };
     Object.entries(fields).forEach(([key, id]) => data.append(key, document.getElementById(id).value)); data.append("certificateEnabled", String(document.getElementById("packageCertificate").checked)); data.append("pointsEnabled", String(document.getElementById("packagePoints").checked));
     document.querySelectorAll("[name=packageDifficulty]:checked").forEach((input) => data.append("difficulties[]", input.value)); document.querySelectorAll("#packageSkills [name=builderSkill]:checked").forEach((input) => data.append("skillIds[]", input.value));
-    try { const response = await api("/interactive-games/builder/import", { method: "POST", body: data }); const cover = document.getElementById("packageCover").files[0]; let coverWarning = ""; if (cover) { const coverData = new FormData(); coverData.append("cover", cover); try { await api(`/interactive-games/builder/library/${response.game.id}/cover`, { method: "POST", body: coverData }); } catch (error) { coverWarning = ` تم حفظ الحزمة، لكن تعذّر حفظ الغلاف: ${error.message}`; } } closeModal(); toast((response.needsSetup ? "تم الاستيراد، لكن الحزمة تحتاج تهيئة MadarGameBridge قبل النشر." : "تم فحص الحزمة واستيرادها كمسودة.") + coverWarning); await loadInteractiveGames(); renderGamesPanel(); }
+    try { const response = await api("/interactive-games/builder/import", { method: "POST", body: data }); const cover = document.getElementById("packageCover").files[0]; let coverWarning = ""; if (cover) { const coverData = new FormData(); coverData.append("cover", cover); try { await api(`/interactive-games/builder/library/${response.game.id}/cover`, { method: "POST", body: coverData }); } catch (error) { coverWarning = ` تم حفظ الحزمة، لكن تعذّر حفظ الغلاف: ${error.message}`; } } closeModal(); const detectedMessage = response.autoDetected ? " تم اكتشاف ملف التشغيل وبيانات الحزمة تلقائيًا." : ""; const repairedMessage = Number(response.repairedAssets || 0) > 0 ? ` تم تصحيح ${Number(response.repairedAssets)} مسار ملف داخل اللعبة.` : ""; const setupMessage = response.needsSetup ? `تم الاستيراد، لكن يلزم تصحيح الحزمة قبل النشر: ${response.message || "ملفات التشغيل غير مكتملة."}` : "تم فحص الحزمة واستيرادها كمسودة."; toast(setupMessage + detectedMessage + repairedMessage + coverWarning); await loadInteractiveGames(); renderGamesPanel(); }
     catch (error) { document.getElementById("interactivePackageMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`; button.disabled = false; button.textContent = "فحص واستيراد ZIP"; }
+  };
+}
+
+async function openInteractiveBuilderSettings(gameId) {
+  let game;
+  try { game = (await api(`/interactive-games/builder/library/${gameId}`)).game; }
+  catch (error) { toast(error.message); return; }
+  const publicationTargets = Array.isArray(game.publicationTargets) ? game.publicationTargets : [];
+  const isPublished = game.status === "published" && publicationTargets.length > 0;
+  const sameTargetScope = publicationTargets.length > 0 && publicationTargets.every((target) => target.stage === publicationTargets[0].stage && target.gradeLabel === publicationTargets[0].gradeLabel);
+  let initialStage = GAME_TARGET_STAGES.includes(game.stage) ? game.stage : "all";
+  let initialGrade = game.gradeLabel || "all";
+  if (sameTargetScope) {
+    initialStage = publicationTargets[0].stage;
+    initialGrade = publicationTargets[0].gradeLabel;
+  }
+  const allowedGrades = initialStage === "all" ? [] : (ACADEMIC_GRADES[initialStage] || []);
+  if (initialGrade !== "all" && !allowedGrades.includes(initialGrade)) initialGrade = "all";
+  const publishedClassIds = new Set(publicationTargets.map((target) => Number(target.classId)));
+  const scopeClasses = allClasses.filter((item) => {
+    const stage = item.stage || item.level || "";
+    const grade = item.grade_label || item.gradeLabel || "";
+    return stage === initialStage && (initialGrade === "all" || normalizeGradeKey(stage, grade) === normalizeGradeKey(stage, initialGrade));
+  });
+  const publishesToAll = allClasses.length > 0 && allClasses.every((item) => publishedClassIds.has(Number(item.id)));
+  const publishesToScope = sameTargetScope && scopeClasses.length > 0 && scopeClasses.every((item) => publishedClassIds.has(Number(item.id)));
+  const initialAudience = publishesToAll ? "all"
+    : publicationTargets.length === 1 ? String(publicationTargets[0].classId)
+    : publishesToScope ? "scope"
+    : publicationTargets.length ? "current"
+    : initialStage === "all" ? "all" : "scope";
+  const currentAudienceOption = initialAudience === "current" ? '<option value="current" selected>الفصول المنشورة حاليًا</option>' : "";
+  const audienceOptions = `<option value="" disabled>اختاري نطاق النشر</option><option value="scope" ${initialAudience === "scope" ? "selected" : ""}>كل فصول المرحلة والصف المحددين</option><option value="all" ${initialAudience === "all" ? "selected" : ""}>جميع الطالبات — نشر عام</option>${currentAudienceOption}${allClasses.map((item) => `<option value="${item.id}" ${String(item.id) === initialAudience ? "selected" : ""}>${escapeHtml(item.stage || item.level || "")} · ${escapeHtml(item.grade_label || item.gradeLabel || "")} · ${escapeHtml(item.name || "")}</option>`).join("")}`;
+  const initialSemester = publicationTargets[0]?.semester || game.semester || schoolSettings?.currentSemester || "first";
+  openModal(`
+    <form class="game-config-dialog" id="interactiveBuilderSettingsForm">
+      <h3>إعداد بيانات اللعبة</h3>
+      <p>أدخلي بيانات الدرس الفعلية وحددي نطاق النشر والترم المرتبط بهذه اللعبة.</p>
+      <div id="interactiveBuilderSettingsMessage"></div>
+      <label class="field">اسم اللعبة<input id="builderSettingsGameName" maxlength="190" value="${escapeHtml(game.name || "")}" required /></label>
+      <label class="field">اسم الدرس<input id="builderSettingsLessonName" maxlength="190" value="${escapeHtml(game.lessonName || "")}" required /></label>
+      <div class="form-grid two"><label class="field">رقم الوحدة<input id="builderSettingsUnitNumber" type="number" min="1" max="999" value="${game.unitNumber || ""}" required /></label><label class="field">رقم الدرس<input id="builderSettingsLessonNumber" type="number" min="1" max="999" value="${game.lessonNumber || ""}" required /></label></div>
+      <div class="form-grid two"><label class="field">المرحلة<select id="builderSettingsStage" required>${GAME_TARGET_STAGES.map((stage) => `<option value="${stage}" ${stage === initialStage ? "selected" : ""}>${stage === "all" ? "الجميع" : stage}</option>`).join("")}</select></label><label class="field">الصف<select id="builderSettingsGrade" required>${gameTargetGradeOptions(initialStage, initialGrade)}</select></label></div>
+      <label class="field">نطاق النشر<select id="builderSettingsAudience" required>${audienceOptions}</select></label>
+      <div class="form-grid two"><label class="field">الترم<select id="builderSettingsSemester" required><option value="first" ${initialSemester !== "second" ? "selected" : ""}>الترم الأول</option><option value="second" ${initialSemester === "second" ? "selected" : ""}>الترم الثاني</option></select></label><label class="field">عدد النقاط لكل سؤال<input id="builderSettingsPointsPerQuestion" type="number" min="1" max="1000" step="1" inputmode="numeric" value="${Number(game.pointsPerQuestion) || 100}" required /></label></div>
+      <label class="check-row"><input id="builderSettingsCertificate" type="checkbox" ${game.certificateEnabled ? "checked" : ""}> السماح بإرسال الشهادة إلى ملف الإنجاز</label>
+      <div class="modal-actions"><button class="btn btn-outline" type="button" id="cancelInteractiveBuilderSettings">إلغاء</button><button class="btn ${isPublished ? "btn-outline" : "btn-secondary"}" type="button" id="publishInteractiveBuilderSettings">${isPublished ? "إيقاف النشر" : "نشر اللعبة"}</button><button class="btn btn-primary" type="submit" id="saveInteractiveBuilderSettings">حفظ الإعداد</button></div>
+    </form>
+  `, "game-config-modal");
+  document.getElementById("cancelInteractiveBuilderSettings").onclick = closeModal;
+  document.getElementById("builderSettingsStage").onchange = (event) => {
+    document.getElementById("builderSettingsGrade").innerHTML = gameTargetGradeOptions(event.target.value, "all");
+    document.getElementById("builderSettingsAudience").value = event.target.value === "all" ? "all" : "scope";
+  };
+  document.getElementById("builderSettingsGrade").onchange = () => { document.getElementById("builderSettingsAudience").value = "scope"; };
+  document.getElementById("builderSettingsAudience").onchange = (event) => {
+    if (event.target.value === "all") {
+      document.getElementById("builderSettingsStage").value = "all";
+      document.getElementById("builderSettingsGrade").innerHTML = gameTargetGradeOptions("all", "all");
+      return;
+    }
+    const selectedClass = allClasses.find((item) => String(item.id) === event.target.value);
+    if (!selectedClass) return;
+    const stage = selectedClass.stage || selectedClass.level || "";
+    const grade = selectedClass.grade_label || selectedClass.gradeLabel || "all";
+    document.getElementById("builderSettingsStage").value = stage;
+    document.getElementById("builderSettingsGrade").innerHTML = gameTargetGradeOptions(stage, grade);
+  };
+  const form = document.getElementById("interactiveBuilderSettingsForm");
+  const selectedPublicationClasses = () => {
+    const audience = document.getElementById("builderSettingsAudience").value;
+    if (audience === "all") return allClasses.map((item) => Number(item.id));
+    if (audience === "current") return publicationTargets.map((target) => Number(target.classId));
+    if (/^\d+$/.test(audience)) return [Number(audience)];
+    const stage = document.getElementById("builderSettingsStage").value;
+    const grade = document.getElementById("builderSettingsGrade").value;
+    return allClasses.filter((item) => {
+      const itemStage = item.stage || item.level || "";
+      const itemGrade = item.grade_label || item.gradeLabel || "";
+      return itemStage === stage && (grade === "all" || normalizeGradeKey(itemStage, itemGrade) === normalizeGradeKey(stage, grade));
+    }).map((item) => Number(item.id));
+  };
+  const saveSettings = async (publish = false) => {
+    if (!form.reportValidity()) return;
+    const saveButton = document.getElementById("saveInteractiveBuilderSettings");
+    const publishButton = document.getElementById("publishInteractiveBuilderSettings");
+    const syncPublication = publish || isPublished;
+    const classIds = syncPublication ? selectedPublicationClasses() : [];
+    if (syncPublication && !classIds.length) {
+      document.getElementById("interactiveBuilderSettingsMessage").innerHTML = '<div class="form-error">لا توجد فصول مطابقة لنطاق النشر المختار.</div>';
+      return;
+    }
+    saveButton.disabled = true;
+    publishButton.disabled = true;
+    try {
+      await api(`/interactive-games/builder/library/${gameId}/settings`, { method: "POST", body: JSON.stringify({
+        name: document.getElementById("builderSettingsGameName").value.trim(),
+        lessonName: document.getElementById("builderSettingsLessonName").value.trim(),
+        unitNumber: Number(document.getElementById("builderSettingsUnitNumber").value),
+        lessonNumber: Number(document.getElementById("builderSettingsLessonNumber").value),
+        stage: document.getElementById("builderSettingsStage").value,
+        gradeLabel: document.getElementById("builderSettingsGrade").value,
+        semester: document.getElementById("builderSettingsSemester").value,
+        pointsPerQuestion: Number(document.getElementById("builderSettingsPointsPerQuestion").value),
+        certificateEnabled: document.getElementById("builderSettingsCertificate").checked,
+        syncPublication,
+        classIds,
+      }) });
+      closeModal();
+      toast(publish ? "تم حفظ الإعداد ونشر اللعبة." : "تم حفظ إعداد اللعبة في إصدار جديد.");
+      await loadInteractiveGames();
+      renderGamesPanel();
+    } catch (error) {
+      document.getElementById("interactiveBuilderSettingsMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+      saveButton.disabled = false;
+      publishButton.disabled = false;
+    }
+  };
+  form.onsubmit = (event) => { event.preventDefault(); saveSettings(false); };
+  document.getElementById("publishInteractiveBuilderSettings").onclick = async () => {
+    if (!isPublished) { saveSettings(true); return; }
+    const button = document.getElementById("publishInteractiveBuilderSettings");
+    button.disabled = true;
+    try {
+      await api(`/interactive-games/builder/library/${gameId}/status`, { method: "POST", body: JSON.stringify({ status: "disabled" }) });
+      closeModal();
+      toast("تم إيقاف نشر اللعبة.");
+      await loadInteractiveGames();
+      renderGamesPanel();
+    } catch (error) {
+      document.getElementById("interactiveBuilderSettingsMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+      button.disabled = false;
+    }
+  };
+}
+
+async function openInteractiveBuilderTimer(gameId) {
+  let game;
+  try { game = (await api(`/interactive-games/builder/library/${gameId}`)).game; }
+  catch (error) { toast(error.message); return; }
+  if (!game.lessonName || !game.unitNumber || !game.lessonNumber) {
+    toast("أكملي إعداد بيانات اللعبة أولًا.");
+    openInteractiveBuilderSettings(gameId);
+    return;
+  }
+  const timerIsActive = game.timeMode === "timed";
+  const currentSeconds = Number(game.timePerQuestionSeconds);
+  openModal(`
+    <form class="game-timer-dialog" id="interactiveBuilderTimerForm">
+      <h3>${timerIsActive ? "تعديل المؤقت" : "تفعيل المؤقت"}</h3>
+      <p>حددي وقت السؤال بالثواني. يُحفظ الإعداد في إصدار جديد مع إبقاء المحاولات السابقة.</p>
+      <div id="interactiveBuilderTimerMessage"></div>
+      <label class="field">وقت السؤال بالثواني<input id="interactiveBuilderTimerSeconds" type="number" min="15" max="120" inputmode="numeric" value="${Number.isInteger(currentSeconds) ? currentSeconds : ""}" required /></label>
+      <div class="modal-actions">${timerIsActive ? '<button class="btn btn-outline" type="button" id="disableInteractiveBuilderTimer">إيقاف المؤقت</button>' : ""}<button class="btn btn-outline" type="button" id="cancelInteractiveBuilderTimer">إلغاء</button><button class="btn btn-primary" type="submit" id="saveInteractiveBuilderTimer">${timerIsActive ? "حفظ" : "تفعيل"}</button></div>
+    </form>
+  `, "game-timer-modal");
+  document.getElementById("cancelInteractiveBuilderTimer").onclick = closeModal;
+  const saveTimer = async (mode, seconds, button) => {
+    button.disabled = true;
+    try {
+      await api(`/interactive-games/builder/library/${gameId}/settings`, { method: "POST", body: JSON.stringify({ timerOnly: true, timeMode: mode, timePerQuestionSeconds: seconds }) });
+      closeModal();
+      toast(mode === "timed" ? "تم تفعيل مؤقت اللعبة." : "تم إيقاف مؤقت اللعبة.");
+      await loadInteractiveGames();
+      renderGamesPanel();
+    } catch (error) {
+      document.getElementById("interactiveBuilderTimerMessage").innerHTML = `<div class="form-error">${escapeHtml(error.message)}</div>`;
+      button.disabled = false;
+    }
+  };
+  const disableButton = document.getElementById("disableInteractiveBuilderTimer");
+  if (disableButton) disableButton.onclick = () => saveTimer("open", null, disableButton);
+  document.getElementById("interactiveBuilderTimerForm").onsubmit = (event) => {
+    event.preventDefault();
+    if (!event.currentTarget.reportValidity()) return;
+    saveTimer("timed", Number(document.getElementById("interactiveBuilderTimerSeconds").value), document.getElementById("saveInteractiveBuilderTimer"));
   };
 }
 
@@ -5074,6 +7306,70 @@ function statusLabel(status) {
   return ({ planned: "مخططة", in_progress: "قيد التنفيذ", completed: "مكتملة", reassessed: "أعيد قياسها", cancelled: "ملغاة" })[status] || status;
 }
 
+async function openRemedialContentCreate(students) {
+  const labels={worksheet:'أوراق العمل',training:'التدريبات',video:'الفيديوهات',game:'ألعاب تفاعلية',test:'اختبار'};
+  openModal('<h3>توليد خطة علاجية</h3><p role="status">جارٍ تحميل المحتوى…</p>');
+  let catalog;
+  try { catalog=(await api('/enhancements/remedial/catalog')).items||[]; }
+  catch(error){openModal(`<h3>تعذّر تحميل المحتوى</h3><p>${escapeHtml(error.message)}</p>`);return;}
+  const selected=new Map();let category='worksheet';
+  const requestKey=crypto.randomUUID();
+  openModal(`<form id="remedialContentForm"><h3>توليد خطة علاجية</h3><p style="color:var(--muted)">اختاري طالبة ثم أضيفي المحتوى المناسب. تُرسل نسخ مستقلة إلى «خطتي العلاجية» في حسابها.</p><div class="form-grid"><label class="field">الطالبة<select name="studentId" required><option value="">اختاري الطالبة</option>${students.map(s=>`<option value="${Number(s.id)}">${escapeHtml(s.name)} — ${escapeHtml(s.class_name||'')}</option>`).join('')}</select></label><label class="field">عنوان الخطة<input name="title" required maxlength="190" value="خطة علاجية"></label><label class="field">موعد الإكمال (اختياري)<input name="dueDate" type="date"></label><label class="field full-span">تعليمات للطالبة<textarea name="activity" maxlength="1000" placeholder="مثال: شاهدي الفيديو ثم حلي ورقة العمل والاختبار."></textarea></label></div><div class="student-panel-tabs" style="flex-wrap:wrap">${Object.entries(labels).map(([key,label])=>`<button type="button" class="tab-btn ${key===category?'active':''}" data-remedial-category="${key}">${label}</button>`).join('')}</div><label class="field">بحث في المحتوى<input id="remedialContentSearch" type="search" placeholder="اسم المحتوى أو الصف"></label><div id="remedialContentChoices" style="max-height:280px;overflow:auto;border:1px solid #e6def1;border-radius:14px;padding:12px"></div><p id="remedialContentCount" aria-live="polite"></p><div id="remedialContentSelected" style="display:flex;gap:6px;flex-wrap:wrap"></div><p id="remedialContentError" role="alert" style="color:#a12447"></p><div class="modal-actions"><button type="button" class="btn btn-outline" id="cancelRemedialContent">إلغاء</button><button type="submit" class="btn btn-primary">نسخ المحتوى وإرسال الخطة</button></div></form>`);
+  const form=document.getElementById('remedialContentForm');
+  const count=()=>{
+    document.getElementById('remedialContentCount').textContent=`المحتوى المختار: ${selected.size} من ٢٠`;
+    const target=document.getElementById('remedialContentSelected');
+    target.innerHTML=[...selected.entries()].map(([key,item])=>`<button type="button" class="btn btn-outline btn-sm" data-remove-remedial="${key}" aria-label="إزالة ${escapeHtml(item.title)}">${escapeHtml(item.title)} ×</button>`).join('');
+    target.querySelectorAll('[data-remove-remedial]').forEach(button=>button.onclick=()=>{selected.delete(button.dataset.removeRemedial);draw();});
+  };
+  const draw=()=>{
+    const search=document.getElementById('remedialContentSearch').value.trim().toLocaleLowerCase();
+    const items=catalog.filter(item=>item.category===category&&`${item.title} ${item.grade||''}`.toLocaleLowerCase().includes(search));
+    const target=document.getElementById('remedialContentChoices');
+    target.innerHTML=items.length?items.map(item=>{const key=`${item.kind}:${item.id}`;return `<label style="display:flex;gap:10px;align-items:center;padding:10px;border-bottom:1px solid #eee"><input type="checkbox" data-remedial-source="${key}" ${selected.has(key)?'checked':''}><span>${escapeHtml(item.title)}<small style="display:block;color:var(--muted)">${escapeHtml(item.grade||'')}</small></span></label>`;}).join(''):'<p>لا يوجد محتوى مطابق في هذا القسم. أضيفي المحتوى في قسمه أولًا.</p>';
+    target.querySelectorAll('[data-remedial-source]').forEach(input=>input.onchange=()=>{
+      const key=input.dataset.remedialSource;
+      if(input.checked){if(selected.size>=20){input.checked=false;toast('الحد الأقصى ٢٠ محتوى لكل خطة.');return;}selected.set(key,catalog.find(item=>`${item.kind}:${item.id}`===key));}else selected.delete(key);
+      count();
+    });count();
+  };
+  form.querySelectorAll('[data-remedial-category]').forEach(button=>button.onclick=()=>{category=button.dataset.remedialCategory;form.querySelectorAll('[data-remedial-category]').forEach(b=>b.classList.toggle('active',b===button));draw();});
+  document.getElementById('remedialContentSearch').oninput=draw;
+  document.getElementById('cancelRemedialContent').onclick=closeModal;
+  let sending=false;
+  form.onsubmit=async event=>{
+    event.preventDefault();if(sending)return;
+    const message=document.getElementById('remedialContentError');
+    if(!selected.size){message.textContent='اختاري محتوى واحدًا على الأقل.';return;}
+    const data=new FormData(form);const body={studentId:Number(data.get('studentId')),title:data.get('title'),activity:data.get('activity'),dueDate:data.get('dueDate'),items:[...selected.values()].map(({kind,id})=>({kind,id})),requestKey};
+    sending=true;const controls=[...form.querySelectorAll('input,textarea,select,button')];controls.forEach(input=>input.disabled=true);message.textContent='جارٍ نسخ المحتوى وإرسال الخطة…';
+    try {await api('/enhancements/remedial/create-content',{method:'POST',body:JSON.stringify(body)});closeModal();toast('تم إرسال الخطة إلى الطالبة المحددة.');await renderRemedialPlans();}
+    catch(error){message.textContent=error.message;controls.forEach(input=>input.disabled=false);}
+    finally{sending=false;}
+  };draw();
+}
+
+function remedialTeacherAttachments(plan) {
+  const items=plan.attachments||[];
+  if(!items.length)return '';
+  return `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px">${items.map(item=>{
+    const id=Number(item.copy_id);const url=item.kind==='content'?`/planning/content-player.php?content=${id}&preview=1`:item.kind==='game'?`/games/game-player.php?game=${id}&preview=1`:null;
+    return url?`<a class="btn btn-outline btn-sm" href="${url}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>`:`<span class="badge">اختبار: ${escapeHtml(item.title)}</span>`;
+  }).join('')}</div>`;
+}
+
+function remedialFollowupRows(data) {
+  const states={submitted:'مُسلّم',graded:'مصحّح',in_progress:'قيد الحل',completed:'مكتملة',abandoned:'لم تكتمل',pending:'بانتظار مراجعة المعلمة',approved:'مُعتمد',needs_revision:'يحتاج تعديلًا'};
+  return (data.items||[]).map(item=>`<article style="border:1px solid #e4daf2;border-radius:14px;padding:14px;margin:12px 0"><h4>${escapeHtml(item.title)}</h4>${item.records.length?item.records.map(r=>{const finished=['submitted','graded','completed'].includes(r.status);return `<div style="padding:10px 0;border-top:1px solid #eee"><strong>${escapeHtml(states[r.status]||r.status)}</strong>${item.type==='html_game'?`<p>${escapeHtml(r.phase||'')} · نتيجة أبلغت بها اللعبة</p>`:''}${finished&&item.type!=='worksheet'?`<p>الدرجة: ${Number(r.score)}${r.total_points!=null?' / '+Number(r.total_points):''} · ${item.type==='game'?'الدقة':'النسبة'}: ${Number(r.percentage)}٪</p>`:''}${item.type==='worksheet'?`<p><a href="/api/teacher/student-files/${Number(r.id)}/file" target="_blank" rel="noopener">مشاهدة حل الطالبة</a></p><p>${escapeHtml(r.teacher_comment||'')}</p>`:''}<small>${escapeHtml(r.date||'')}</small></div>`}).join(''):`<p>${escapeHtml(item.message)}</p>`}</article>`).join('')||'<p>لا توجد مرفقات مرتبطة بهذه الخطة.</p>';
+}
+function openRemedialFollowup(plans) {
+  openModal(`<h3>متابعة الخطط العلاجية</h3><p>تظهر النتائج المسجلة عند فتح المتابعة أو الضغط على تحديث النتائج. أوراق العمل تظهر كحلول مُرسلة للمراجعة.</p><label class="field">الطالبة والخطة<select id="followupPlan"><option value="">اختاري الخطة</option>${plans.filter(p=>p.status!=='cancelled').map(p=>`<option value="${Number(p.id)}">${escapeHtml(p.student_name)} — ${escapeHtml(p.title)}</option>`).join('')}</select></label><button class="btn btn-outline btn-sm" id="refreshFollowup">تحديث النتائج</button><div id="followupResults" role="status"></div>`);
+  const select=document.getElementById('followupPlan'),target=document.getElementById('followupResults');let revision=0;
+  const load=async()=>{const token=++revision;if(!select.value){target.textContent='اختاري خطة لعرض نتائجها.';return}target.textContent='جارٍ تحميل النتائج…';try{const data=await api('/enhancements/remedial/results?planId='+Number(select.value));if(token!==revision||!target.isConnected)return;target.innerHTML=remedialFollowupRows(data);}catch(error){if(token===revision)target.textContent=error.message||'تعذّر تحميل النتائج.'}};
+  select.onchange=load;document.getElementById('refreshFollowup').onclick=load;
+  if(select.options.length>1){select.selectedIndex=1;load()}else target.textContent='لا توجد خطط للمتابعة.';
+}
+
 async function renderRemedialPlans() {
   const [plansData, studentsData] = await Promise.all([api("/enhancements/remedial"), api("/students?pageSize=200"), loadSchoolSettings()]);
   const plans = (plansData.items || []).filter((plan) => academicItemMatches("remedialPlans", plan)).map((plan) => ({ ...plan, recommended_resource_url: safeResourceUrl(plan.recommended_resource_url) }));
@@ -5090,35 +7386,11 @@ async function renderRemedialPlans() {
       <article class="enhancement-card"><small>إجمالي الخطط</small><strong>${plans.length}</strong></article>
     </div>
     <section class="card smart-section">
-      <div class="smart-section-head"><div><h3>الخطة العلاجية الذكية</h3><p style="color:var(--muted);margin:4px 0 0;font-size:.78rem">يحدد النظام مهارات الطالبة الأقل من ٧٠٪ ويقترح نشاطًا يناسب نمط تعلمها.</p></div><button class="btn btn-primary btn-sm" id="autoPlanButton">توليد خطة تلقائية</button></div>
-      <div class="toolbar"><select id="remedialStudentFilter"><option value="">كل الطالبات</option>${students.map((s) => `<option value="${s.id}">${escapeHtml(s.name)} · ${escapeHtml(s.class_name || "")}</option>`).join("")}</select><select id="remedialStatusFilter"><option value="">كل الحالات</option><option value="planned">مخططة</option><option value="in_progress">قيد التنفيذ</option><option value="completed">مكتملة</option><option value="reassessed">أعيد قياسها</option><option value="cancelled">ملغاة</option></select></div>
-      <div id="remedialTable"></div>
+      <div class="smart-section-head"><div><h3>الخطة العلاجية الذكية</h3><p style="color:var(--muted);margin:4px 0 0;font-size:.78rem">اختاري طالبة وأرسلي لها نسخًا من أوراق العمل والتدريبات والفيديوهات والألعاب والاختبارات.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" id="autoPlanButton">توليد خطة علاجية</button><button class="btn btn-outline btn-sm" id="remedialFollowupButton">متابعة الخطط العلاجية</button></div></div>
     </section>`;
   bindAcademicSelector("remedialPlans", renderRemedialPlans);
-  const draw = () => {
-    const sid = document.getElementById("remedialStudentFilter").value;
-    const status = document.getElementById("remedialStatusFilter").value;
-    const filtered = plans.filter((p) => (!sid || String(p.student_id) === sid) && (!status || p.status === status));
-    document.getElementById("remedialTable").innerHTML = filtered.length ? `<div class="table-wrap"><table><thead><tr><th>الطالبة</th><th>المهارة</th><th>قبل</th><th>الهدف</th><th>بعد</th><th>النشاط المقترح</th><th>الموعد</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>${filtered.map((p) => `<tr><td><button class="link-button student-link" data-remedial-student="${p.student_id}">${escapeHtml(p.student_name)}</button><small class="cell-sub">${escapeHtml(p.class_name || "")}</small></td><td>${escapeHtml(p.skill_name || p.title)}</td><td>${Number(p.before_percent || 0)}٪</td><td>${Number(p.target_percent || 70)}٪</td><td>${p.after_percent === null ? "—" : `${Number(p.after_percent)}٪`}</td><td style="min-width:260px">${escapeHtml(p.recommended_activity || "—")}${p.recommended_resource_url ? `<br><a href="${escapeHtml(p.recommended_resource_url)}" target="_blank" rel="noopener noreferrer">فتح المورد المقترح</a>` : ""}</td><td>${escapeHtml(p.due_date || "—")}</td><td><span class="remedial-status remedial-${escapeHtml(p.status)}">${escapeHtml(statusLabel(p.status))}</span></td><td><button class="btn btn-outline btn-sm" data-edit-plan="${p.id}">تحديث</button></td></tr>`).join("")}</tbody></table></div>` : '<div class="empty-state">لا توجد خطط مطابقة.</div>';
-    document.querySelectorAll("[data-remedial-student]").forEach((b) => b.onclick = () => openStudentProfile(Number(b.dataset.remedialStudent)));
-    document.querySelectorAll("[data-edit-plan]").forEach((b) => {
-      const plan = plans.find((p) => String(p.id) === b.dataset.editPlan);
-      b.onclick = () => openRemedialUpdateModal(plan);
-    });
-  };
-  document.getElementById("remedialStudentFilter").onchange = draw;
-  document.getElementById("remedialStatusFilter").onchange = draw;
-  document.getElementById("autoPlanButton").onclick = () => {
-    openModal(`<h3>توليد خطة علاجية تلقائية</h3><label class="field">الطالبة<select id="autoPlanStudent"><option value="">اختاري الطالبة</option>${students.map((s) => `<option value="${s.id}">${escapeHtml(s.name)} · ${escapeHtml(s.class_name || "")}</option>`).join("")}</select></label><label class="field">حد الإتقان الذي يحتاج علاجًا<input type="number" id="autoPlanThreshold" value="70" min="40" max="90"></label><div class="modal-actions"><button class="btn btn-outline" id="cancelAutoPlan">إلغاء</button><button class="btn btn-primary" id="saveAutoPlan">توليد الخطة</button></div>`);
-    document.getElementById("cancelAutoPlan").onclick = closeModal;
-    document.getElementById("saveAutoPlan").onclick = async () => {
-      const studentId = Number(document.getElementById("autoPlanStudent").value || 0);
-      if (!studentId) return toast("اختاري الطالبة.");
-      const result = await api("/enhancements/remedial/auto", { method: "POST", body: JSON.stringify({ studentId, threshold: Number(document.getElementById("autoPlanThreshold").value || 70) }) });
-      closeModal(); toast(`تم إنشاء ${result.created} خطة علاجية جديدة.`); renderRemedialPlans();
-    };
-  };
-  draw();
+  document.getElementById("autoPlanButton").onclick = () => openRemedialContentCreate(students);
+  document.getElementById("remedialFollowupButton").onclick = () => openRemedialFollowup(plans);
 }
 
 function openRemedialUpdateModal(plan) {
@@ -5166,26 +7438,26 @@ async function renderReports() {
   const update = () => { link.href = `/api/teacher/reports/class.pdf?classId=${select.value}`; }; select.onchange = update; update();
 }
 
-async function renderNotifications() {
+async function renderNotifications(target = contentEl) {
   const [data, resetData] = await Promise.all([api("/enhancements/alerts"), api("/enhancements/password-requests")]);
   const notifs = data.items || [];
   const resetRequests = resetData.items || [];
-  contentEl.innerHTML = `<section class="card"><div class="smart-section-head"><div><h3>مركز التنبيهات</h3><p style="margin:4px 0 0;color:var(--muted);font-size:.78rem">تنبيهات تلقائية عن الاختبارات والواجبات والطالبات وطلبات أولياء الأمور.</p></div><span class="badge badge-orange">${data.unread} غير مقروء</span></div>${notifs.length ? notifs.map((n) => `<article class="alert-card ${escapeHtml(n.severity || "info")}"><span style="font-size:1.35rem">${n.severity === "danger" ? "⚠️" : n.severity === "warning" ? "🔔" : "ℹ️"}</span><div><strong>${escapeHtml(n.title)}</strong><p>${escapeHtml(n.message || "")} · ${formatDate(n.created_at)}</p></div><div style="display:flex;gap:6px;flex-wrap:wrap">${n.route ? `<button class="btn btn-secondary btn-sm" data-alert-route="${escapeHtml(n.route)}">فتح</button>` : ""}${n.is_read ? "" : `<button class="btn btn-outline btn-sm" data-read="${n.id}">مقروء</button>`}<button class="btn btn-danger btn-sm" data-delnotif="${n.id}">حذف</button></div></article>`).join("") : '<div class="empty-state">لا توجد تنبيهات حاليًا.</div>'}</section><section class="card smart-section"><div class="smart-section-head"><div><h3>طلبات إعادة كلمة المرور</h3><p style="margin:4px 0 0;color:var(--muted);font-size:.78rem">طلبات طالباتك وأولياء أمورهن فقط.</p></div><span class="badge badge-orange">${resetRequests.length} طلب</span></div>${resetRequests.length?resetRequests.map(r=>`<article class="alert-card info"><span style="font-size:1.35rem">🔐</span><div><strong>${escapeHtml([r.first_name,r.last_name].filter(Boolean).join(" ")||r.identifier_hint||"طلب حساب")}</strong><p>${escapeHtml(r.requested_role)} · ${formatDate(r.created_at)}</p></div><div style="display:flex;gap:6px"><button class="btn btn-primary btn-sm" data-resolve-password-request="${r.id}">إعادة التعيين</button><button class="btn btn-outline btn-sm" data-reject-password-request="${r.id}">رفض</button></div></article>`).join(""):'<div class="empty-state">لا توجد طلبات معلقة.</div>'}</section>`;
-  document.querySelectorAll("[data-alert-route]").forEach((b) => b.onclick = () => { const route = b.dataset.alertRoute; if (route.startsWith("student:")) openStudentProfile(Number(route.split(":")[1])); else navigate(route); });
-  document.querySelectorAll("[data-read]").forEach((b) => b.onclick = async () => { await api(`/data/notifications/${b.dataset.read}/read`, { method: "PUT" }); renderNotifications(); refreshNotifBell(); });
-  document.querySelectorAll("[data-delnotif]").forEach((b) => b.onclick = async () => { await api(`/data/notifications/${b.dataset.delnotif}`, { method: "DELETE" }); renderNotifications(); refreshNotifBell(); });
-  document.querySelectorAll("[data-resolve-password-request]").forEach((b)=>b.onclick=()=>openTeacherPasswordRequest(Number(b.dataset.resolvePasswordRequest)));
-  document.querySelectorAll("[data-reject-password-request]").forEach((b)=>b.onclick=()=>confirmAction("رفض طلب إعادة تعيين كلمة المرور؟",async()=>{await api(`/enhancements/password-requests/${b.dataset.rejectPasswordRequest}`,{method:"PUT",body:JSON.stringify({status:"rejected",note:"رفض بواسطة المعلمة"})});toast("تم رفض الطلب");renderNotifications();}));
+  target.innerHTML = `<section class="card"><div class="smart-section-head"><div><h3>مركز التنبيهات</h3><p style="margin:4px 0 0;color:var(--muted);font-size:.78rem">تنبيهات تلقائية عن الاختبارات والواجبات والطالبات وطلبات أولياء الأمور.</p></div><span class="badge badge-orange">${data.unread} غير مقروء</span></div>${notifs.length ? notifs.map((n) => `<article class="alert-card ${escapeHtml(n.severity || "info")}"><span style="font-size:1.35rem">${n.severity === "danger" ? "⚠️" : n.severity === "warning" ? "🔔" : "ℹ️"}</span><div><strong>${escapeHtml(n.title)}</strong><p>${escapeHtml(n.message || "")} · ${formatDate(n.created_at)}</p></div><div style="display:flex;gap:6px;flex-wrap:wrap">${n.route ? `<button class="btn btn-secondary btn-sm" data-alert-route="${escapeHtml(n.route)}">فتح</button>` : ""}${n.is_read ? "" : `<button class="btn btn-outline btn-sm" data-read="${n.id}">مقروء</button>`}<button class="btn btn-danger btn-sm" data-delnotif="${n.id}">حذف</button></div></article>`).join("") : '<div class="empty-state">لا توجد تنبيهات حاليًا.</div>'}</section><section class="card smart-section"><div class="smart-section-head"><div><h3>طلبات إعادة كلمة المرور</h3><p style="margin:4px 0 0;color:var(--muted);font-size:.78rem">طلبات طالباتك وأولياء أمورهن فقط.</p></div><span class="badge badge-orange">${resetRequests.length} طلب</span></div>${resetRequests.length?resetRequests.map(r=>`<article class="alert-card info"><span style="font-size:1.35rem">🔐</span><div><strong>${escapeHtml([r.first_name,r.last_name].filter(Boolean).join(" ")||r.identifier_hint||"طلب حساب")}</strong><p>${escapeHtml(r.requested_role)} · ${formatDate(r.created_at)}</p></div><div style="display:flex;gap:6px"><button class="btn btn-primary btn-sm" data-resolve-password-request="${r.id}">إعادة التعيين</button><button class="btn btn-outline btn-sm" data-reject-password-request="${r.id}">رفض</button></div></article>`).join(""):'<div class="empty-state">لا توجد طلبات معلقة.</div>'}</section>`;
+  target.querySelectorAll("[data-alert-route]").forEach((b) => b.onclick = () => { const route = b.dataset.alertRoute; if (route.startsWith("student:")) openStudentProfile(Number(route.split(":")[1])); else navigate(route); });
+  target.querySelectorAll("[data-read]").forEach((b) => b.onclick = async () => { await api(`/data/notifications/${b.dataset.read}/read`, { method: "PUT" }); renderActivityPanel("notifications"); refreshNotifBell(); });
+  target.querySelectorAll("[data-delnotif]").forEach((b) => b.onclick = async () => { await api(`/data/notifications/${b.dataset.delnotif}`, { method: "DELETE" }); renderActivityPanel("notifications"); refreshNotifBell(); });
+  target.querySelectorAll("[data-resolve-password-request]").forEach((b)=>b.onclick=()=>openTeacherPasswordRequest(Number(b.dataset.resolvePasswordRequest)));
+  target.querySelectorAll("[data-reject-password-request]").forEach((b)=>b.onclick=()=>confirmAction("رفض طلب إعادة تعيين كلمة المرور؟",async()=>{await api(`/enhancements/password-requests/${b.dataset.rejectPasswordRequest}`,{method:"PUT",body:JSON.stringify({status:"rejected",note:"رفض بواسطة المعلمة"})});toast("تم رفض الطلب");renderActivityPanel("notifications");}));
 }
 
 
 function openTeacherPasswordRequest(id){
   openModal(`<h3>إعادة تعيين كلمة المرور</h3><p class="safe-note">لن تظهر كلمة المرور القديمة. ضعي كلمة مؤقتة وأخبري صاحبة الحساب بتغييرها بعد الدخول.</p><label class="field">كلمة المرور الجديدة<input id="teacherResetNewPassword" type="password" minlength="10" placeholder="10 أحرف على الأقل وحرف ورقم"></label><div class="modal-actions"><button class="btn btn-outline" id="cancelTeacherReset">إلغاء</button><button class="btn btn-primary" id="saveTeacherReset">حفظ</button></div>`);
   document.getElementById("cancelTeacherReset").onclick=closeModal;
-  document.getElementById("saveTeacherReset").onclick=async()=>{try{await api(`/enhancements/password-requests/${id}`,{method:"PUT",body:JSON.stringify({status:"resolved",newPassword:document.getElementById("teacherResetNewPassword").value})});toast("تمت إعادة تعيين كلمة المرور");closeModal();renderNotifications();}catch(error){toast(error.message)}};
+  document.getElementById("saveTeacherReset").onclick=async()=>{try{await api(`/enhancements/password-requests/${id}`,{method:"PUT",body:JSON.stringify({status:"resolved",newPassword:document.getElementById("teacherResetNewPassword").value})});toast("تمت إعادة تعيين كلمة المرور");closeModal();renderActivityPanel("notifications");}catch(error){toast(error.message)}};
 }
 
-async function renderHelpCenter() {
+async function renderHelpCenter(target = contentEl) {
   const help = [
     ["🚀","ابدئي من هنا","أضيفي الفصول ثم الطالبات، أنشئي اختبارًا تشخيصيًا، وبعد النتائج افتحي التقارير والخطط العلاجية."],
     ["🎓","إدارة الطالبات","من قائمة الطالبات يمكنكِ البحث والتصفية وفتح الملف الموحد وإدارة الحضور والواجبات والنتائج."],
@@ -5194,8 +7466,11 @@ async function renderHelpCenter() {
     ["👪","ولي الأمر","اعتمدي طلبات الحساب، اربطي البنات، انشري في مجمع مدار وأرسلي ملاحظات خاصة عند الحاجة."],
     ["🔐","الأمان والخصوصية","لا تشاركي كلمات المرور، استخدمي التعطيل بدل الحذف، واحتفظي بنسخ احتياطية منتظمة."],
   ];
-  contentEl.innerHTML = `<section class="card"><div class="smart-section-head"><div><h3>مركز مساعدة مدار</h3><p style="margin:4px 0 0;color:var(--muted);font-size:.78rem">إرشادات مختصرة داخل النظام دون التأثير على بياناتك.</p></div><button class="btn btn-primary btn-sm" id="startGuide">جولة تعريفية</button></div><div class="help-grid">${help.map(([icon,title,text]) => `<article class="help-card"><span style="font-size:2rem">${icon}</span><h3>${title}</h3><p>${text}</p></article>`).join("")}</div></section><section class="card smart-section"><h3 class="section-title">خطوات العمل المقترحة</h3><ol class="help-steps"><li>إعداد بيانات المدرسة والعام الدراسي.</li><li>إضافة الفصول والطالبات وربط أولياء الأمور.</li><li>نشر اختبار تشخيصي.</li><li>مراجعة تحليل المهارات.</li><li>إنشاء خطة علاجية ومورد مناسب.</li><li>إعادة القياس وإرسال التقرير لولي الأمر.</li></ol><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px"><a class="btn btn-outline" href="/privacy.html" target="_blank">سياسة الخصوصية</a><a class="btn btn-outline" href="/terms.html" target="_blank">شروط الاستخدام</a></div></section>`;
-  document.getElementById("startGuide").onclick = () => openModal(`<h3>جولة منصة مدار</h3><ol class="help-steps"><li><strong>البحث الشامل:</strong> استخدمي مربع البحث أعلى الصفحة أو ⌘ K.</li><li><strong>ملف الطالبة:</strong> اضغطي اسم الطالبة لمشاهدة كل بياناتها.</li><li><strong>التقارير الذكية:</strong> تعرض المتعثرات وأضعف المهارات تلقائيًا.</li><li><strong>التنبيهات:</strong> تابعي الاختبارات القريبة والواجبات المتأخرة.</li><li><strong>التقويم:</strong> انشري المواعيد للفصل وولي الأمر.</li></ol><div class="modal-actions"><button class="btn btn-primary" id="finishGuide">تم</button></div>`); document.getElementById("finishGuide").onclick = () => { localStorage.setItem("madar-guide-seen","1"); closeModal(); };
+  target.innerHTML = `<section class="card"><div class="smart-section-head"><div><h3>مركز مساعدة مدار</h3><p style="margin:4px 0 0;color:var(--muted);font-size:.78rem">إرشادات مختصرة داخل النظام دون التأثير على بياناتك.</p></div><button class="btn btn-primary btn-sm" id="startGuide">جولة تعريفية</button></div><div class="help-grid">${help.map(([icon,title,text]) => `<article class="help-card"><span style="font-size:2rem">${icon}</span><h3>${title}</h3><p>${text}</p></article>`).join("")}</div></section><section class="card smart-section"><h3 class="section-title">خطوات العمل المقترحة</h3><ol class="help-steps"><li>إعداد بيانات المدرسة والعام الدراسي.</li><li>إضافة الفصول والطالبات وربط أولياء الأمور.</li><li>نشر اختبار تشخيصي.</li><li>مراجعة تحليل المهارات.</li><li>إنشاء خطة علاجية ومورد مناسب.</li><li>إعادة القياس وإرسال التقرير لولي الأمر.</li></ol><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px"><a class="btn btn-outline" href="/privacy.html" target="_blank">سياسة الخصوصية</a><a class="btn btn-outline" href="/terms.html" target="_blank">شروط الاستخدام</a></div></section>`;
+  target.querySelector("#startGuide").onclick = () => {
+    openModal(`<h3>جولة منصة مدار</h3><ol class="help-steps"><li><strong>البحث الشامل:</strong> استخدمي مربع البحث أعلى الصفحة أو ⌘ K.</li><li><strong>ملف الطالبة:</strong> اضغطي اسم الطالبة لمشاهدة كل بياناتها.</li><li><strong>التقارير الذكية:</strong> تعرض المتعثرات وأضعف المهارات تلقائيًا.</li><li><strong>التنبيهات:</strong> تابعي الاختبارات القريبة والواجبات المتأخرة.</li><li><strong>التقويم:</strong> انشري المواعيد للفصل وولي الأمر.</li></ol><div class="modal-actions"><button class="btn btn-primary" id="finishGuide">تم</button></div>`);
+    document.getElementById("finishGuide").onclick = () => { localStorage.setItem("madar-guide-seen", "1"); closeModal(); };
+  };
 }
 
 async function openStudentProfile(id) {
@@ -5230,6 +7505,7 @@ const ROUTES = {
   home: renderHome,
   profile: renderProfile,
   portfolio: renderPortfolio,
+  "teacher-planning": renderTeacherPlanning,
   "student-panel": renderStudentPanel,
   "student-files": renderStudentFiles,
   "follow-up": renderFollowUp,
@@ -5247,6 +7523,7 @@ const ROUTES = {
   "analysis-learning": renderAnalysisLearning,
   "games-panel": renderGamesPanel,
   "interactive-games": () => openGamesPanel("interactive-games"),
+  "game-creator": () => openGamesPanel("game-creator"),
   competitions: () => openGamesPanel("competitions"),
   "strategies-panel": renderStrategiesPanel,
   "flipped-classroom": openStrategiesPanel,
@@ -5255,13 +7532,15 @@ const ROUTES = {
   training: () => openLibraryPanel("training"),
   "knowledge-exchange": () => renderKnowledgeExchange().catch((error) => { contentEl.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`; }),
   "parent-panel": () => renderParentPanel().catch((error) => { contentEl.innerHTML = `<div class="card form-error">${escapeHtml(error.message)}</div>`; }),
+  "my-group": () => { contentEl.innerHTML = '<section class="card"><h3>مجموعتي</h3><div class="empty-state">لا يوجد محتوى في مجموعتي بعد.</div></section>'; },
   "remedial-plans": renderRemedialPlans,
   calendar: renderCalendar,
   reports: renderReports,
-  "help-center": renderHelpCenter,
-  notifications: renderNotifications,
+  "help-center": () => renderActivityPanel("help-center"),
+  notifications: () => renderActivityPanel("notifications"),
+  announcements: () => renderActivityPanel("announcements"),
   classes: renderClasses,
-  activity: renderActivity,
+  activity: () => renderActivityPanel("activity"),
   settings: renderSettings,
 };
 

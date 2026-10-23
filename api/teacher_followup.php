@@ -376,14 +376,23 @@ function teacher_motivation_notify_student(int $studentId,int $points,string $re
 function teacher_motivation_routes(string $method,array $segments,int $teacherId): never
 {
     ensure_teacher_tools_schema();
+    $excludeGamePoints=interactive_game_builder_schema_ready()
+        ? ' AND NOT EXISTS (SELECT 1 FROM game_attempts game_attempt WHERE game_attempt.motivation_point_id=p.id)'
+        : '';
     if (!$segments && $method==='GET') {
         $students=fetch_all(
-            'SELECT s.id,s.name,s.email,s.stage,COALESCE(s.grade_label,c.grade_label) AS grade_label,c.id AS class_id,c.name AS class_name,COALESCE(SUM(p.points),0) AS points
+            "SELECT s.id,s.name,s.email,s.stage,COALESCE(s.grade_label,c.grade_label) AS grade_label,c.id AS class_id,c.name AS class_name,COALESCE(SUM(p.points),0) AS points
              FROM students s JOIN classes c ON c.id=s.class_id
-             LEFT JOIN motivational_points p ON p.student_id=s.id AND p.teacher_id=?
-             WHERE c.teacher_id=? GROUP BY s.id,s.name,s.email,s.stage,s.grade_label,c.grade_label,c.id,c.name ORDER BY s.name',
+             LEFT JOIN motivational_points p ON p.student_id=s.id AND p.teacher_id=? {$excludeGamePoints}
+             WHERE c.teacher_id=? AND s.deleted_at IS NULL GROUP BY s.id,s.name,s.email,s.stage,s.grade_label,c.grade_label,c.id,c.name ORDER BY s.name",
             [$teacherId,$teacherId]
         );
+        foreach ($students as &$student) {
+            $balance=student_madar_points_data((int)$student['id']);
+            $student['points']=$balance['total'];
+            $student['pointsSummary']=$balance['summary'];
+        }
+        unset($student);
         $history=fetch_all(
             "SELECT MAX(p.id) AS id,MAX(p.batch_id) AS batch_id,MAX(p.points) AS points,
                     MAX(p.reason_type) AS reason_type,MAX(p.reason) AS reason,MAX(p.details) AS details,
@@ -392,7 +401,7 @@ function teacher_motivation_routes(string $method,array $segments,int $teacherId
              FROM motivational_points p
              JOIN students s ON s.id=p.student_id
              LEFT JOIN classes c ON c.id=s.class_id
-             WHERE p.teacher_id=?
+             WHERE p.teacher_id=? {$excludeGamePoints}
              GROUP BY IF(p.batch_id IS NULL,CONCAT('single:',p.id),CONCAT('batch:',p.batch_id))
              ORDER BY MAX(p.created_at) DESC,MAX(p.id) DESC LIMIT 30",
             [$teacherId]
@@ -416,7 +425,7 @@ function teacher_motivation_routes(string $method,array $segments,int $teacherId
         if (count($studentIds)>500) Http::json(['error'=>'لا يمكن إضافة النقاط لأكثر من 500 طالبة في عملية واحدة.'],422);
         $placeholders=implode(',',array_fill(0,count($studentIds),'?'));
         $owned=fetch_all(
-            "SELECT s.id FROM students s JOIN classes c ON c.id=s.class_id WHERE c.id=? AND c.teacher_id=? AND s.id IN ({$placeholders})",
+            "SELECT s.id FROM students s JOIN classes c ON c.id=s.class_id WHERE c.id=? AND c.teacher_id=? AND s.deleted_at IS NULL AND s.id IN ({$placeholders})",
             [$classId,$teacherId,...$studentIds]
         );
         if (count($owned)!==count($studentIds)) Http::json(['error'=>'توجد طالبة لا تنتمي إلى الفصل المختار. أعيدي اختيار الفصل.'],422);
@@ -453,8 +462,9 @@ function teacher_motivation_routes(string $method,array $segments,int $teacherId
         $activityReason=$details!==''?$details:$reason;
         teacher_motivation_notify_student($studentId,$points,$activityReason,$term);
         Activity::log('teacher',$teacherId,'إضافة نقاط مدار',"الطالبة رقم {$studentId}: {$points} — {$activityReason}");
-        $total=(int)(fetch_one('SELECT COALESCE(SUM(points),0) AS total FROM motivational_points WHERE teacher_id=? AND student_id=?',[$teacherId,$studentId])['total']??0);
-        Http::json(['ok'=>true,'total'=>$total,'term'=>$term],201);
+        $balance=student_madar_points_data($studentId);
+        $total=$balance['total'];
+        Http::json(['ok'=>true,'total'=>$total,'pointsSummary'=>$balance['summary'],'term'=>$term],201);
     }
     Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
 }

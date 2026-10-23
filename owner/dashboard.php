@@ -6,5 +6,10 @@ if (!$user || ($user['roleCode'] ?? '') !== Rbac::OWNER || ($user['role'] ?? '')
     header('Location: /owner/login.html');
     exit;
 }
-readfile(__DIR__ . '/protected/dashboard.html');
-
+if (!empty($_SESSION['ms_return_after_login'])) {
+    $next=(string)$_SESSION['ms_return_after_login'];unset($_SESSION['ms_return_after_login']);
+    if (str_starts_with($next,'/surveys/public/')&&!str_contains($next,"\r")&&!str_contains($next,"\n")) {header('Location: '.$next);exit;}
+}
+$html=file_get_contents(__DIR__.'/protected/dashboard.html');
+$html=str_replace('/owner/dashboard.js?v=9','/owner/dashboard.js?v=10-survey-scope',$html);
+echo str_replace('</body>','<script src="/surveys/public/assets/madar-link.js"></script></body>',$html);

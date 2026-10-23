@@ -176,27 +176,67 @@ function reset_question_bank_repository_once(int $teacherId): void
     });
 }
 
+function diagnostic_bank_skill_ids(array $test): array
+{
+    $skillIds=json_decode((string)($test['bank_skill_ids_json']??''),true);
+    if (!is_array($skillIds)) return [];
+    return array_values(array_unique(array_filter(array_map('intval',$skillIds),static fn(int $id): bool=>$id>0)));
+}
+
+function diagnostic_bank_term_aliases(string $value): array
+{
+    $normalized=diagnostic_normalize_text($value);
+    if (str_contains($normalized,'الاول')||str_contains($normalized,'first')) {
+        return ['الترم الأول','الترم الاول','الفصل الدراسي الأول','الفصل الدراسي الاول','الأول','الاول','first'];
+    }
+    if (str_contains($normalized,'الثاني')||str_contains($normalized,'second')) {
+        return ['الترم الثاني','الفصل الدراسي الثاني','الثاني','second'];
+    }
+    $value=trim($value);
+    return $value!==''?[$value]:[];
+}
+
 function diagnostic_bank_filter(array $test, string $alias = 'q'): array
 {
-    $where = ["{$alias}.teacher_id=?", "{$alias}.review_status='approved'", "{$alias}.is_active=1", "{$alias}.lesson_code IS NOT NULL", "{$alias}.lesson_code<>''"];
+    $skillIds=diagnostic_bank_skill_ids($test);
+    $where = ["{$alias}.teacher_id=?", "{$alias}.review_status='approved'", "{$alias}.is_active=1"];
     $params = [(int)$test['teacher_id']];
-    foreach ([
-        'bank_import_batch' => 'import_batch',
-        'bank_stage' => 'stage',
-        'bank_grade_label' => 'grade_label',
-        'bank_term_label' => 'term_label',
-    ] as $testField => $bankField) {
+    if (!$skillIds) {
+        // Legacy lesson-based tests still need a lesson code to build their groups.
+        $where[]="{$alias}.lesson_code IS NOT NULL";
+        $where[]="{$alias}.lesson_code<>''";
+    }
+    foreach (['bank_import_batch'=>'import_batch'] as $testField=>$bankField) {
         if (!empty($test[$testField])) {
             $where[] = "{$alias}.{$bankField}=?";
             $params[] = $test[$testField];
         }
     }
-    $skillIds=json_decode((string)($test['bank_skill_ids_json']??''),true);
-    if (is_array($skillIds)) {
-        $skillIds=array_values(array_unique(array_filter(array_map('intval',$skillIds),static fn(int $id): bool=>$id>0)));
-        if ($skillIds) {
-            $where[]=$alias.'.skill_id IN ('.implode(',',array_fill(0,count($skillIds),'?')).')';
-            array_push($params,...$skillIds);
+    if ($skillIds) {
+        // The skill ID is the canonical link. Stage/grade text and lesson codes may differ
+        // between imported files, so they must not exclude a correctly linked question.
+        if (!empty($test['bank_term_label'])) {
+            $termAliases=diagnostic_bank_term_aliases((string)$test['bank_term_label']);
+            if ($termAliases) {
+                $where[]=$alias.'.term_label IN ('.implode(',',array_fill(0,count($termAliases),'?')).')';
+                array_push($params,...$termAliases);
+            }
+        }
+        $where[]=$alias.'.skill_id IN ('.implode(',',array_fill(0,count($skillIds),'?')).')';
+        array_push($params,...$skillIds);
+    } else {
+        foreach (['bank_stage'=>'stage','bank_grade_label'=>'grade_label'] as $testField=>$bankField) {
+            if (!empty($test[$testField])) {
+                $where[]="{$alias}.{$bankField}=?";
+                $params[]=$test[$testField];
+            }
+        }
+        if (!empty($test['bank_term_label'])) {
+            $termAliases=diagnostic_bank_term_aliases((string)$test['bank_term_label']);
+            if ($termAliases) {
+                $where[]=$alias.'.term_label IN ('.implode(',',array_fill(0,count($termAliases),'?')).')';
+                array_push($params,...$termAliases);
+            }
         }
     }
     return [implode(' AND ', $where), $params];

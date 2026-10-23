@@ -113,6 +113,8 @@ async function renderHome() {
 async function renderTeachers() {
   content.innerHTML = `<div class="empty-state">جارٍ التحميل...</div>`;
   const teachers = await api("/teachers");
+  const scopeData=await surveyScopeApi("teacher_scopes");
+  const teacherScopes=new Map(scopeData.items.map(item=>[Number(item.id),item.access_scope]));
   content.innerHTML = `
     <div class="toolbar">
       <div class="spacer"></div>
@@ -133,6 +135,7 @@ async function renderTeachers() {
               <td style="display:flex; gap:6px; flex-wrap:wrap">
                 <button class="btn btn-outline btn-sm" data-reset="${t.id}">إعادة تعيين كلمة المرور</button>
                 <button class="btn ${t.status === "pending" ? "btn-primary" : "btn-secondary"} btn-sm" data-toggle="${t.id}" data-status="${esc(t.status)}">${t.status === "pending" ? "موافقة وتفعيل" : t.status === "disabled" ? "تفعيل" : "تعطيل"}</button>
+                <button class="btn btn-outline btn-sm" data-teacher-scope="${t.id}" data-scope="${teacherScopes.get(Number(t.id))==='surveys_only'?'surveys_only':'full'}">${teacherScopes.get(Number(t.id))==='surveys_only'?'🔒 استبيانات فقط — تغيير':'🌐 وصول كامل — تقييد'}</button>
                 <button class="btn btn-danger btn-sm" data-delete="${t.id}">حذف</button>
               </td>
             </tr>`
@@ -188,6 +191,13 @@ async function renderTeachers() {
     })
   );
 
+  content.querySelectorAll('[data-teacher-scope]').forEach(button=>button.onclick=()=>{
+    const limited=button.dataset.scope!=='surveys_only';
+    confirmAction(limited?'تقييد هذه المعلمة بالاستبيانات فقط؟ سيُمنع وصولها إلى لوحة المعلمة وبقية واجهات بيانات الموقع، دون تعطيل حسابها أو تغيير بياناتها.':'السماح لهذه المعلمة بالوصول إلى وظائف المعلمة المعتادة وفق صلاحياتها؟',async()=>{
+      await surveyScopeApi('set_teacher_scope',{teacher_id:Number(button.dataset.teacherScope),access_scope:limited?'surveys_only':'full'});
+      toast(limited?'تم تقييد الحساب بالاستبيانات فقط':'تمت إعادة الوصول المعتاد');await renderTeachers();
+    });
+  });
   content.querySelectorAll("[data-delete]").forEach((btn) =>
     btn.addEventListener("click", () =>
       confirmAction("سيتم تعطيل حساب المعلمة وحذفه مؤقتًا، مع إمكانية استعادته من إدارة جميع المستخدمين.", async () => {
@@ -414,6 +424,14 @@ const RESET_COUNT_LABELS = {
   studentAnalyses: "تحليلات الطالبات",
   questionAnalyses: "تحليلات الأسئلة",
   skillAnalyses: "تحليلات المهارات",
+  paperAssessments: "الاختبارات الورقية",
+  paperQuestions: "أسئلة الاختبارات الورقية",
+  paperSubmissions: "تسليمات ونتائج الاختبارات الورقية",
+  paperAnswers: "درجات إجابات الاختبارات الورقية",
+  paperFiles: "ملفات الاختبارات الورقية",
+  gameAttempts: "محاولات الألعاب",
+  gameAttemptAnswers: "إجابات محاولات الألعاب",
+  gameAttemptSkills: "تحليلات مهارات الألعاب",
   followUpRecords: "سجلات الدرجات والمتابعة",
   weeklyAcademicRecords: "السجلات الدراسية الأسبوعية",
   documents: "المستندات والموارد",
@@ -432,12 +450,21 @@ function resetCountsHtml(counts = {}) {
   return Object.entries(RESET_COUNT_LABELS).map(([key, label]) => `<div class="reset-count-item"><span>${esc(label)}</span><strong>${Number(counts[key] || 0).toLocaleString("ar-SA")}</strong></div>`).join("");
 }
 
+function normalizeResetConfirmation(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function openAcademicResetConfirmation(preview) {
   const deleteItems = [
-    { key: "tests", label: "الاختبارات ونماذجها وتوزيعات أسئلتها" },
+    { key: "tests", label: "الاختبارات الإلكترونية والورقية ونتائجها" },
     { key: "followUp", label: "سجلات المتابعة الدراسية التابعة للعام السابق" },
     { key: "weekly", label: "السجلات الأسبوعية والواجبات والمتابعة" },
     { key: "documents", label: "المستندات وملفات الطالبات المرتبطة بالعام السابق فقط" },
+    { key: "games", label: "محاولات الألعاب ونتائجها وتحليلاتها" },
     { key: "learningStyle", label: "نشر ونتائج استبانات أنماط التعلم التابعة للعام السابق" },
     { key: "motivation", label: "نقاط التحفيز" },
     { key: "notifications", label: "الإشعارات" },
@@ -455,16 +482,23 @@ function openAcademicResetConfirmation(preview) {
       <div class="reset-count-grid modal-count-grid">${resetCountsHtml(preview.counts)}</div>
       <label class="field confirmation-field">للتأكيد اكتبي العبارة التالية يدويًا: <b>بدء عام جديد</b><input id="resetConfirmationPhrase" autocomplete="off" placeholder="بدء عام جديد"></label>
       <div id="resetExecutionStatus"></div>
-      <div class="modal-actions"><button class="btn btn-outline" id="cancelYearReset">إلغاء</button><button class="btn btn-danger destructive-confirm" id="confirmYearReset" disabled>حذف بيانات العام السابق وبدء العام الجديد</button></div>
+      <div class="modal-actions"><button type="button" class="btn btn-outline" id="cancelYearReset">إلغاء</button><button type="button" class="btn btn-danger destructive-confirm" id="confirmYearReset">حذف بيانات العام السابق وبدء العام الجديد</button></div>
     </div>
   `, "wide-reset-modal");
   const phrase = modalRoot.querySelector("#resetConfirmationPhrase");
   const confirm = modalRoot.querySelector("#confirmYearReset");
   const cancel = modalRoot.querySelector("#cancelYearReset");
-  phrase.addEventListener("input", () => { confirm.disabled = phrase.value.trim() !== "بدء عام جديد"; });
+  const confirmationMatches = () => normalizeResetConfirmation(phrase.value) === "بدء عام جديد";
+  phrase.addEventListener("input", () => {
+    if (confirmationMatches()) modalRoot.querySelector("#resetExecutionStatus").innerHTML = "";
+  });
   cancel.onclick = closeModal;
   confirm.onclick = async () => {
-    if (confirm.disabled) return;
+    if (!confirmationMatches()) {
+      modalRoot.querySelector("#resetExecutionStatus").innerHTML = '<div class="reset-error-message">اكتبي عبارة «بدء عام جديد» في الحقل أولًا، ثم اضغطي زر الحذف.</div>';
+      phrase.focus();
+      return;
+    }
     const selectedItems = [...modalRoot.querySelectorAll("[data-reset-delete-item]")]
       .filter((checkbox) => checkbox.checked)
       .map((checkbox) => checkbox.dataset.resetDeleteItem);
@@ -474,7 +508,7 @@ function openAcademicResetConfirmation(preview) {
     confirm.innerHTML = '<span class="button-spinner"></span> جارٍ تنفيذ الحذف الآمن...';
     modalRoot.querySelector("#resetExecutionStatus").innerHTML = '<div class="reset-loading-message">تُحذف البيانات داخل معاملة آمنة. لا تغلقي الصفحة ولا تعيدي الضغط.</div>';
     try {
-      const result = await api("/academic-year/reset", { method: "POST", body: JSON.stringify({ targetAcademicYear: preview.targetAcademicYear, confirmationPhrase: phrase.value.trim(), previewHash: preview.previewHash, selectedItems }) });
+      const result = await api("/academic-year/reset", { method: "POST", body: JSON.stringify({ targetAcademicYear: preview.targetAcademicYear, confirmationPhrase: "بدء عام جديد", previewHash: preview.previewHash, selectedItems }) });
       modalRoot.querySelector("#resetExecutionStatus").innerHTML = `<div class="reset-success-message">${esc(result.message)}</div>`;
       confirm.textContent = "تمت العملية بنجاح";
       toast("تم تنفيذ بدء العام الجديد وفق الاختيارات المحددة.");
@@ -484,7 +518,7 @@ function openAcademicResetConfirmation(preview) {
       confirm.textContent = "إعادة المحاولة";
       phrase.disabled = false;
       cancel.disabled = false;
-      confirm.disabled = phrase.value.trim() !== "بدء عام جديد";
+      confirm.disabled = false;
     }
   };
 }
@@ -580,6 +614,7 @@ async function renderSettings() {
   const previewButton = content.querySelector("#refreshResetPreview");
   const resetButton = content.querySelector("#startNewAcademicYear");
   const backupLink = content.querySelector("#downloadFullBackup");
+  let currentPreview = null;
   const loadPreview = async () => {
     const year = archiveSelect.value; if (!year) return;
     previewButton.disabled = true; resetButton.disabled = true; content.querySelector("#resetPreviewMessage").innerHTML = '<div class="reset-loading-message">جارٍ فحص العلاقات وحساب البيانات المرتبطة بالعام السابق...</div>';
@@ -1084,3 +1119,5 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
     // api() already redirects to login on 401/403
   }
 })();
+
+async function surveyScopeApi(op,data=null){const sessionResponse=await fetch('/surveys/public/api.php?op=session',{credentials:'same-origin',cache:'no-store'});const session=await sessionResponse.json();if(!sessionResponse.ok)throw new Error(session.error||'تعذر التحقق من الجلسة');const response=await fetch('/surveys/public/api.php?op='+encodeURIComponent(op),{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json','X-CSRF-Token':session.csrf}:{},...(data?{body:JSON.stringify(data)}:{})});const result=await response.json();if(!response.ok)throw new Error(result.error||'تعذر حفظ نطاق الحساب');return result;}

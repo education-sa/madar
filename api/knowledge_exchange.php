@@ -7,6 +7,8 @@ function knowledge_categories(): array
         'worksheet'=>'أوراق عمل',
         'summary'=>'ملخصات',
         'video'=>'فيديوهات',
+        'nafes'=>'نافس',
+        'tahsili_abilities'=>'التحصيلي والقدرات',
     ];
 }
 
@@ -32,7 +34,7 @@ function ensure_knowledge_exchange_schema(): void
         "CREATE TABLE IF NOT EXISTS knowledge_resources (
           id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
           teacher_id BIGINT UNSIGNED NOT NULL,
-          category ENUM('worksheet','summary','video') NOT NULL,
+          category ENUM('worksheet','summary','video','nafes','tahsili_abilities') NOT NULL,
           title VARCHAR(190) NOT NULL,
           description VARCHAR(1000) NULL,
           resource_type ENUM('file','link') NOT NULL,
@@ -47,6 +49,11 @@ function ensure_knowledge_exchange_schema(): void
           INDEX idx_knowledge_teacher_category_date (teacher_id,category,created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+    $categoryColumn=fetch_one("SHOW COLUMNS FROM knowledge_resources WHERE Field='category'");
+    $categoryType=strtolower((string)($categoryColumn['Type']??''));
+    if (!str_contains($categoryType,"'nafes'") || !str_contains($categoryType,"'tahsili_abilities'")) {
+        execute_sql("ALTER TABLE knowledge_resources MODIFY COLUMN category ENUM('worksheet','summary','video','nafes','tahsili_abilities') NOT NULL");
+    }
     $ready=true;
 }
 
@@ -106,15 +113,23 @@ function student_knowledge_exchange_routes(string $method,array $segments,int $s
 {
     ensure_knowledge_exchange_schema();
     if (!$segments && $method==='GET') {
+        $studentContext=fetch_one('SELECT c.stage FROM students s JOIN classes c ON c.id=s.class_id WHERE s.id=? AND s.deleted_at IS NULL LIMIT 1',[$studentId]);
+        $visibleCategories=knowledge_categories();
+        if (in_array((string)($studentContext['stage']??''),['ابتدائي','متوسط'],true)) unset($visibleCategories['tahsili_abilities']);
+        else unset($visibleCategories['nafes']);
         $rows=fetch_all(
-            'SELECT r.id,r.category,r.title,r.description,r.resource_type,r.original_name,r.mime_type,r.size_bytes,r.resource_url,r.created_at
+            "SELECT r.id,r.category,r.title,r.description,r.resource_type,r.original_name,r.mime_type,r.size_bytes,r.resource_url,r.created_at
              FROM knowledge_resources r
              JOIN classes c ON c.teacher_id=r.teacher_id
              JOIN students s ON s.class_id=c.id
-             WHERE s.id=? ORDER BY r.created_at DESC,r.id DESC',
+             WHERE s.id=?
+               AND (r.category NOT IN ('nafes','tahsili_abilities')
+                    OR (r.category='nafes' AND c.stage IN ('ابتدائي','متوسط'))
+                    OR (r.category='tahsili_abilities' AND c.stage='ثانوي'))
+             ORDER BY r.created_at DESC,r.id DESC",
             [$studentId]
         );
-        Http::json(['categories'=>knowledge_categories(),'resources'=>array_map('knowledge_json_row',$rows)]);
+        Http::json(['categories'=>$visibleCategories,'resources'=>array_map('knowledge_json_row',$rows)]);
     }
     if (isset($segments[0]) && ($segments[1]??'')==='file' && $method==='GET') {
         $resourceId=route_id($segments,0);
@@ -123,7 +138,10 @@ function student_knowledge_exchange_routes(string $method,array $segments,int $s
              FROM knowledge_resources r
              JOIN classes c ON c.teacher_id=r.teacher_id
              JOIN students s ON s.class_id=c.id
-             WHERE r.id=? AND s.id=? AND r.resource_type='file'",
+             WHERE r.id=? AND s.id=? AND r.resource_type='file'
+               AND (r.category NOT IN ('nafes','tahsili_abilities')
+                    OR (r.category='nafes' AND c.stage IN ('ابتدائي','متوسط'))
+                    OR (r.category='tahsili_abilities' AND c.stage='ثانوي'))",
             [$resourceId,$studentId]
         );
         if (!$row) Http::json(['error'=>'المورد غير موجود ضمن موادكِ.'],404);
@@ -144,8 +162,9 @@ function teacher_knowledge_exchange_create(int $teacherId): never
     if ($title==='' || mb_strlen($title)>190) Http::json(['error'=>'اكتبي عنوانًا لا يتجاوز 190 حرفًا.'],422);
     if (mb_strlen($description)>1000) Http::json(['error'=>'الوصف طويل جدًا.'],422);
 
-    if ($category==='video') {
-        $url=trim((string)($_POST['url']??''));
+    $url=trim((string)($_POST['url']??''));
+    $specialCategory=in_array($category,['nafes','tahsili_abilities'],true);
+    if ($category==='video' || ($specialCategory && $url!=='')) {
         $parts=parse_url($url);
         if (!filter_var($url,FILTER_VALIDATE_URL) || !in_array(strtolower((string)($parts['scheme']??'')),['http','https'],true)) {
             Http::json(['error'=>'أضيفي رابط فيديو صحيحًا يبدأ بـ http أو https.'],422);

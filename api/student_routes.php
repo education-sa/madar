@@ -1,7 +1,10 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__.'/remedial_content.php';
+
 
 require_once __DIR__ . '/paper_assessments.php';
+require_once __DIR__ . '/flipped_classroom.php';
 
 function handle_student_routes(string $method,array $segments): never
 {
@@ -18,12 +21,12 @@ function handle_student_routes(string $method,array $segments): never
     $studentPermission=match($resource) {
         'dashboard' => 'dashboard.view',
         'tests', 'paper-assessments' => 'student.tests.use',
-        'games' => 'student.games.use',
+        'games', 'competitions' => 'student.games.use',
         'learning-style', 'password' => 'student.profile.use',
         'results' => 'student.results.view',
         'points' => 'student.points.view',
-        'portfolio', 'knowledge-exchange' => 'student.files.use',
-        'privacy','enhancements' => 'dashboard.view',
+        'portfolio', 'knowledge-exchange', 'planning-content', 'flipped-classroom' => 'student.files.use',
+        'privacy','enhancements','announcements' => 'dashboard.view',
         default => 'dashboard.view',
     };
     Auth::requirePermission($studentPermission,false);
@@ -32,14 +35,18 @@ function handle_student_routes(string $method,array $segments): never
     if ($resource==='tests') student_tests_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='paper-assessments') student_paper_assessment_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='games') student_games_routes($method,array_slice($segments,1),$studentId);
+    if ($resource==='competitions') student_live_competition_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='learning-style') student_learning_style_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='password'&&$method==='PUT') student_change_password($studentId);
     if ($resource==='results'&&$method==='GET') student_results($studentId);
     if ($resource==='points'&&$method==='GET') student_madar_points($studentId);
     if ($resource==='portfolio') student_portfolio_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='privacy') platform_privacy_routes('student',$studentId,$method);
+    if ($resource==='announcements') student_announcements_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='enhancements') student_enhancement_routes($method,array_slice($segments,1),$studentId);
     if ($resource==='knowledge-exchange') student_knowledge_exchange_routes($method,array_slice($segments,1),$studentId);
+    if ($resource==='planning-content') planning_content_student_routes($method,array_slice($segments,1),$studentId);
+    if ($resource==='flipped-classroom') student_flipped_routes($method,array_slice($segments,1),$studentId);
     Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
 }
 
@@ -90,10 +97,31 @@ function student_games_routes(string $method,array $segments,int $studentId): ne
     }
     if ($action!=='attempts') Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
     if ($method==='GET') {
+        $snapshotYear = "NULLIF(NULLIF(TRIM(CASE WHEN JSON_VALID(a.game_snapshot_json) THEN JSON_UNQUOTE(JSON_EXTRACT(a.game_snapshot_json,'$.context.academicYear')) END),''),'null')";
+        $snapshotSettingsYear = "NULLIF(NULLIF(TRIM(CASE WHEN JSON_VALID(a.game_snapshot_json) THEN JSON_UNQUOTE(JSON_EXTRACT(a.game_snapshot_json,'$.settings.academic_year')) END),''),'null')";
+        // الألعاب المنشورة مرتبطة بعام الفصل؛ لذلك يجب أن يتبع سجل المحاولات
+        // العام نفسه الذي استُخدم لإظهار اللعبة للطالبة.
+        $currentYear = "COALESCE(NULLIF(TRIM(c.academic_year),''),NULLIF(TRIM(settings.academic_year),''))";
         $sql=interactive_game_builder_schema_ready()
-            ? "SELECT id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds,played_at FROM game_attempts WHERE student_id=? AND (run_status='completed' OR run_status IS NULL) ORDER BY played_at DESC LIMIT 30"
-            : 'SELECT id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds,played_at FROM game_attempts WHERE student_id=? ORDER BY played_at DESC LIMIT 30';
-        Http::json(fetch_all($sql,[$studentId]));
+            ? "SELECT a.id,a.game_key,a.game_id,a.game_version_id,a.difficulty,a.score,a.max_score,a.question_count,a.correct_count,a.best_streak,a.accuracy,a.duration_seconds,a.run_status,a.started_at,a.played_at,a.game_snapshot_json,g.name AS game_name,g.lesson_name
+               FROM game_attempts a
+               JOIN students s ON s.id=a.student_id
+               JOIN classes c ON c.id=s.class_id
+               LEFT JOIN teacher_school_settings settings ON settings.teacher_id=c.teacher_id
+               LEFT JOIN interactive_game_publications publication ON publication.id=a.publication_id
+               LEFT JOIN teacher_interactive_games g ON g.id=a.game_id
+               WHERE a.student_id=?
+                 AND COALESCE(NULLIF(TRIM(publication.academic_year),''),{$snapshotYear},{$snapshotSettingsYear},NULLIF(TRIM(c.academic_year),''))={$currentYear}
+               ORDER BY COALESCE(a.started_at,a.played_at),a.id"
+            : "SELECT a.id,a.game_key,NULL AS game_id,NULL AS game_version_id,a.difficulty,a.score,NULL AS max_score,a.question_count,a.correct_count,a.best_streak,a.accuracy,a.duration_seconds,NULL AS run_status,NULL AS started_at,a.played_at,a.game_snapshot_json,NULL AS game_name,NULL AS lesson_name
+               FROM game_attempts a
+               JOIN students s ON s.id=a.student_id
+               JOIN classes c ON c.id=s.class_id
+               LEFT JOIN teacher_school_settings settings ON settings.teacher_id=c.teacher_id
+               WHERE a.student_id=?
+                 AND COALESCE({$snapshotYear},{$snapshotSettingsYear},NULLIF(TRIM(c.academic_year),''))={$currentYear}
+               ORDER BY a.played_at,a.id";
+        Http::json(student_game_attempt_history($studentId,fetch_all($sql,[$studentId])));
     }
     if ($method!=='POST') Http::json(['error'=>'الطريقة غير مسموحة.'],405);
 
@@ -132,6 +160,66 @@ function student_games_routes(string $method,array $segments,int $studentId): ne
         'certificateSaved'=>(bool)($certificate['saved']??false),
         'message'=>$certificateMessage,
     ],201);
+}
+
+function student_game_attempt_history(int $studentId,array $rows): array
+{
+    $certificateRows=fetch_all(
+        'SELECT id,certificate_key,certificate_data_json FROM student_portfolio_files
+         WHERE student_id=? AND certificate_key IS NOT NULL ORDER BY created_at DESC,id DESC',
+        [$studentId]
+    );
+    $certificatesByAttemptId=[];
+    foreach ($certificateRows as $certificateRow) {
+        $payload=json_decode((string)($certificateRow['certificate_data_json']??''),true);
+        if (!is_array($payload)) continue;
+        $certificateAttemptId=(int)($payload['attemptId']??0);
+        if ($certificateAttemptId<1) continue;
+        $certificateItem=[
+            'id'=>(int)$certificateRow['id'],
+            'attemptId'=>$certificateAttemptId,
+        ];
+        if (!isset($certificatesByAttemptId[$certificateAttemptId])) $certificatesByAttemptId[$certificateAttemptId]=$certificateItem;
+    }
+
+    $numbers=[];$attempts=[];
+    foreach ($rows as $row) {
+        $snapshot=portfolio_game_snapshot($row);
+        $game=(array)($snapshot['game']??[]);
+        $identity=(int)($row['game_id']??0)>0?'game:'.(int)$row['game_id']:'key:'.(string)$row['game_key'];
+        $numbers[$identity]=($numbers[$identity]??0)+1;
+        $status=(string)($row['run_status']??'');
+        $completed=$status==='' || $status==='completed';
+        $sent=$certificatesByAttemptId[(int)$row['id']]??null;
+        $configured=(int)($game['unit_number']??$game['unitNumber']??0)>0
+            && (int)($game['lesson_number']??$game['lessonNumber']??0)>0
+            && trim((string)($game['lesson_name']??$game['lessonName']??''))!=='';
+        $certificateEnabled=$configured && (bool)($game['certificate_portfolio_enabled']??$game['certificatePortfolioEnabled']??false);
+        $attempts[]=[
+            'id'=>(int)$row['id'],
+            'game_id'=>(int)($row['game_id']??0)?:null,
+            'game_key'=>(string)$row['game_key'],
+            'game_name'=>portfolio_game_attempt_name($row,$snapshot),
+            'attempt_number'=>$numbers[$identity],
+            'difficulty'=>(string)$row['difficulty'],
+            'score'=>(float)$row['score'],
+            'max_score'=>$row['max_score']===null?null:(float)$row['max_score'],
+            'question_count'=>(int)$row['question_count'],
+            'correct_count'=>(int)$row['correct_count'],
+            'best_streak'=>(int)$row['best_streak'],
+            'accuracy'=>(float)$row['accuracy'],
+            'duration_seconds'=>(int)$row['duration_seconds'],
+            'status'=>$completed?'completed':'started',
+            'run_status'=>$status!==''?$status:($completed?'completed':'in_progress'),
+            'started_at'=>portfolio_game_attempt_started_at($row),
+            'played_at'=>$completed?(string)$row['played_at']:null,
+            'certificate_enabled'=>$certificateEnabled,
+            'certificate_sent'=>$sent!==null,
+            'certificate_id'=>$sent['id']??null,
+            'certificate_attempt_id'=>$sent['attemptId']??null,
+        ];
+    }
+    return array_reverse($attempts);
 }
 
 function student_game_config(int $studentId,string $gameKey): array
@@ -212,6 +300,7 @@ function student_game_certificate_key_prefix(string $gameKey,array $game): strin
 
 function student_game_certificate_key(string $gameKey,array $game,int $attemptId): string
 {
+    // شهادة مستقلة لكل محاولة، مع منع إرسال المحاولة نفسها أكثر من مرة.
     return student_game_certificate_key_prefix($gameKey,$game).':a'.$attemptId;
 }
 
@@ -267,11 +356,14 @@ function student_game_save_certificate_route(int $studentId): never
     if ($attemptId===false || $attemptId===null || $attemptId<1) {
         Http::json(['error'=>'محاولة اللعبة غير صالحة.'],422);
     }
-    $attempt=fetch_one(
-        'SELECT id,game_key,difficulty,score,question_count,correct_count,accuracy,duration_seconds,game_snapshot_json FROM game_attempts WHERE id=? AND student_id=? LIMIT 1',
-        [(int)$attemptId,$studentId]
-    );
+    $attemptSql=interactive_game_builder_schema_ready()
+        ? 'SELECT id,game_key,difficulty,score,question_count,correct_count,accuracy,duration_seconds,game_snapshot_json,run_status FROM game_attempts WHERE id=? AND student_id=? LIMIT 1'
+        : 'SELECT id,game_key,difficulty,score,question_count,correct_count,accuracy,duration_seconds,game_snapshot_json,NULL AS run_status FROM game_attempts WHERE id=? AND student_id=? LIMIT 1';
+    $attempt=fetch_one($attemptSql,[(int)$attemptId,$studentId]);
     if (!$attempt) Http::json(['error'=>'محاولة اللعبة غير موجودة ضمن حسابكِ.'],404);
+    if (($attempt['run_status']??null)!==null && (string)$attempt['run_status']!=='completed') {
+        Http::json(['error'=>'أكملي محاولة اللعبة قبل إرسال الشهادة.'],422);
+    }
 
     $gameKey=interactive_game_key($attempt['game_key']);
     [$currentStudent,$currentSettings,$currentGame]=student_game_context($studentId,$gameKey);
@@ -311,14 +403,13 @@ function student_game_store_certificate(int $studentId,array $settings,array $ga
 {
     ensure_student_portfolio_schema();
     $certificateKey=(string)$payload['certificateKey'];
-    $certificatePrefix=student_game_certificate_key_prefix((string)$payload['gameKey'],$game);
+    $attemptId=(int)($payload['attemptId']??0);
     $academicYear=trim((string)($settings['academic_year']??''));
     $createdPath='';
     $alreadySaved=false;
-    $portfolioDuplicate=false;
 
     try {
-        $row=Database::transaction(function(PDO $pdo) use($studentId,$certificateKey,$certificatePrefix,$payload,$academicYear,&$createdPath,&$alreadySaved,&$portfolioDuplicate): array {
+        $row=Database::transaction(function(PDO $pdo) use($studentId,$certificateKey,$attemptId,$payload,$academicYear,&$createdPath,&$alreadySaved): array {
             $select=$pdo->prepare('SELECT id,stored_name,certificate_key,certificate_data_json FROM student_portfolio_files WHERE student_id=? AND certificate_key=? LIMIT 1 FOR UPDATE');
             $select->execute([$studentId,$certificateKey]);
             $existing=$select->fetch();
@@ -327,12 +418,23 @@ function student_game_store_certificate(int $studentId,array $settings,array $ga
                 return $existing;
             }
 
-            $duplicateCheck=$pdo->prepare('SELECT id FROM student_portfolio_files WHERE student_id=? AND (certificate_key=? OR certificate_key LIKE ?) LIMIT 1 FOR UPDATE');
-            $duplicateCheck->execute([$studentId,$certificatePrefix,$certificatePrefix.':a%']);
-            $portfolioDuplicate=(bool)$duplicateCheck->fetch();
-            $payload['portfolioDuplicate']=$portfolioDuplicate;
+            // يمنع تكرار شهادة المحاولة نفسها، ويدعم الشهادات القديمة التي لا يحتوي مفتاحها رقم المحاولة.
+            $duplicateSql="SELECT id,stored_name,certificate_key,certificate_data_json FROM student_portfolio_files
+                           WHERE student_id=? AND certificate_key IS NOT NULL
+                             AND JSON_VALID(certificate_data_json)
+                             AND CAST(JSON_UNQUOTE(JSON_EXTRACT(certificate_data_json,'$.attemptId')) AS UNSIGNED)=?
+                           ORDER BY id LIMIT 1 FOR UPDATE";
+            $duplicateParams=[$studentId,$attemptId];
+            $duplicateCheck=$pdo->prepare($duplicateSql);
+            $duplicateCheck->execute($duplicateParams);
+            $duplicate=$duplicateCheck->fetch();
+            if ($duplicate) {
+                $alreadySaved=true;
+                return $duplicate;
+            }
+            $payload['portfolioDuplicate']=false;
             $certificateJson=json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
-            $title='شهادة إتقان'.($portfolioDuplicate?' (مكرر)':'').' — '.$payload['lessonName'];
+            $title='شهادة إتقان — '.$payload['lessonName'];
             $note='لعبة '.$payload['lessonName'].' · الوحدة '.$payload['unitNumber'].' · الدرس '.$payload['lessonNumber'].' · '.$payload['score'].' نقطة';
 
             $stored=bin2hex(random_bytes(20)).'.json';
@@ -366,11 +468,10 @@ function student_game_store_certificate(int $studentId,array $settings,array $ga
     }
 
     $result=student_game_certificate_json($row);
-    $portfolioDuplicate=(bool)($result['portfolioDuplicate']??$portfolioDuplicate);
     $result['saved']=true;
     $result['enabled']=true;
     $result['alreadySaved']=$alreadySaved;
-    $result['portfolioDuplicate']=$portfolioDuplicate;
+    $result['portfolioDuplicate']=false;
     return $result;
 }
 
@@ -456,34 +557,374 @@ function student_dashboard(int $studentId): never
     $completed=(int)(fetch_one("SELECT COUNT(*) AS n FROM test_attempts WHERE student_id=? AND status IN ('submitted','graded')",[$studentId])['n']??0);
     $recent=fetch_all("SELECT t.id,t.title,t.test_type,a.percentage,a.submitted_at FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE a.student_id=? AND a.status='graded' AND t.show_result=1 ORDER BY a.submitted_at DESC LIMIT 5",[$studentId]);
     $skills=fetch_all('SELECT sk.name,ss.mastery_percent FROM student_skills ss JOIN skills sk ON sk.id=ss.skill_id WHERE ss.student_id=? ORDER BY ss.mastery_percent DESC LIMIT 8',[$studentId]);
-    $totalPoints=(int)(fetch_one('SELECT COALESCE(SUM(points),0) AS total FROM motivational_points WHERE student_id=?',[$studentId])['total']??0);
+    $totalPoints=student_madar_points_data($studentId)['total'];
     Http::json(compact('student','available','completed','recent','skills','totalPoints'));
+}
+
+function student_point_value(mixed $value): int|float
+{
+    $number=round((float)$value,2);
+    return abs($number-round($number))<0.00001?(int)round($number):$number;
+}
+
+function student_madar_points_data(int $studentId): array
+{
+    ensure_teacher_tools_schema();
+    ensure_weekly_follow_up_schema();
+    ensure_teacher_school_settings_schema();
+
+    $student=fetch_one(
+        'SELECT s.id,c.teacher_id,c.academic_year AS class_academic_year
+         FROM students s JOIN classes c ON c.id=s.class_id
+         WHERE s.id=? AND s.deleted_at IS NULL LIMIT 1',
+        [$studentId]
+    );
+    if (!$student) Http::json(['error'=>'تعذّر العثور على بيانات الطالبة وفصلها.'],404);
+    $teacherId=(int)$student['teacher_id'];
+    $school=teacher_school_settings_row($teacherId);
+    $academicYear=trim((string)($school['academic_year']??'')) ?: trim((string)($student['class_academic_year']??''));
+    $gameAcademicYear=trim((string)($student['class_academic_year']??'')) ?: $academicYear;
+    $semester=in_array((string)($school['current_semester']??'first'),['first','second'],true)?(string)$school['current_semester']:'first';
+    $termStart=trim((string)($semester==='second'?($school['term2_start_date']??''):($school['term1_start_date']??'')));
+    $termEnd=$semester==='first'?trim((string)($school['term2_start_date']??'')):'';
+
+    $categories=array_merge(madar_point_categories(),[
+        'grade'=>'سجل الدرجات',
+        'games'=>'الألعاب والمسابقات',
+        'motivation'=>'نقاط تحفيزية',
+    ]);
+    $summary=['all'=>0,'motivation'=>0,'grade'=>0,'homework'=>0,'participation'=>0,'attendance'=>0,'task'=>0,'games'=>0];
+    $history=[];
+    $weaknesses=[
+        'absence'=>['count'=>0,'deduction'=>0,'details'=>[]],
+        'participation'=>['count'=>0,'deduction'=>0,'details'=>[]],
+        'homework'=>['count'=>0,'deduction'=>0,'details'=>[]],
+        'task'=>['count'=>0,'deduction'=>0,'details'=>[]],
+    ];
+    $weaknessDayKeys=['homework'=>[],'task'=>[]];
+    $addPoint=static function(string $id,mixed $rawPoints,string $category,string $reason,string $details,mixed $createdAt,string $sourceLabel) use (&$history,&$summary,$categories): void {
+        $points=student_point_value($rawPoints);
+        $summary['all']+=$points;
+        if (isset($summary[$category])) $summary[$category]+=$points;
+        $history[]=[
+            'id'=>$id,
+            'points'=>$points,
+            'category'=>$category,
+            'categoryLabel'=>$categories[$category]??$categories['other'],
+            'reason'=>$reason,
+            'details'=>$details,
+            'sourceLabel'=>$sourceLabel,
+            'createdAt'=>$createdAt,
+        ];
+    };
+
+    // المصدر نفسه الذي يعرضه حساب المعلمة: جميع عمليات التحفيز الخاصة بهذه
+    // الطالبة من معلمتها الحالية، من دون إسقاطها بسبب اختلاف تاريخ بداية الترم.
+    $manualWhere=['mp.student_id=?','mp.teacher_id=?'];$manualParams=[$studentId,$teacherId];
+    $builderReady=interactive_game_builder_schema_ready();
+    $manualSql=$builderReady
+        ? 'SELECT mp.id,mp.points,mp.reason_type,mp.reason,mp.details,mp.created_at,
+                  attempt.id AS game_attempt_id,publication.academic_year AS game_academic_year,
+                  publication.semester AS game_semester,game.name AS game_name
+           FROM motivational_points mp
+           LEFT JOIN game_attempts attempt ON attempt.motivation_point_id=mp.id AND attempt.student_id=mp.student_id
+           LEFT JOIN interactive_game_publications publication ON publication.id=attempt.publication_id
+           LEFT JOIN teacher_interactive_games game ON game.id=attempt.game_id
+           WHERE '.implode(' AND ',$manualWhere).' ORDER BY mp.created_at DESC,mp.id DESC'
+        : 'SELECT mp.id,mp.points,mp.reason_type,mp.reason,mp.details,mp.created_at,
+                  NULL AS game_attempt_id,NULL AS game_academic_year,NULL AS game_semester,NULL AS game_name
+           FROM motivational_points mp WHERE '.implode(' AND ',$manualWhere).' ORDER BY mp.created_at DESC,mp.id DESC';
+    foreach(fetch_all($manualSql,$manualParams) as $row) {
+        $motivationId=(int)$row['id'];
+        $isGame=(int)($row['game_attempt_id']??0)>0;
+        if ($isGame) {
+            $gameYear=trim((string)($row['game_academic_year']??''));
+            $gameSemester=trim((string)($row['game_semester']??''));
+            if (($gameYear!=='' && $gameAcademicYear!=='' && $gameYear!==$gameAcademicYear) || ($gameSemester!=='' && $gameSemester!==$semester)) continue;
+            // تُحسب محاولة اللعبة أدناه من درجتها الفعلية. هذه المكافأة مرتبطة
+            // بالمحاولة نفسها، وإضافتها هنا ستكرر نقاط اللعبة مرتين.
+            continue;
+        } else {
+            // كل نقطة يمنحها حساب المعلمة تظهر للطالبة كبند تحفيزي مستقل.
+            // يبقى السبب الأصلي (واجب، مشاركة، حضور...) ظاهرًا في وصف العملية.
+            $category='motivation';
+        }
+        $reason=$isGame && trim((string)($row['game_name']??''))!==''?'إكمال لعبة '.trim((string)$row['game_name']):(string)$row['reason'];
+        $addPoint('motivation-'.$motivationId,$row['points'],$category,$reason,$row['details']===null?'':(string)$row['details'],$row['created_at'],$isGame?'الألعاب التفاعلية':'نقاط تحفيزية من المعلمة');
+    }
+
+    $gradeRows=fetch_all(
+        'SELECT followup.*,settings.periodic_test_max,settings.participation_max,settings.homework_max,
+                settings.tasks_max,settings.quiz_max,settings.final_exam_max
+         FROM student_follow_up followup
+         LEFT JOIN follow_up_settings settings
+           ON settings.teacher_id=followup.teacher_id AND settings.period_no=followup.period_no
+          AND settings.academic_year=followup.academic_year AND settings.semester=followup.semester
+         WHERE followup.student_id=? AND followup.teacher_id=? AND followup.academic_year=? AND followup.semester=?
+         ORDER BY followup.period_no',
+        [$studentId,$teacherId,$academicYear,$semester]
+    );
+    $periodLabels=[1=>'الفترة الأولى',2=>'الفترة الثانية',3=>'الفترة الختامية'];
+    foreach($gradeRows as $row) {
+        $period=(int)$row['period_no'];$periodLabel=$periodLabels[$period]??('الفترة '.$period);$createdAt=$row['updated_at'];
+        $fields=$period<3?[
+            ['periodic_test_score','periodic_test_max','grade','الاختبار الفتري'],
+            ['quiz_one_score','quiz_max','grade','الاختبار القصير الأول'],
+            ['quiz_two_score','quiz_max','grade','الاختبار القصير الثاني'],
+            ['participation_score','participation_max','participation','المشاركة'],
+            ['homework_score','homework_max','homework','الواجبات'],
+            ['tasks_score','tasks_max','task','المهام'],
+        ]:[
+            ['final_exam_score','final_exam_max','grade','الاختبار النهائي'],
+        ];
+        foreach($fields as [$field,$maximumField,$category,$label]) {
+            if ($row[$field]===null || $row[$field]==='') continue;
+            $maximum=$row[$maximumField]===null?'':student_point_value($row[$maximumField]);
+            $details=$maximum===''?'من سجل الدرجات':student_point_value($row[$field]).' من '.$maximum;
+            $addPoint('grade-'.$period.'-'.$field,$row[$field],$category,$label.' · '.$periodLabel,$details,$createdAt,'سجل الدرجات');
+        }
+    }
+
+    foreach(fetch_all(
+        "SELECT week_no,attendance_date,updated_at FROM weekly_attendance
+         WHERE student_id=? AND teacher_id=? AND academic_year=? AND semester=? AND status='present'
+         ORDER BY attendance_date DESC",
+        [$studentId,$teacherId,$academicYear,$semester]
+    ) as $row) {
+        $addPoint('attendance-'.$row['attendance_date'],1,'attendance','حضور يوم '.$row['attendance_date'],'حاضرة · الأسبوع '.(int)$row['week_no'],$row['updated_at'],'سجل الحضور');
+    }
+
+    foreach(fetch_all(
+        "SELECT week_no,attendance_date,updated_at FROM weekly_attendance
+         WHERE student_id=? AND teacher_id=? AND academic_year=? AND semester=? AND status='absent'
+         ORDER BY attendance_date DESC",
+        [$studentId,$teacherId,$academicYear,$semester]
+    ) as $row) {
+        $weaknesses['absence']['details'][]=[
+            'id'=>'absence-'.$row['attendance_date'],
+            'title'=>'غياب',
+            'date'=>$row['attendance_date'],
+            'week'=>(int)$row['week_no'],
+            'deduction'=>0,
+        ];
+    }
+    $weaknesses['absence']['count']=count($weaknesses['absence']['details']);
+
+    foreach(fetch_all(
+        "SELECT attendance.week_no,attendance.attendance_date,attendance.status AS attendance_status,
+                participation.score,participation.record_status,participation.note
+         FROM weekly_attendance attendance
+         LEFT JOIN weekly_participation participation
+           ON participation.teacher_id=attendance.teacher_id
+          AND participation.student_id=attendance.student_id
+          AND participation.academic_year=attendance.academic_year
+          AND participation.semester=attendance.semester
+          AND participation.participation_date=attendance.attendance_date
+         WHERE attendance.student_id=? AND attendance.teacher_id=?
+           AND attendance.academic_year=? AND attendance.semester=?
+           AND attendance.status<>'absent'
+           AND (participation.student_id IS NULL OR participation.record_status<>'completed'
+                OR participation.score IS NULL OR participation.score<=0)
+         ORDER BY attendance.attendance_date DESC",
+        [$studentId,$teacherId,$academicYear,$semester]
+    ) as $row) {
+        $weaknesses['participation']['details'][]=[
+            'id'=>'missing-participation-'.$row['attendance_date'],
+            'title'=>'لم تُسجّل مشاركة',
+            'date'=>$row['attendance_date'],
+            'week'=>(int)$row['week_no'],
+            'deduction'=>0,
+            'note'=>trim((string)($row['note']??'')),
+        ];
+    }
+    $weaknesses['participation']['count']=count($weaknesses['participation']['details']);
+
+    foreach(fetch_all(
+        "SELECT participation_date,week_no,score,max_score,note
+         FROM weekly_participation
+         WHERE student_id=? AND teacher_id=? AND academic_year=? AND semester=?
+           AND record_status='completed' AND score IS NOT NULL
+         ORDER BY participation_date DESC",
+        [$studentId,$teacherId,$academicYear,$semester]
+    ) as $row) {
+        $details='الأسبوع '.(int)$row['week_no'].' · '.student_point_value($row['score']).' من '.student_point_value($row['max_score']);
+        if (trim((string)($row['note']??''))!=='') $details.=' · '.trim((string)$row['note']);
+        $addPoint('participation-'.$row['participation_date'],$row['score'],'participation','مشاركة يومية',$details,$row['participation_date'].' 12:00:00','سجل المشاركة');
+    }
+
+    foreach(fetch_all(
+        "SELECT item.id,item.item_type,item.title,item.item_date,item.week_no,item.max_score,score.score,score.note,score.updated_at
+         FROM weekly_follow_up_item_scores score
+         JOIN weekly_follow_up_items item ON item.id=score.item_id
+         WHERE score.student_id=? AND item.teacher_id=? AND item.academic_year=? AND item.semester=?
+           AND score.record_status='completed' AND score.score IS NOT NULL
+         ORDER BY item.item_date DESC,item.id DESC",
+        [$studentId,$teacherId,$academicYear,$semester]
+    ) as $row) {
+        $category=(string)$row['item_type']==='task'?'task':'homework';
+        $details='الأسبوع '.(int)$row['week_no'].' · '.student_point_value($row['score']).' من '.student_point_value($row['max_score']);
+        if (trim((string)($row['note']??''))!=='') $details.=' · '.trim((string)$row['note']);
+        $addPoint('weekly-item-'.(int)$row['id'],$row['score'],$category,(string)$row['title'],$details,$row['updated_at'],'سجل '.($category==='task'?'المهام':'الواجبات'));
+    }
+
+    foreach(fetch_all(
+        "SELECT item.id,item.item_type,item.title,item.item_date,item.week_no,item.max_score,score.note,score.updated_at
+         FROM weekly_follow_up_item_scores score
+         JOIN weekly_follow_up_items item ON item.id=score.item_id
+         WHERE score.student_id=? AND item.teacher_id=? AND item.academic_year=? AND item.semester=?
+           AND score.record_status='missing'
+         ORDER BY item.item_date DESC,item.id DESC",
+        [$studentId,$teacherId,$academicYear,$semester]
+    ) as $row) {
+        $category=(string)$row['item_type']==='task'?'task':'homework';
+        $deduction=student_point_value($row['max_score']);
+        $date=(string)$row['item_date'];
+        $weaknessDayKeys[$category][$date]=true;
+        $weaknesses[$category]['deduction']+=$deduction;
+        $weaknesses[$category]['details'][]=[
+            'id'=>'missing-item-'.(int)$row['id'],
+            'title'=>(string)$row['title'],
+            'date'=>$date,
+            'week'=>(int)$row['week_no'],
+            'deduction'=>$deduction,
+            'note'=>trim((string)($row['note']??'')),
+        ];
+        $details='لم تُسلَّم · الأسبوع '.(int)$row['week_no'].' · التاريخ '.$date;
+        if (trim((string)($row['note']??''))!=='') $details.=' · '.trim((string)$row['note']);
+        $addPoint('missing-item-'.(int)$row['id'],-$deduction,$category,'خصم لعدم حل '.($category==='task'?'المهمة: ':'الواجب: ').(string)$row['title'],$details,$row['updated_at'],'نقاط الضعف');
+    }
+    foreach(['homework','task'] as $category) {
+        $weaknesses[$category]['count']=count($weaknessDayKeys[$category]);
+        $weaknesses[$category]['deduction']=student_point_value($weaknesses[$category]['deduction']);
+    }
+
+    if ($builderReady) {
+        $legacyGameWhere=['publication.id IS NULL'];$gameParams=[$studentId,$gameAcademicYear,$semester];
+        if ($termStart!=='') {$legacyGameWhere[]='attempt.played_at>=?';$gameParams[]=$termStart.' 00:00:00';}
+        if ($termEnd!=='') {$legacyGameWhere[]='attempt.played_at<?';$gameParams[]=$termEnd.' 00:00:00';}
+        $gamePeriodWhere="((publication.id IS NOT NULL AND publication.academic_year=? AND publication.semester=?) OR (".implode(' AND ',$legacyGameWhere).'))';
+        foreach(fetch_all(
+            "SELECT attempt.id,attempt.game_key,attempt.game_version_id,attempt.score,attempt.accuracy,attempt.question_count,
+                    attempt.correct_count,attempt.played_at,attempt.game_snapshot_json,game.name,
+                    version.settings_json AS version_settings_json
+             FROM game_attempts attempt
+             LEFT JOIN teacher_interactive_games game ON game.id=attempt.game_id
+             LEFT JOIN interactive_game_versions version ON version.id=attempt.game_version_id
+             LEFT JOIN interactive_game_publications publication ON publication.id=attempt.publication_id
+             WHERE attempt.student_id=?
+               AND (attempt.run_status='completed' OR (attempt.run_status IS NULL AND attempt.played_at IS NOT NULL))
+               AND {$gamePeriodWhere}
+             ORDER BY attempt.played_at DESC,attempt.id DESC",
+            $gameParams
+        ) as $row) {
+            $snapshot=interactive_game_builder_json_decode($row['game_snapshot_json']??null,[]);
+            $gameName=trim((string)($row['name']??''));
+            if ($gameName==='') $gameName=trim((string)($snapshot['name']??$snapshot['lessonName']??$snapshot['lesson_name']??$row['game_key']??''));
+            if ($gameName==='') $gameName='لعبة تفاعلية';
+            $attemptPoints=student_point_value($row['score']);
+            if ((int)($row['game_version_id']??0)>0 && trim((string)($row['version_settings_json']??''))!=='') {
+                $attemptPoints=(int)$row['correct_count']*interactive_game_builder_run_points_per_question([
+                    'version_settings_json'=>$row['version_settings_json'],
+                ]);
+            }
+            $details='النتيجة '.student_point_value($attemptPoints).' نقطة · '.(int)$row['correct_count'].' من '.(int)$row['question_count'].' صحيحة · الدقة '.student_point_value($row['accuracy']).'٪';
+            $addPoint('game-attempt-'.(int)$row['id'],$attemptPoints,'games','محاولة لعبة '.$gameName,$details,$row['played_at'],'الألعاب التفاعلية');
+        }
+    }
+
+    // Read completed activity sources directly; never copy their totals into the
+    // manual ledger. Reopening or refreshing cannot award the same result again.
+    if (live_competitions_schema_ready()) {
+        foreach (fetch_all(
+            "SELECT session.id,session.title,session.completed_at,participant.score
+             FROM live_competition_participants participant
+             JOIN live_competition_sessions session ON session.id=participant.session_id
+             WHERE participant.student_id=? AND session.teacher_id=?
+               AND session.academic_year=? AND session.semester=?
+               AND session.status='completed' AND participant.joined_at IS NOT NULL
+               AND participant.answered_count>0
+             ORDER BY session.completed_at DESC,session.id DESC",
+            [$studentId,$teacherId,$academicYear,$semester]
+        ) as $row) {
+            $addPoint('live-competition-'.(int)$row['id'],$row['score'],'games',
+                'مسابقة مباشرة: '.(string)$row['title'],'النقاط النهائية للمسابقة المكتملة',
+                $row['completed_at'],'المسابقات المباشرة');
+        }
+    }
+
+    // A test contributes its latest released, graded attempt, not every retry.
+    foreach (fetch_all(
+        "SELECT attempt.id,attempt.score,attempt.submitted_at,test.title
+         FROM test_attempts attempt JOIN tests test ON test.id=attempt.test_id
+         WHERE attempt.student_id=? AND test.teacher_id=?
+           AND test.academic_year=? AND test.semester=? AND test.show_result=1
+           AND attempt.status='graded'
+           AND NOT EXISTS (SELECT 1 FROM test_attempts newer
+               WHERE newer.test_id=attempt.test_id AND newer.student_id=attempt.student_id
+                 AND newer.status='graded' AND newer.id>attempt.id)
+         ORDER BY attempt.submitted_at DESC,attempt.id DESC",
+        [$studentId,$teacherId,$academicYear,$semester]
+    ) as $row) {
+        $addPoint('test-attempt-'.(int)$row['id'],$row['score'],'grade',
+            'اختبار: '.(string)$row['title'],'آخر محاولة مصححة متاحة للطالبة',
+            $row['submitted_at'],'الاختبارات الإلكترونية');
+    }
+
+    if (flipped_classroom_schema_ready()) {
+        // Follow-up entries already include any synchronized flipped lesson.
+        $countedFlipped=[];
+        foreach ($history as $entry) {
+            if (preg_match('/\[flipped-classroom:lesson-(\d+)\]/',(string)$entry['details'],$match)) {
+                $countedFlipped[(int)$match[1]]=true;
+            }
+        }
+        $flippedWhere='';$flippedParams=[$studentId,$teacherId,$gameAcademicYear,$semester];
+        if ($termStart!=='') {$flippedWhere.=' AND submission.submitted_at>=?';$flippedParams[]=$termStart.' 00:00:00';}
+        if ($termEnd!=='') {$flippedWhere.=' AND submission.submitted_at<?';$flippedParams[]=$termEnd.' 00:00:00';}
+        foreach (fetch_all(
+            "SELECT lesson.*,submission.id AS submission_id,submission.total_points,
+                    submission.percent,submission.reviewed_at,submission.submitted_at
+             FROM teacher_flipped_submissions submission
+             JOIN teacher_flipped_lessons lesson ON lesson.id=submission.lesson_id
+             JOIN classes class ON class.id=lesson.class_id
+             WHERE submission.student_id=? AND lesson.teacher_id=?
+               AND class.academic_year=? AND lesson.semester=?
+               AND submission.status='reviewed' AND lesson.deleted_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM teacher_flipped_submissions newer
+                   WHERE newer.student_id=submission.student_id AND newer.lesson_id=submission.lesson_id
+                     AND newer.status='reviewed' AND newer.id>submission.id)
+               {$flippedWhere}
+             ORDER BY submission.submitted_at DESC,submission.id DESC",
+            $flippedParams
+        ) as $row) {
+            if (isset($countedFlipped[(int)$row['id']])) continue;
+            $config=flipped_active_learning_read($row);
+            $earned=!empty($config['configured'])
+                ? flipped_active_learning_score((float)$row['percent'],(float)$config['maxScore'])
+                : (float)$row['total_points'];
+            $category=in_array((string)($config['target']??''),['homework','task','participation'],true)
+                ? (string)$config['target'] : 'task';
+            $addPoint('flipped-lesson-'.(int)$row['id'],$earned,$category,
+                'الصف المقلوب: '.(string)$row['title'],'آخر نتيجة مصححة · '.flipped_active_learning_marker((int)$row['id']),
+                $row['reviewed_at']??$row['submitted_at'],'الصف المقلوب');
+        }
+    }
+
+
+    foreach($summary as $key=>$value) $summary[$key]=student_point_value($value);
+    usort($history,static fn(array $a,array $b): int=>strcmp((string)$b['createdAt'],(string)$a['createdAt']));
+    return [
+        'total'=>$summary['all'],
+        'summary'=>$summary,
+        'history'=>array_slice($history,0,500),
+        'weaknesses'=>$weaknesses,
+        'context'=>['academicYear'=>$academicYear,'semester'=>$semester],
+    ];
 }
 
 function student_madar_points(int $studentId): never
 {
-    ensure_teacher_tools_schema();
-    $categories=madar_point_categories();
-    $summary=['all'=>0,'homework'=>0,'participation'=>0,'attendance'=>0,'task'=>0];
-    $rows=fetch_all('SELECT id,points,reason_type,reason,details,created_at FROM motivational_points WHERE student_id=? ORDER BY created_at DESC,id DESC LIMIT 200',[$studentId]);
-    $history=[];
-    foreach($rows as $row) {
-        $category=(string)($row['reason_type']??'other');
-        if (!isset($categories[$category])) $category='other';
-        $points=(int)$row['points'];
-        $summary['all']+=$points;
-        if (isset($summary[$category])) $summary[$category]+=$points;
-        $history[]=[
-            'id'=>(int)$row['id'],
-            'points'=>$points,
-            'category'=>$category,
-            'categoryLabel'=>$categories[$category],
-            'reason'=>(string)$row['reason'],
-            'details'=>$row['details']===null?'':(string)$row['details'],
-            'createdAt'=>$row['created_at'],
-        ];
-    }
-    Http::json(['total'=>$summary['all'],'summary'=>$summary,'history'=>$history]);
+    Http::json(student_madar_points_data($studentId));
 }
 
 function student_tests_routes(string $method,array $segments,int $studentId): never
@@ -505,6 +946,7 @@ function student_tests_routes(string $method,array $segments,int $studentId): ne
     $test=fetch_one(
         "SELECT t.* FROM tests t JOIN students s ON s.class_id=t.class_id WHERE t.id=? AND s.id=? AND t.status='published' AND (t.start_at IS NULL OR t.start_at<=NOW()) AND (t.end_at IS NULL OR t.end_at>=NOW())",[$testId,$studentId]
     );
+    if(!$test&&remedial_content_allowed('test',$testId,$studentId))$test=fetch_one("SELECT * FROM tests WHERE id=? AND status='published'",[$testId]);
     if (!$test) Http::json(['error'=>'الاختبار غير متاح.'],404);
     if (($segments[1]??'')==='submit'&&$method==='POST') student_submit_test($studentId,$test);
     if (($segments[1]??'')===''&&$method==='GET') {

@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>لوحة المعلمة | مدار</title>
-  <link rel="stylesheet" href="dashboard.css?v=69" />
-  <link rel="stylesheet" href="analysis-dashboard.css?v=1" />
-  <link rel="stylesheet" href="skill-attachments.css?v=7" />
+  <link rel="stylesheet" href="dashboard.css?v=101" />
+  <link rel="stylesheet" href="analysis-dashboard.css?v=4" />
+  <link rel="stylesheet" href="skill-attachments.css?v=9" />
   <link rel="stylesheet" href="../shared-footer.css?v=1" />
   <link rel="stylesheet" href="weekly-followup.css?v=4" />
   <link rel="stylesheet" href="../preview-banner.css?v=1" />
@@ -42,6 +42,7 @@
       <button class="nav-item active" data-route="home"><span class="ic">🏠</span> الرئيسية</button>
       <button class="nav-item" data-route="profile"><span class="ic">👤</span> الأداء الوظيفي</button>
       <button class="nav-item" data-route="portfolio"><span class="ic">📁</span> ملف الإنجاز</button>
+      <button class="nav-item" data-route="teacher-planning"><span class="ic">🗓️</span> تخطيط المعلم</button>
 
       <div class="nav-group-label">إدارة الطالبات</div>
       <button class="nav-item" data-route="student-panel"><span class="ic">🎓</span> قائمة الطالبات</button>
@@ -62,17 +63,17 @@
       <div class="nav-group-label nav-content-heading">المحتوى التعليمي</div>
       <button class="nav-item" data-route="games-panel"><span class="ic">🎮</span> الألعاب</button>
 
-      <button class="nav-item" data-route="strategies-panel"><span class="ic">💡</span> الاستراتيجيات</button>
+      <button class="nav-item" data-route="strategies-panel"><span class="ic">💡</span> التعلم النشط</button>
 
       <button class="nav-item" data-route="library-panel"><span class="ic">📚</span> الموارد المكتبية</button>
       <button class="nav-item" data-route="knowledge-exchange"><span class="ic">🤝</span> تبادل المعرفة</button>
 
+      <a class="nav-item" href="/meetings/"><span class="ic">◉</span> الاجتماعات التفاعلية</a>
+      <a class="nav-item" href="/meetings/?view=recordings"><span class="ic">▣</span> تسجيلات اجتماعاتي</a>
       <div class="nav-group-label">أخرى</div>
       <button class="nav-item" data-route="parent-panel"><span class="ic">👨‍👩‍👧</span> ولي الأمر</button>
       <button class="nav-item" data-route="calendar"><span class="ic">📅</span> التقويم والمواعيد</button>
       <button class="nav-item" data-route="reports"><span class="ic">📑</span> التقارير الذكية</button>
-      <button class="nav-item" data-route="help-center"><span class="ic">❓</span> مركز المساعدة</button>
-      <button class="nav-item" data-route="notifications"><span class="ic">🔔</span> الإشعارات</button>
       <button class="nav-item" data-route="activity"><span class="ic">🕓</span> سجل الأنشطة</button>
       <button class="nav-item" data-route="settings"><span class="ic">⚙️</span> الإعدادات</button>
       <button class="nav-item" id="logoutBtn"><span class="ic">🚪</span> تسجيل الخروج</button>
@@ -106,8 +107,8 @@
   <div id="modalRoot"></div>
   <div id="toastRoot"></div>
 
-  <script src="dashboard.js?v=85" type="module"></script>
-  <script src="weekly-followup.js?v=5"></script>
+  <script src="dashboard.js?v=178-locks2" type="module"></script>
+  <script src="weekly-followup.js?v=6"></script>
   <script src="../preview-banner.js?v=1"></script>
   <script src="../assets/responsive-tables.js?v=11"></script>
   <script src="../assets/privacy-consent.js?v=11"></script>

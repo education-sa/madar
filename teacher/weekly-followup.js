@@ -43,6 +43,11 @@ let weeklyFollowUpData = null;
 let weeklyFollowUpInitialized = false;
 let weeklyFollowUpContextKey = "";
 let weeklyCsrfToken = "";
+let weeklyAutosaveTimer = null;
+let weeklyAutosaveTasks = new Map();
+let weeklyAutosavePromise = null;
+let weeklyAutosaveState = "idle";
+let weeklyAutosaveMessage = "الحفظ التلقائي مفعّل";
 
 const weeklyEscape = (value = "") => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 function weeklyCleanScore(value) {
@@ -86,6 +91,60 @@ function weeklyToast(message) {
   root.appendChild(element);
   setTimeout(() => element.remove(), 3000);
 }
+function weeklySetAutosaveStatus(state, message) {
+  weeklyAutosaveState = state;
+  weeklyAutosaveMessage = message;
+  const host = document.getElementById("followUpTopAction");
+  if (!host) return;
+  host.innerHTML = `<span class="follow-up-autosave" data-state="${weeklyEscape(state)}"><i aria-hidden="true"></i>${weeklyEscape(message)}</span>`;
+}
+function weeklyScheduleAutosave(key, task, delay = 650) {
+  weeklyAutosaveTasks.set(key, task);
+  weeklySetAutosaveStatus("pending", "بانتظار الحفظ…");
+  clearTimeout(weeklyAutosaveTimer);
+  weeklyAutosaveTimer = setTimeout(() => { weeklyRunAutosaves(); }, Math.max(0, delay));
+}
+async function weeklyRunAutosaves() {
+  clearTimeout(weeklyAutosaveTimer);
+  weeklyAutosaveTimer = null;
+  if (weeklyAutosavePromise) {
+    const saved = await weeklyAutosavePromise;
+    return saved && weeklyAutosaveTasks.size ? weeklyRunAutosaves() : saved;
+  }
+  if (!weeklyAutosaveTasks.size) return true;
+  const tasks = [...weeklyAutosaveTasks.entries()];
+  weeklyAutosaveTasks.clear();
+  weeklySetAutosaveStatus("saving", "جارٍ الحفظ…");
+  weeklyAutosavePromise = (async () => {
+    try {
+      for (const [, task] of tasks) await task();
+      weeklySetAutosaveStatus("saved", "تم الحفظ تلقائيًا ✓");
+      return true;
+    } catch (error) {
+      tasks.forEach(([key, task]) => { if (!weeklyAutosaveTasks.has(key)) weeklyAutosaveTasks.set(key, task); });
+      weeklySetAutosaveStatus("error", "تعذّر الحفظ — أعيدي المحاولة");
+      weeklyToast(error.message || "تعذّر الحفظ التلقائي.");
+      return false;
+    } finally {
+      weeklyAutosavePromise = null;
+    }
+  })();
+  const saved = await weeklyAutosavePromise;
+  if (saved && weeklyAutosaveTasks.size) return weeklyRunAutosaves();
+  return saved;
+}
+async function weeklyFlushAutosaves() {
+  clearTimeout(weeklyAutosaveTimer);
+  weeklyAutosaveTimer = null;
+  return weeklyRunAutosaves();
+}
+async function weeklyNavigate(mutator) {
+  if (!await weeklyFlushAutosaves()) return;
+  mutator();
+  saveWeeklyState();
+  await renderWeeklyFollowUp();
+}
+window.flushWeeklyFollowUpAutosaves = weeklyFlushAutosaves;
 function weeklyOpenModal(html, className = "") {
   const root = document.getElementById("modalRoot");
   root.innerHTML = `<div class="modal-overlay" id="weeklyModalOverlay"><div class="modal-box ${weeklyEscape(className)}" role="dialog" aria-modal="true">${html}</div></div>`;
@@ -155,15 +214,7 @@ function weeklySyncTopAction(data) {
   const host = document.getElementById("followUpTopAction");
   if (!host) return;
   if (!data?.students?.length) { host.innerHTML = ""; return; }
-  const day = data.days?.[weeklyFollowUpDayIndex];
-  const itemCount = (data.items || []).filter((item) => weeklyFollowUpSection === "tasks" ? item.item_type === "task" : item.item_type !== "task").length;
-  const config = {
-    attendance: ["saveWeeklyAttendance", "حفظ تحضير اليوم", !day?.date],
-    participation: ["saveWeeklyParticipation", "حفظ المشاركة", !day?.date],
-    homework: ["saveWeeklyItems", "حفظ الواجبات", itemCount === 0],
-    tasks: ["saveWeeklyItems", "حفظ المهام", itemCount === 0],
-  }[weeklyFollowUpSection] || ["", "", true];
-  host.innerHTML = config[0] ? `<button class="btn btn-primary" type="button" id="${config[0]}" ${config[2] ? "disabled" : ""}>${config[1]}</button>` : "";
+  weeklySetAutosaveStatus(weeklyAutosaveState, weeklyAutosaveMessage);
 }
 
 async function renderWeeklyFollowUp() {
@@ -271,30 +322,26 @@ async function renderWeeklyFollowUp() {
 }
 
 function bindWeeklyNavigation(data) {
-  document.getElementById("weeklyStageSelect").onchange = (event) => {
+  document.getElementById("weeklyStageSelect").onchange = (event) => weeklyNavigate(() => {
     weeklyFollowUpStage = event.target.value;
     weeklyFollowUpGrade = (WEEKLY_ACADEMIC_GRADES[weeklyFollowUpStage] || [])[0] || "";
     weeklyFollowUpClassId = Number(weeklyClassList(data, weeklyFollowUpStage, weeklyFollowUpGrade)[0]?.id || 0);
-    saveWeeklyState();
-    renderWeeklyFollowUp();
-  };
-  document.getElementById("weeklyGradeSelect").onchange = (event) => {
+  });
+  document.getElementById("weeklyGradeSelect").onchange = (event) => weeklyNavigate(() => {
     weeklyFollowUpGrade = event.target.value;
     weeklyFollowUpClassId = Number(weeklyClassList(data)[0]?.id || 0);
-    saveWeeklyState();
-    renderWeeklyFollowUp();
-  };
+  });
   const classSelect = document.getElementById("weeklyClassSelect");
-  if (classSelect && !classSelect.disabled) classSelect.onchange = (event) => { weeklyFollowUpClassId = Number(event.target.value); saveWeeklyState(); renderWeeklyFollowUp(); };
-  document.getElementById("weeklyPrev").onclick = () => { weeklyFollowUpWeek = Math.max(1, weeklyFollowUpWeek - 1); saveWeeklyState(); renderWeeklyFollowUp(); };
-  document.getElementById("weeklyNext").onclick = () => { weeklyFollowUpWeek = Math.min(60, weeklyFollowUpWeek + 1); saveWeeklyState(); renderWeeklyFollowUp(); };
-  document.getElementById("weeklyCurrent").onclick = () => { weeklyFollowUpWeek = weeklyCurrentWeek(data.settings); saveWeeklyState(); renderWeeklyFollowUp(); };
-  document.getElementById("weeklyToday").onclick = () => {
+  if (classSelect && !classSelect.disabled) classSelect.onchange = (event) => weeklyNavigate(() => { weeklyFollowUpClassId = Number(event.target.value); });
+  document.getElementById("weeklyPrev").onclick = () => weeklyNavigate(() => { weeklyFollowUpWeek = Math.max(1, weeklyFollowUpWeek - 1); });
+  document.getElementById("weeklyNext").onclick = () => weeklyNavigate(() => { weeklyFollowUpWeek = Math.min(60, weeklyFollowUpWeek + 1); });
+  document.getElementById("weeklyCurrent").onclick = () => weeklyNavigate(() => { weeklyFollowUpWeek = weeklyCurrentWeek(data.settings); });
+  document.getElementById("weeklyToday").onclick = () => weeklyNavigate(() => {
     const index = data.days.findIndex((day) => day.date === weeklyTodayString());
-    if (index >= 0) { weeklyFollowUpDayIndex = index; saveWeeklyState(); renderWeeklyFollowUp(); }
-    else { weeklyFollowUpWeek = weeklyCurrentWeek(data.settings); weeklyFollowUpDayIndex = Math.min(4, Math.max(0, new Date().getDay())); saveWeeklyState(); renderWeeklyFollowUp(); }
-  };
-  document.querySelectorAll("[data-weekly-day]").forEach((button) => button.onclick = () => { weeklyFollowUpDayIndex = Number(button.dataset.weeklyDay); saveWeeklyState(); renderWeeklyFollowUp(); });
+    if (index >= 0) weeklyFollowUpDayIndex = index;
+    else { weeklyFollowUpWeek = weeklyCurrentWeek(data.settings); weeklyFollowUpDayIndex = Math.min(4, Math.max(0, new Date().getDay())); }
+  });
+  document.querySelectorAll("[data-weekly-day]").forEach((button) => button.onclick = () => weeklyNavigate(() => { weeklyFollowUpDayIndex = Number(button.dataset.weeklyDay); }));
   document.getElementById("weeklyExport").onclick = () => openWeeklyExport(data);
   document.getElementById("weeklyPrint").onclick = () => openWeeklyPrint(data);
   document.getElementById("weeklyImport").onclick = () => openWeeklyImport(data);
@@ -358,18 +405,56 @@ function bindWeeklySection(data) {
   bindWeeklyItems(data, weeklyFollowUpSection);
 }
 
+function weeklyQueueAttendance(data, delay = 650) {
+  const day = data.days[weeklyFollowUpDayIndex];
+  if (!day?.date) return;
+  const payload = {
+    classId: weeklyFollowUpClassId,
+    date: day.date,
+    entries: [...document.querySelectorAll("[data-attendance-student]")].map((select) => ({ studentId: Number(select.dataset.attendanceStudent), status: select.value })),
+  };
+  weeklyScheduleAutosave("attendance", () => weeklyApi("/weekly-follow-up/attendance", { method: "PUT", body: JSON.stringify(payload) }), delay);
+}
+
+function weeklyQueueParticipation(data, delay = 650) {
+  const day = data.days[weeklyFollowUpDayIndex];
+  const maxInput = document.getElementById("participationMaxScore");
+  if (!day?.date || !maxInput) return;
+  const maxScore = Number(maxInput.value || 1);
+  const payload = {
+    classId: weeklyFollowUpClassId,
+    date: day.date,
+    entries: data.students.map((student) => ({
+      studentId: Number(student.id),
+      score: document.querySelector(`[data-participation-score="${student.id}"]`)?.value || "",
+      status: document.querySelector(`[data-participation-status="${student.id}"]`)?.value || "",
+      note: document.querySelector(`[data-participation-note="${student.id}"]`)?.value || "",
+      maxScore,
+    })),
+  };
+  weeklyScheduleAutosave("participation", () => weeklyApi("/weekly-follow-up/participation", { method: "PUT", body: JSON.stringify(payload) }), delay);
+}
+
+function weeklyQueueItem(data, itemId, delay = 650) {
+  const item = data.items.find((entry) => Number(entry.id) === Number(itemId));
+  if (!item) return;
+  const scores = data.students.map((student) => ({
+    studentId: Number(student.id),
+    score: document.querySelector(`[data-item-score="${item.id}"][data-student-id="${student.id}"]`)?.value || "",
+    status: document.querySelector(`[data-item-status="${item.id}"][data-student-id="${student.id}"]`)?.value || "",
+  }));
+  weeklyScheduleAutosave(`item:${item.id}`, () => weeklyApi(`/weekly-follow-up/items/${item.id}`, { method: "PUT", body: JSON.stringify({ scores }) }), delay);
+}
+
 function bindWeeklyAttendance(data) {
   document.querySelectorAll("[data-attendance-all]").forEach((button) => button.onclick = () => {
     document.querySelectorAll("[data-attendance-student]").forEach((select) => { select.value = button.dataset.attendanceAll; select.className = `weekly-status-select status-${select.value || "empty"}`; });
+    weeklyQueueAttendance(data, 0);
   });
-  document.querySelectorAll("[data-attendance-student]").forEach((select) => select.onchange = () => { select.className = `weekly-status-select status-${select.value || "empty"}`; });
-  const save = document.getElementById("saveWeeklyAttendance");
-  if (save) save.onclick = async () => {
-    const day = data.days[weeklyFollowUpDayIndex];
-    const entries = [...document.querySelectorAll("[data-attendance-student]")].map((select) => ({ studentId: Number(select.dataset.attendanceStudent), status: select.value }));
-    save.disabled = true;
-    try { await weeklyApi("/weekly-follow-up/attendance", { method: "PUT", body: JSON.stringify({ classId: weeklyFollowUpClassId, date: day.date, entries }) }); weeklyToast("تم حفظ تحضير اليوم."); await renderWeeklyFollowUp(); } catch (error) { weeklyToast(error.message); save.disabled = false; }
-  };
+  document.querySelectorAll("[data-attendance-student]").forEach((select) => select.onchange = () => {
+    select.className = `weekly-status-select status-${select.value || "empty"}`;
+    weeklyQueueAttendance(data, 0);
+  });
 }
 
 function bindWeeklyParticipation(data) {
@@ -384,15 +469,16 @@ function bindWeeklyParticipation(data) {
       if (mode === "clear") { score.value = ""; status.value = ""; }
     });
   };
-  document.getElementById("participationAllFull").onclick = () => fill("full");
-  document.getElementById("participationAllReview").onclick = () => fill("review");
-  document.getElementById("participationClear").onclick = () => fill("clear");
-  document.getElementById("saveWeeklyParticipation").onclick = async () => {
-    const button = document.getElementById("saveWeeklyParticipation"); const day = data.days[weeklyFollowUpDayIndex]; const maxScore = Number(maxInput.value || 1);
-    const entries = data.students.map((student) => ({ studentId: Number(student.id), score: document.querySelector(`[data-participation-score="${student.id}"]`).value, status: document.querySelector(`[data-participation-status="${student.id}"]`).value, note: document.querySelector(`[data-participation-note="${student.id}"]`).value, maxScore }));
-    button.disabled = true;
-    try { await weeklyApi("/weekly-follow-up/participation", { method: "PUT", body: JSON.stringify({ classId: weeklyFollowUpClassId, date: day.date, entries }) }); weeklyToast("تم حفظ المشاركة اليومية."); await renderWeeklyFollowUp(); } catch (error) { weeklyToast(error.message); button.disabled = false; }
-  };
+  document.getElementById("participationAllFull").onclick = () => { fill("full"); weeklyQueueParticipation(data, 0); };
+  document.getElementById("participationAllReview").onclick = () => { fill("review"); weeklyQueueParticipation(data, 0); };
+  document.getElementById("participationClear").onclick = () => { fill("clear"); weeklyQueueParticipation(data, 0); };
+  maxInput.oninput = () => weeklyQueueParticipation(data);
+  maxInput.onchange = () => weeklyQueueParticipation(data, 0);
+  document.querySelectorAll("[data-participation-score],[data-participation-note]").forEach((input) => {
+    input.oninput = () => weeklyQueueParticipation(data);
+    input.onchange = () => weeklyQueueParticipation(data, 0);
+  });
+  document.querySelectorAll("[data-participation-status]").forEach((select) => { select.onchange = () => weeklyQueueParticipation(data, 0); });
 }
 
 function bindWeeklyItems(data, section) {
@@ -411,21 +497,15 @@ function bindWeeklyItems(data, section) {
     document.querySelectorAll(`[data-item-status="${itemId}"]`).forEach((select) => { select.value = status; });
     document.querySelectorAll(`[data-item-score="${itemId}"]`).forEach((input) => { input.value = full ? item.maxScore : 0; });
     updateWeeklyItemTotals(data, section);
+    weeklyQueueItem(data, itemId, 0);
   };
   document.getElementById("itemAllFull")?.addEventListener("click", () => setActiveItem("completed", true));
   document.getElementById("itemAllMissing")?.addEventListener("click", () => setActiveItem("missing", false));
-  document.querySelectorAll("[data-item-score]").forEach((input) => input.oninput = () => updateWeeklyItemTotals(data, section));
-  document.getElementById("saveWeeklyItems")?.addEventListener("click", async () => {
-    const button = document.getElementById("saveWeeklyItems"); button.disabled = true;
-    const items = data.items.filter((item) => section === "tasks" ? item.item_type === "task" : item.item_type !== "task");
-    try {
-      for (const item of items) {
-        const scores = data.students.map((student) => ({ studentId: Number(student.id), score: document.querySelector(`[data-item-score="${item.id}"][data-student-id="${student.id}"]`)?.value || "", status: document.querySelector(`[data-item-status="${item.id}"][data-student-id="${student.id}"]`)?.value || "" }));
-        await weeklyApi(`/weekly-follow-up/items/${item.id}`, { method: "PUT", body: JSON.stringify({ scores }) });
-      }
-      weeklyToast(`تم حفظ ${WEEKLY_SECTION_LABELS[section]}.`); await renderWeeklyFollowUp();
-    } catch (error) { weeklyToast(error.message); button.disabled = false; }
+  document.querySelectorAll("[data-item-score]").forEach((input) => {
+    input.oninput = () => { updateWeeklyItemTotals(data, section); weeklyQueueItem(data, input.dataset.itemScore); };
+    input.onchange = () => weeklyQueueItem(data, input.dataset.itemScore, 0);
   });
+  document.querySelectorAll("[data-item-status]").forEach((select) => { select.onchange = () => weeklyQueueItem(data, select.dataset.itemStatus, 0); });
 }
 
 function updateWeeklyItemTotals(data, section) {
@@ -508,12 +588,10 @@ function weeklyEnhanceTrackingView() {
     const section = sections[index];
     button.dataset.weeklySection = section;
     button.classList.toggle("active", weeklyFollowUpSection === section);
-    button.onclick = () => {
+    button.onclick = () => weeklyNavigate(() => {
       weeklyFollowUpSection = section;
-      saveWeeklyState();
       buttons.forEach((item) => item.classList.toggle("active", item.dataset.weeklySection === section));
-      renderWeeklyFollowUp();
-    };
+    });
   });
   let target = document.getElementById("weeklyFollowUpContent");
   if (!target) {

@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 const PAPER_ASSESSMENTS_MIGRATION = 'migration_20260810_paper_assessments.sql';
+const PAPER_ASSESSMENT_SOURCE_FILES_MIGRATION = 'migration_20260814_paper_assessment_source_files.sql';
 const PAPER_ASSESSMENT_MAX_FILES = 5;
 const PAPER_ASSESSMENT_MAX_FILE_BYTES = 10485760;
 const PAPER_ASSESSMENT_MAX_TOTAL_BYTES = 20971520;
@@ -39,6 +40,22 @@ function paper_migration_payload(): array
     ];
 }
 
+function paper_source_files_schema_ready(): bool
+{
+    static $ready = null;
+    if ($ready !== null) return $ready;
+    try {
+        $rows = fetch_all('SELECT COLUMN_NAME AS schema_column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=?', ['teacher_paper_assessment_source_files']);
+        $found = array_fill_keys(array_map(static fn(array $row): string => (string) $row['schema_column_name'], $rows), true);
+        foreach (['id','assessment_id','original_name','stored_name','mime_type','size_bytes','sha256','created_at','deleted_at'] as $column) {
+            if (!isset($found[$column])) return $ready = false;
+        }
+        return $ready = true;
+    } catch (PDOException) {
+        return $ready = false;
+    }
+}
+
 function paper_test_type_label(string $type): string
 {
     return match ($type) {
@@ -53,7 +70,7 @@ function paper_test_type_label(string $type): string
 
 function paper_mode_label(string $mode): string
 {
-    return $mode === 'student_entry' ? 'تسجيل فردي بواسطة الطالبات' : 'تسجيل مجمع بواسطة المعلمة';
+    return $mode === 'student_entry' ? 'إدخال الدرجات بواسطة الطالبة' : 'إدخال الدرجات بواسطة المعلمة';
 }
 
 function paper_workflow_label(string $status): string
@@ -186,7 +203,9 @@ function paper_teacher_context(int $teacherId): never
 {
     if (!paper_assessments_schema_ready()) Http::json(paper_migration_payload());
     $classId = max(0, (int) ($_GET['classId'] ?? 0));
-    $context = teacher_skill_assessment_context_data($teacherId);
+    // The editor's class field is a picker, not a page-level filter. Keep every
+    // class owned by the teacher available while the list view stays filtered.
+    $context = teacher_skill_assessment_context_data($teacherId, true);
     if ($classId > 0 && !teacher_owns_class($teacherId, $classId)) Http::json(['error' => 'الفصل المحدد غير موجود.'], 404);
     $context['migrationReady'] = true;
     $context['migrationFile'] = PAPER_ASSESSMENTS_MIGRATION;
@@ -198,6 +217,8 @@ function paper_teacher_context(int $teacherId): never
         ['value' => 'other', 'label' => 'تقويم آخر'],
     ];
     $context['limits'] = ['maxFiles' => PAPER_ASSESSMENT_MAX_FILES, 'maxFileBytes' => PAPER_ASSESSMENT_MAX_FILE_BYTES];
+    $context['sourceFileReady'] = paper_source_files_schema_ready();
+    $context['sourceFileMigration'] = PAPER_ASSESSMENT_SOURCE_FILES_MIGRATION;
     Http::json($context);
 }
 
@@ -232,6 +253,10 @@ function paper_teacher_save(int $teacherId): never
     if ($existing && (string) $existing['workflow_status'] !== 'draft') {
         Http::json(['error' => 'لا يمكن تعديل إعدادات الاختبار بعد نشره. أغلقيه أو أنشئي نسخة جديدة.'], 409);
     }
+    if ($existing) {
+        $savedGradeRows = (int) (fetch_one('SELECT COUNT(*) AS n FROM teacher_paper_assessment_submissions WHERE assessment_id=?', [$assessmentId])['n'] ?? 0);
+        if ($savedGradeRows > 0) Http::json(['error' => 'لا يمكن تغيير أسئلة الاختبار بعد حفظ درجات الطالبات. افتحي جدول الدرجات لإكماله أو اعتماده.'], 409);
+    }
     $classId = max(0, (int) ($data['classId'] ?? 0));
     $class = fetch_one('SELECT id,name,stage,grade_label,academic_year FROM classes WHERE id=? AND teacher_id=?', [$classId, $teacherId]);
     if (!$class) Http::json(['error' => 'اختاري فصلًا صحيحًا.'], 422);
@@ -264,38 +289,21 @@ function paper_teacher_save(int $teacherId): never
     $skillMap = paper_skill_map_for_class($class);
     $summaries = [];
     $questions = [];
-    if ($mode === 'teacher_aggregate') {
-        $raw = is_array($data['skills'] ?? null) ? array_values($data['skills']) : [];
-        if (!$raw || count($raw) > 50) Http::json(['error' => 'أضيفي من مهارة واحدة إلى 50 مهارة.'], 422);
-        $seen = [];
-        foreach ($raw as $index => $item) {
-            $skillId = max(0, (int) ($item['skillId'] ?? 0));
-            if ($skillId < 1 || !isset($skillMap[$skillId])) Http::json(['error' => 'إحدى المهارات لا تطابق صف الفصل المحدد.'], 422);
-            if (isset($seen[$skillId])) Http::json(['error' => 'لا يمكن تكرار المهارة.'], 422);
-            $seen[$skillId] = true;
-            $participants = (int) ($item['participants'] ?? 0);
-            $mastered = (int) ($item['mastered'] ?? 0);
-            if ($participants < 0 || $participants > $studentCount) Http::json(['error' => 'عدد المشاركات لا يمكن أن يتجاوز عدد طالبات الفصل.'], 422);
-            if ($mastered < 0 || $mastered > $participants) Http::json(['error' => 'عدد المتقنات لا يمكن أن يتجاوز عدد المشاركات.'], 422);
-            $summaries[] = ['skillId' => $skillId, 'skillName' => $skillMap[$skillId], 'participants' => $participants, 'mastered' => $mastered, 'sortOrder' => $index + 1];
-        }
-    } else {
-        $raw = is_array($data['questions'] ?? null) ? array_values($data['questions']) : [];
-        if (!$raw || count($raw) > 100) Http::json(['error' => 'أضيفي من سؤال واحد إلى 100 سؤال.'], 422);
-        $seenNumbers = [];
-        foreach ($raw as $index => $item) {
-            $skillId = max(0, (int) ($item['skillId'] ?? 0));
-            if ($skillId < 1 || !isset($skillMap[$skillId])) Http::json(['error' => 'مهارة أحد الأسئلة لا تطابق صف الفصل.'], 422);
-            $number = mb_substr(trim((string) ($item['number'] ?? '')), 0, 40);
-            if ($number === '') Http::json(['error' => 'اكتبي رقم كل سؤال.'], 422);
-            $numberKey = mb_strtolower($number);
-            if (isset($seenNumbers[$numberKey])) Http::json(['error' => 'لا يمكن تكرار رقم السؤال داخل الاختبار.'], 422);
-            $seenNumbers[$numberKey] = true;
-            $maxPoints = round((float) ($item['maxPoints'] ?? 0), 2);
-            if ($maxPoints <= 0 || $maxPoints > 1000) Http::json(['error' => 'الدرجة العظمى لكل سؤال يجب أن تكون أكبر من صفر ولا تتجاوز 1000.'], 422);
-            $questionText = mb_substr(trim((string) ($item['text'] ?? '')), 0, 500);
-            $questions[] = ['skillId' => $skillId, 'skillName' => $skillMap[$skillId], 'number' => $number, 'text' => $questionText ?: null, 'maxPoints' => $maxPoints, 'sortOrder' => $index + 1];
-        }
+    $raw = is_array($data['questions'] ?? null) ? array_values($data['questions']) : [];
+    if (!$raw || count($raw) > 100) Http::json(['error' => 'أضيفي من سؤال واحد إلى 100 سؤال.'], 422);
+    $seenNumbers = [];
+    foreach ($raw as $index => $item) {
+        $skillId = max(0, (int) ($item['skillId'] ?? 0));
+        if ($skillId < 1 || !isset($skillMap[$skillId])) Http::json(['error' => 'مهارة أحد الأسئلة لا تطابق صف الفصل.'], 422);
+        $number = mb_substr(trim((string) ($item['number'] ?? '')), 0, 40);
+        if ($number === '') Http::json(['error' => 'اكتبي رقم كل سؤال.'], 422);
+        $numberKey = mb_strtolower($number);
+        if (isset($seenNumbers[$numberKey])) Http::json(['error' => 'لا يمكن تكرار رقم السؤال داخل الاختبار.'], 422);
+        $seenNumbers[$numberKey] = true;
+        $maxPoints = round((float) ($item['maxPoints'] ?? 0), 2);
+        if ($maxPoints <= 0 || $maxPoints > 1000) Http::json(['error' => 'الدرجة العظمى لكل سؤال يجب أن تكون أكبر من صفر ولا تتجاوز 1000.'], 422);
+        $questionText = mb_substr(trim((string) ($item['text'] ?? '')), 0, 500);
+        $questions[] = ['skillId' => $skillId, 'skillName' => $skillMap[$skillId], 'number' => $number, 'text' => $questionText ?: null, 'maxPoints' => $maxPoints, 'sortOrder' => $index + 1];
     }
 
     $savedId = Database::transaction(function (PDO $pdo) use ($assessmentId, $teacherId, $classId, $academicYear, $semester, $title, $testType, $assessmentDate, $mode, $threshold, $texts, $opensAt, $closesAt, $summaries, $questions): int {
@@ -335,11 +343,56 @@ function paper_summary_rows(int $assessmentId): array
     return fetch_all('SELECT id,skill_id,skill_name_snapshot,participant_count,mastered_count,sort_order FROM teacher_paper_assessment_skill_summaries WHERE assessment_id=? ORDER BY sort_order,id', [$assessmentId]);
 }
 
-function paper_analysis(int $assessmentId, int $classId, int $threshold, string $mode): array
+function paper_gradebook_data(int $assessmentId, int $classId): array
 {
-    if ($mode === 'teacher_aggregate') {
+    $questions = array_map(static fn(array $row): array => [
+        'id' => (int) $row['id'],
+        'skillId' => $row['skill_id'] === null ? null : (int) $row['skill_id'],
+        'skillName' => (string) $row['skill_name_snapshot'],
+        'number' => (string) $row['question_number'],
+        'text' => $row['question_text'] ?? null,
+        'maxPoints' => paper_number($row['max_points']),
+        'sortOrder' => (int) $row['sort_order'],
+    ], paper_question_rows($assessmentId));
+    $students = fetch_all("SELECT id,name FROM students WHERE class_id=? AND status='active' AND deleted_at IS NULL ORDER BY name,id", [$classId]);
+    $submissionRows = fetch_all('SELECT id,student_id,status,submitted_at,reviewed_at,return_note FROM teacher_paper_assessment_submissions WHERE assessment_id=? AND student_id IS NOT NULL ORDER BY id', [$assessmentId]);
+    $submissionMap = [];
+    $submissionIds = [];
+    foreach ($submissionRows as $row) {
+        $submissionMap[(int) $row['student_id']] = $row;
+        $submissionIds[] = (int) $row['id'];
+    }
+    $answersBySubmission = [];
+    if ($submissionIds) {
+        $marks = implode(',', array_fill(0, count($submissionIds), '?'));
+        foreach (fetch_all("SELECT submission_id,question_id,earned_points FROM teacher_paper_assessment_answers WHERE submission_id IN ({$marks})", $submissionIds) as $answer) {
+            $answersBySubmission[(int) $answer['submission_id']][(string) $answer['question_id']] = paper_number($answer['earned_points']);
+        }
+    }
+    $rows = [];
+    foreach ($students as $student) {
+        $submission = $submissionMap[(int) $student['id']] ?? null;
+        $answers = $submission ? ($answersBySubmission[(int) $submission['id']] ?? []) : [];
+        $rows[] = [
+            'studentId' => (int) $student['id'],
+            'studentName' => (string) $student['name'],
+            'submissionId' => $submission ? (int) $submission['id'] : null,
+            'status' => $submission ? (string) $submission['status'] : 'not_registered',
+            'statusLabel' => paper_submission_label($submission ? (string) $submission['status'] : 'not_registered'),
+            'answers' => $answers,
+            'complete' => count($questions) > 0 && count($answers) === count($questions),
+        ];
+    }
+    return ['questions' => $questions, 'students' => $rows];
+}
+
+function paper_analysis(int $assessmentId, int $classId, int $threshold, string $mode, string $workflowStatus = 'draft'): array
+{
+    $questions = paper_question_rows($assessmentId);
+    if ($mode === 'teacher_aggregate' && !$questions) {
         $skills = [];
-        foreach (paper_summary_rows($assessmentId) as $row) {
+        $legacyRows = $workflowStatus === 'closed' ? paper_summary_rows($assessmentId) : [];
+        foreach ($legacyRows as $row) {
             $participants = (int) $row['participant_count'];
             $mastered = (int) $row['mastered_count'];
             $rate = $participants > 0 ? round(($mastered / $participants) * 100, 1) : null;
@@ -355,7 +408,7 @@ function paper_analysis(int $assessmentId, int $classId, int $threshold, string 
                 'status' => $rate === null ? 'no_results' : ($rate >= $threshold ? 'mastered' : 'not_mastered'),
             ];
         }
-        return ['skillRows' => $skills, 'studentRows' => [], 'summary' => [
+        return ['questionRows' => [], 'skillRows' => $skills, 'studentRows' => [], 'summary' => [
             'totalStudents' => (int) (fetch_one("SELECT COUNT(*) AS n FROM students WHERE class_id=? AND status='active' AND deleted_at IS NULL", [$classId])['n'] ?? 0),
             'registered' => 0,
             'submitted' => 0,
@@ -366,7 +419,6 @@ function paper_analysis(int $assessmentId, int $classId, int $threshold, string 
         ]];
     }
 
-    $questions = paper_question_rows($assessmentId);
     $questionMap = [];
     foreach ($questions as $question) $questionMap[(int) $question['id']] = $question;
     $students = fetch_all("SELECT id,name FROM students WHERE class_id=? AND status='active' AND deleted_at IS NULL ORDER BY name,id", [$classId]);
@@ -382,6 +434,20 @@ function paper_analysis(int $assessmentId, int $classId, int $threshold, string 
         }
     }
     $skillGroups = [];
+    $questionGroups = [];
+    foreach ($questions as $question) {
+        $questionGroups[(int) $question['id']] = [
+            'questionId' => (int) $question['id'],
+            'number' => (string) $question['question_number'],
+            'skillId' => $question['skill_id'] === null ? null : (int) $question['skill_id'],
+            'skillName' => (string) $question['skill_name_snapshot'],
+            'maxPoints' => (float) $question['max_points'],
+            'participants' => 0,
+            'masteredStudents' => 0,
+            'earned' => 0.0,
+            'possible' => 0.0,
+        ];
+    }
     $studentRows = [];
     $counts = ['registered' => 0, 'submitted' => 0, 'approved' => 0, 'pending' => 0, 'returned' => 0];
     foreach ($students as $student) {
@@ -400,6 +466,12 @@ function paper_analysis(int $assessmentId, int $classId, int $threshold, string 
                 $earned = min((float) $question['max_points'], max(0, (float) $answers[$questionId]));
                 $possible = (float) $question['max_points'];
                 $earnedTotal += $earned; $possibleTotal += $possible;
+                if ($status === 'approved') {
+                    $questionGroups[$questionId]['participants']++;
+                    $questionGroups[$questionId]['earned'] += $earned;
+                    $questionGroups[$questionId]['possible'] += $possible;
+                    if (paper_percent($earned, $possible) >= $threshold) $questionGroups[$questionId]['masteredStudents']++;
+                }
                 $skillId = (int) ($question['skill_id'] ?? 0);
                 $skillKey = $skillId > 0 ? (string) $skillId : 'snapshot:' . (string) $question['skill_name_snapshot'];
                 if (!isset($skillTotals[$skillKey])) $skillTotals[$skillKey] = ['skillId' => $skillId ?: null, 'skillName' => (string) $question['skill_name_snapshot'], 'earned' => 0.0, 'possible' => 0.0, 'questions' => 0];
@@ -432,6 +504,22 @@ function paper_analysis(int $assessmentId, int $classId, int $threshold, string 
             'returnNote' => $submission['return_note'] ?? null,
         ];
     }
+    $questionRows = array_map(static function (array $group) use ($threshold): array {
+        $performance = $group['possible'] > 0 ? paper_percent($group['earned'], $group['possible']) : null;
+        return [
+            'questionId' => $group['questionId'],
+            'number' => $group['number'],
+            'skillId' => $group['skillId'],
+            'skillName' => $group['skillName'],
+            'maxPoints' => paper_number($group['maxPoints']),
+            'participants' => $group['participants'],
+            'masteredStudents' => $group['masteredStudents'],
+            'earned' => paper_number($group['earned']),
+            'possible' => paper_number($group['possible']),
+            'masteryPercent' => $performance,
+            'status' => $performance === null ? 'no_results' : ($performance >= $threshold ? 'mastered' : 'not_mastered'),
+        ];
+    }, array_values($questionGroups));
     foreach ($questions as $question) {
         $skillId = (int) ($question['skill_id'] ?? 0);
         $skillKey = $skillId > 0 ? (string) $skillId : 'snapshot:' . (string) $question['skill_name_snapshot'];
@@ -450,7 +538,7 @@ function paper_analysis(int $assessmentId, int $classId, int $threshold, string 
         ];
     }
     usort($skillRows, static fn(array $a, array $b): int => strcmp($a['skillName'], $b['skillName']));
-    return ['skillRows' => $skillRows, 'studentRows' => $studentRows, 'summary' => [
+    return ['questionRows' => $questionRows, 'skillRows' => $skillRows, 'studentRows' => $studentRows, 'summary' => [
         'totalStudents' => count($students),
         'registered' => $counts['registered'],
         'submitted' => $counts['submitted'],
@@ -473,8 +561,150 @@ function paper_teacher_show(int $teacherId, int $assessmentId): never
         'id' => (int) $row['id'], 'skillId' => $row['skill_id'] === null ? null : (int) $row['skill_id'], 'skillName' => (string) $row['skill_name_snapshot'],
         'participants' => (int) $row['participant_count'], 'mastered' => (int) $row['mastered_count'], 'sortOrder' => (int) $row['sort_order'],
     ], paper_summary_rows($assessmentId));
-    $analysis = paper_analysis($assessmentId, (int) $assessment['class_id'], (int) $assessment['mastery_threshold'], (string) $assessment['collection_mode']);
-    Http::json(['migrationReady' => true, 'assessment' => paper_assessment_row($assessment), 'questions' => $questions, 'skills' => $skills, 'analysis' => $analysis]);
+    $analysis = paper_analysis($assessmentId, (int) $assessment['class_id'], (int) $assessment['mastery_threshold'], (string) $assessment['collection_mode'], (string) $assessment['workflow_status']);
+    $gradebook = (string) $assessment['collection_mode'] === 'teacher_aggregate' && $questions
+        ? paper_gradebook_data($assessmentId, (int) $assessment['class_id'])
+        : null;
+    $sourceFiles = paper_source_files_schema_ready() ? array_map(static fn(array $row): array => [
+        'id' => (int) $row['id'],
+        'name' => (string) $row['original_name'],
+        'mimeType' => (string) $row['mime_type'],
+        'sizeBytes' => (int) $row['size_bytes'],
+        'createdAt' => (string) $row['created_at'],
+        'url' => "/api/teacher/attachments/paper/{$assessmentId}/source-files/" . (int) $row['id'],
+    ], paper_source_file_rows($assessmentId)) : [];
+    Http::json([
+        'migrationReady' => true,
+        'sourceFileReady' => paper_source_files_schema_ready(),
+        'sourceFileMigration' => PAPER_ASSESSMENT_SOURCE_FILES_MIGRATION,
+        'assessment' => paper_assessment_row($assessment),
+        'questions' => $questions,
+        'skills' => $skills,
+        'gradebook' => $gradebook,
+        'sourceFiles' => $sourceFiles,
+        'analysis' => $analysis,
+    ]);
+}
+
+function paper_validate_answer_map(array $rawAnswers, array $questions, bool $requireComplete): array
+{
+    $questionMap = [];
+    foreach ($questions as $question) $questionMap[(int) $question['id']] = (float) $question['max_points'];
+    if (!$questionMap) Http::json(['error' => 'لا توجد أسئلة في هذا الاختبار.'], 409);
+    $answers = [];
+    foreach ($rawAnswers as $questionKey => $rawValue) {
+        $questionId = max(0, (int) $questionKey);
+        if ($questionId < 1 || !isset($questionMap[$questionId])) Http::json(['error' => 'إحدى الدرجات مرتبطة بسؤال لا يتبع الاختبار.'], 422);
+        if ($rawValue === '' || $rawValue === null) continue;
+        if (!is_numeric($rawValue)) Http::json(['error' => 'إحدى الدرجات ليست قيمة رقمية صالحة.'], 422);
+        $earned = round((float) $rawValue, 2);
+        if ($earned < 0 || $earned > $questionMap[$questionId]) Http::json(['error' => 'إحدى الدرجات أقل من صفر أو تتجاوز الدرجة العظمى للسؤال.'], 422);
+        $answers[$questionId] = $earned;
+    }
+    if ($requireComplete && count($answers) !== count($questionMap)) Http::json(['error' => 'أدخلي درجة لكل سؤال، ويمكن أن تكون الدرجة صفرًا.'], 422);
+    return $answers;
+}
+
+function paper_teacher_gradebook_rows(array $data, array $assessment, bool $requireComplete): array
+{
+    $questions = paper_question_rows((int) $assessment['id']);
+    $students = fetch_all("SELECT id,name FROM students WHERE class_id=? AND status='active' AND deleted_at IS NULL ORDER BY name,id", [(int) $assessment['class_id']]);
+    $studentMap = [];
+    foreach ($students as $student) $studentMap[(int) $student['id']] = (string) $student['name'];
+    $rawRows = is_array($data['rows'] ?? null) ? array_values($data['rows']) : [];
+    if (!$rawRows && $requireComplete) Http::json(['error' => 'أدخلي درجات طالبات الفصل قبل الاعتماد.'], 422);
+    if (count($rawRows) > count($studentMap)) Http::json(['error' => 'عدد صفوف الدرجات يتجاوز عدد طالبات الفصل.'], 422);
+    $rows = [];
+    foreach ($rawRows as $rawRow) {
+        if (!is_array($rawRow)) Http::json(['error' => 'أحد صفوف الدرجات غير صالح.'], 422);
+        $studentId = max(0, (int) ($rawRow['studentId'] ?? 0));
+        if ($studentId < 1 || !isset($studentMap[$studentId])) Http::json(['error' => 'إحدى الطالبات لا تتبع الفصل المحدد.'], 422);
+        if (isset($rows[$studentId])) Http::json(['error' => 'لا يمكن تكرار الطالبة في جدول الدرجات.'], 422);
+        $rawAnswers = is_array($rawRow['answers'] ?? null) ? $rawRow['answers'] : [];
+        $rows[$studentId] = [
+            'studentId' => $studentId,
+            'studentName' => $studentMap[$studentId],
+            'answers' => paper_validate_answer_map($rawAnswers, $questions, $requireComplete),
+        ];
+    }
+    if ($requireComplete && count($rows) !== count($studentMap)) Http::json(['error' => 'يجب إدخال درجات جميع طالبات الفصل قبل اعتماد النتائج.'], 422);
+    return array_values($rows);
+}
+
+function paper_teacher_save_gradebook(int $teacherId, int $assessmentId, bool $approve): never
+{
+    if (!paper_assessments_schema_ready()) Http::json(paper_migration_payload(), 409);
+    $assessment = paper_teacher_owned_assessment($teacherId, $assessmentId);
+    if ((string) $assessment['collection_mode'] !== 'teacher_aggregate') Http::json(['error' => 'جدول المعلمة متاح لاختبارات إدخال المعلمة فقط.'], 409);
+    if ((string) $assessment['workflow_status'] !== 'draft') Http::json(['error' => 'النتائج معتمدة ومقفلة ولا يمكن تعديلها.'], 409);
+    if (!paper_question_rows($assessmentId)) Http::json(['error' => 'هذا اختبار مجمع قديم ولا يحتوي أسئلة قابلة لإدخال الدرجات.'], 409);
+    $data = Http::input();
+    $rows = paper_teacher_gradebook_rows($data, $assessment, $approve);
+    try {
+        Database::transaction(function (PDO $pdo) use ($assessmentId, $teacherId, $rows, $approve): void {
+            $locked = $pdo->prepare("SELECT workflow_status FROM teacher_paper_assessments WHERE id=? AND teacher_id=? AND collection_mode='teacher_aggregate' AND deleted_at IS NULL FOR UPDATE");
+            $locked->execute([$assessmentId, $teacherId]);
+            $assessmentRow = $locked->fetch();
+            if (!$assessmentRow || (string) $assessmentRow['workflow_status'] !== 'draft') throw new RuntimeException('gradebook_locked');
+            $upsert = $pdo->prepare("INSERT INTO teacher_paper_assessment_submissions (assessment_id,student_id,student_name_snapshot,status,submitted_at,reviewed_at,return_note) VALUES (?,?,?,'draft',NULL,NULL,NULL) ON DUPLICATE KEY UPDATE student_name_snapshot=VALUES(student_name_snapshot),updated_at=NOW()");
+            $findSubmission = $pdo->prepare('SELECT id,status FROM teacher_paper_assessment_submissions WHERE assessment_id=? AND student_id=? FOR UPDATE');
+            $deleteAnswers = $pdo->prepare('DELETE FROM teacher_paper_assessment_answers WHERE submission_id=?');
+            $insertAnswer = $pdo->prepare('INSERT INTO teacher_paper_assessment_answers (submission_id,question_id,earned_points) VALUES (?,?,?)');
+            $submissionIds = [];
+            foreach ($rows as $row) {
+                $upsert->execute([$assessmentId, $row['studentId'], $row['studentName']]);
+                $findSubmission->execute([$assessmentId, $row['studentId']]);
+                $submission = $findSubmission->fetch();
+                if (!$submission || (string) $submission['status'] !== 'draft') throw new RuntimeException('gradebook_locked');
+                $submissionId = (int) $submission['id'];
+                $submissionIds[] = $submissionId;
+                $deleteAnswers->execute([$submissionId]);
+                foreach ($row['answers'] as $questionId => $earned) $insertAnswer->execute([$submissionId, $questionId, $earned]);
+            }
+            if ($approve) {
+                if (!$submissionIds) throw new RuntimeException('gradebook_incomplete');
+                $marks = implode(',', array_fill(0, count($submissionIds), '?'));
+                $pdo->prepare("UPDATE teacher_paper_assessment_submissions SET status='approved',submitted_at=COALESCE(submitted_at,NOW()),reviewed_at=NOW(),return_note=NULL,updated_at=NOW() WHERE assessment_id=? AND id IN ({$marks})")
+                    ->execute(array_merge([$assessmentId], $submissionIds));
+                $pdo->prepare("UPDATE teacher_paper_assessments SET workflow_status='closed',updated_at=NOW() WHERE id=? AND teacher_id=? AND workflow_status='draft'")
+                    ->execute([$assessmentId, $teacherId]);
+            }
+        });
+    } catch (RuntimeException $error) {
+        if ($error->getMessage() === 'gradebook_locked') Http::json(['error' => 'جدول الدرجات مقفل أو تغيّرت حالته. أعيدي فتح الاختبار.'], 409);
+        if ($error->getMessage() === 'gradebook_incomplete') Http::json(['error' => 'جدول الدرجات غير مكتمل ولا يمكن اعتماده.'], 422);
+        throw $error;
+    }
+    Activity::log('teacher', $teacherId, $approve ? 'اعتماد درجات اختبار ورقي' : 'حفظ درجات اختبار ورقي', "الاختبار {$assessmentId}");
+    Http::json(['ok' => true, 'status' => $approve ? 'closed' : 'draft', 'savedStudents' => count($rows)]);
+}
+
+function paper_teacher_submission_update_grades(int $teacherId, int $assessmentId, int $submissionId): never
+{
+    if (!paper_assessments_schema_ready()) Http::json(paper_migration_payload(), 409);
+    $submission = paper_teacher_owned_submission($teacherId, $assessmentId, $submissionId);
+    if ((string) $submission['collection_mode'] !== 'student_entry') Http::json(['error' => 'مراجعة تسليم الطالبة متاحة لاختبارات إدخال الطالبة فقط.'], 409);
+    if ((string) $submission['status'] !== 'submitted') Http::json(['error' => 'يمكن تعديل نتيجة بانتظار المراجعة فقط.'], 409);
+    $data = Http::input();
+    $rawAnswers = is_array($data['answers'] ?? null) ? $data['answers'] : [];
+    $answers = paper_validate_answer_map($rawAnswers, paper_question_rows($assessmentId), true);
+    try {
+        Database::transaction(function (PDO $pdo) use ($submissionId, $answers): void {
+            $locked = $pdo->prepare("SELECT status FROM teacher_paper_assessment_submissions WHERE id=? FOR UPDATE");
+            $locked->execute([$submissionId]);
+            $row = $locked->fetch();
+            if (!$row || (string) $row['status'] !== 'submitted') throw new RuntimeException('submission_locked');
+            $pdo->prepare('DELETE FROM teacher_paper_assessment_answers WHERE submission_id=?')->execute([$submissionId]);
+            $insert = $pdo->prepare('INSERT INTO teacher_paper_assessment_answers (submission_id,question_id,earned_points) VALUES (?,?,?)');
+            foreach ($answers as $questionId => $earned) $insert->execute([$submissionId, $questionId, $earned]);
+            $pdo->prepare('UPDATE teacher_paper_assessment_submissions SET updated_at=NOW() WHERE id=?')->execute([$submissionId]);
+        });
+    } catch (RuntimeException $error) {
+        if ($error->getMessage() === 'submission_locked') Http::json(['error' => 'تغيّرت حالة النتيجة ولم تعد قابلة للتعديل.'], 409);
+        throw $error;
+    }
+    Activity::log('teacher', $teacherId, 'تعديل درجات نتيجة اختبار ورقي', "الاختبار {$assessmentId} · الطالبة " . (int) $submission['student_id']);
+    Http::json(['ok' => true, 'status' => 'submitted', 'savedAnswers' => count($answers)]);
 }
 
 function paper_teacher_workflow(int $teacherId, int $assessmentId, string $action): never
@@ -493,6 +723,7 @@ function paper_teacher_workflow(int $teacherId, int $assessmentId, string $actio
     }
     if ($action === 'close') {
         if ($mode === 'teacher_aggregate' && $current !== 'draft') Http::json(['error' => 'النتائج المجمعة معتمدة بالفعل.'], 409);
+        if ($mode === 'teacher_aggregate' && paper_question_rows($assessmentId)) Http::json(['error' => 'اعتمدي الدرجات من جدول الطالبات بعد اكتمال جميع الأسئلة.'], 409);
         if ($mode === 'student_entry' && $current !== 'open') Http::json(['error' => 'الاختبار غير مفتوح حاليًا.'], 409);
         execute_sql("UPDATE teacher_paper_assessments SET workflow_status='closed',updated_at=NOW() WHERE id=? AND teacher_id=?", [$assessmentId,$teacherId]);
         Activity::log('teacher',$teacherId,$mode === 'teacher_aggregate' ? 'اعتماد نتائج اختبار ورقي مجمعة' : 'إغلاق اختبار ورقي',"الاختبار {$assessmentId}");
@@ -505,11 +736,8 @@ function paper_teacher_workflow(int $teacherId, int $assessmentId, string $actio
         Http::json(['ok' => true, 'status' => 'open']);
     }
     if ($action === 'delete') {
-        if ($current !== 'draft') Http::json(['error' => 'يمكن حذف المسودة فقط. أغلقي الاختبار المنشور للاحتفاظ بالسجل.'], 409);
-        $submissions = (int) (fetch_one('SELECT COUNT(*) AS n FROM teacher_paper_assessment_submissions WHERE assessment_id=?', [$assessmentId])['n'] ?? 0);
-        if ($submissions > 0) Http::json(['error' => 'لا يمكن حذف اختبار يحتوي على تسجيلات طالبات.'], 409);
         execute_sql('UPDATE teacher_paper_assessments SET deleted_at=NOW(),updated_at=NOW() WHERE id=? AND teacher_id=?', [$assessmentId,$teacherId]);
-        Activity::log('teacher',$teacherId,'حذف مسودة اختبار ورقي',"الاختبار {$assessmentId}");
+        Activity::log('teacher',$teacherId,'حذف اختبار ورقي',"الاختبار {$assessmentId}");
         Http::json(['ok' => true]);
     }
     Http::json(['error' => 'إجراء الاختبار غير معروف.'], 404);
@@ -518,7 +746,7 @@ function paper_teacher_workflow(int $teacherId, int $assessmentId, string $actio
 function paper_teacher_owned_submission(int $teacherId, int $assessmentId, int $submissionId): array
 {
     $row = fetch_one(
-        'SELECT su.*,p.teacher_id,p.class_id,p.title,p.mastery_threshold,p.workflow_status,
+        'SELECT su.*,p.teacher_id,p.class_id,p.title,p.mastery_threshold,p.workflow_status,p.collection_mode,
                 COALESCE(s.name,su.student_name_snapshot) AS current_student_name
          FROM teacher_paper_assessment_submissions su
          JOIN teacher_paper_assessments p ON p.id=su.assessment_id AND p.deleted_at IS NULL
@@ -533,6 +761,69 @@ function paper_teacher_owned_submission(int $teacherId, int $assessmentId, int $
 function paper_file_rows(int $submissionId): array
 {
     return fetch_all('SELECT id,submission_id,student_id,original_name,mime_type,size_bytes,created_at FROM teacher_paper_assessment_files WHERE submission_id=? AND deleted_at IS NULL ORDER BY created_at,id', [$submissionId]);
+}
+
+function paper_source_file_rows(int $assessmentId): array
+{
+    if (!paper_source_files_schema_ready()) return [];
+    return fetch_all('SELECT id,assessment_id,original_name,stored_name,mime_type,size_bytes,sha256,created_at FROM teacher_paper_assessment_source_files WHERE assessment_id=? AND deleted_at IS NULL ORDER BY created_at,id', [$assessmentId]);
+}
+
+function paper_teacher_upload_source_files(int $teacherId, int $assessmentId): never
+{
+    if (!paper_source_files_schema_ready()) Http::json([
+        'error' => 'رفع ورقة الاختبار يحتاج تشغيل ملف الترحيل الاختياري.',
+        'migrationFile' => PAPER_ASSESSMENT_SOURCE_FILES_MIGRATION,
+    ], 409);
+    $assessment = paper_teacher_owned_assessment($teacherId, $assessmentId);
+    if ((string) $assessment['workflow_status'] !== 'draft') Http::json(['error' => 'لا يمكن تغيير ورقة اختبار معتمد أو منشور.'], 409);
+    $prepared = paper_prepare_files(paper_uploaded_files());
+    if (!$prepared) Http::json(['error' => 'اختاري صورة أو ملف PDF لورقة الاختبار.'], 422);
+    $existing = fetch_one('SELECT COUNT(*) AS n,COALESCE(SUM(size_bytes),0) AS total_bytes FROM teacher_paper_assessment_source_files WHERE assessment_id=? AND deleted_at IS NULL', [$assessmentId]) ?: [];
+    if ((int) ($existing['n'] ?? 0) + count($prepared) > PAPER_ASSESSMENT_MAX_FILES) Http::json(['error' => 'لا يمكن أن يتجاوز مجموع ملفات ورقة الاختبار خمسة ملفات.'], 422);
+    if ((int) ($existing['total_bytes'] ?? 0) + array_sum(array_column($prepared, 'size')) > PAPER_ASSESSMENT_MAX_TOTAL_BYTES) Http::json(['error' => 'لا يمكن أن يتجاوز مجموع ملفات ورقة الاختبار 20 ميجابايت.'], 422);
+    $moved = [];
+    try {
+        Database::transaction(function (PDO $pdo) use ($assessmentId, $prepared, &$moved): void {
+            $directory = paper_storage_directory();
+            $insert = $pdo->prepare('INSERT INTO teacher_paper_assessment_source_files (assessment_id,original_name,stored_name,mime_type,size_bytes,sha256) VALUES (?,?,?,?,?,?)');
+            foreach ($prepared as $file) {
+                $path = $directory . '/' . $file['stored'];
+                if (!move_uploaded_file($file['tmp_name'], $path)) throw new RuntimeException('move_failed');
+                $moved[] = $path;
+                $insert->execute([$assessmentId, $file['original'], $file['stored'], $file['mime'], $file['size'], $file['sha256']]);
+            }
+        });
+    } catch (Throwable $error) {
+        foreach ($moved as $path) if (is_file($path)) @unlink($path);
+        if ($error instanceof RuntimeException && $error->getMessage() === 'move_failed') Http::json(['error' => 'تعذّر حفظ ملف ورقة الاختبار.'], 500);
+        throw $error;
+    }
+    Activity::log('teacher', $teacherId, 'رفع ورقة اختبار ورقي', "الاختبار {$assessmentId}");
+    Http::json(['ok' => true, 'uploaded' => count($prepared)]);
+}
+
+function paper_teacher_delete_source_file(int $teacherId, int $assessmentId, int $fileId): never
+{
+    if (!paper_source_files_schema_ready()) Http::json(['error' => 'ملفات ورقة الاختبار غير مفعلة.'], 409);
+    $assessment = paper_teacher_owned_assessment($teacherId, $assessmentId);
+    if ((string) $assessment['workflow_status'] !== 'draft') Http::json(['error' => 'لا يمكن حذف ورقة اختبار معتمد أو منشور.'], 409);
+    $row = fetch_one('SELECT * FROM teacher_paper_assessment_source_files WHERE id=? AND assessment_id=? AND deleted_at IS NULL', [$fileId, $assessmentId]);
+    if (!$row) Http::json(['error' => 'ملف ورقة الاختبار غير موجود.'], 404);
+    execute_sql('UPDATE teacher_paper_assessment_source_files SET deleted_at=NOW() WHERE id=? AND assessment_id=?', [$fileId, $assessmentId]);
+    $path = paper_storage_directory() . '/' . basename((string) $row['stored_name']);
+    if (is_file($path)) @unlink($path);
+    Activity::log('teacher', $teacherId, 'حذف ملف ورقة اختبار ورقي', "الاختبار {$assessmentId}");
+    Http::json(['ok' => true]);
+}
+
+function paper_teacher_source_file(int $teacherId, int $assessmentId, int $fileId): never
+{
+    if (!paper_source_files_schema_ready()) Http::json(['error' => 'ملفات ورقة الاختبار غير مفعلة.'], 409);
+    paper_teacher_owned_assessment($teacherId, $assessmentId);
+    $row = fetch_one('SELECT * FROM teacher_paper_assessment_source_files WHERE id=? AND assessment_id=? AND deleted_at IS NULL', [$fileId, $assessmentId]);
+    if (!$row) Http::json(['error' => 'ملف ورقة الاختبار غير موجود.'], 404);
+    paper_send_file($row, isset($_GET['download']));
 }
 
 function paper_teacher_submission_show(int $teacherId, int $assessmentId, int $submissionId): never
@@ -612,8 +903,12 @@ function paper_teacher_bulk_approve(int $teacherId, int $assessmentId): never
 function paper_student_context(int $studentId): array
 {
     $student = fetch_one(
-        "SELECT s.id,s.name,s.class_id,s.status,s.deleted_at,c.teacher_id,c.name AS class_name,c.stage,c.grade_label,c.academic_year
-         FROM students s JOIN classes c ON c.id=s.class_id WHERE s.id=? AND s.status='active' AND s.deleted_at IS NULL",
+        "SELECT s.id,s.name,s.class_id,s.status,s.deleted_at,c.teacher_id,c.name AS class_name,c.stage,c.grade_label,c.academic_year,
+                COALESCE(NULLIF(TRIM(settings.academic_year),''),c.academic_year) AS current_academic_year
+         FROM students s
+         JOIN classes c ON c.id=s.class_id
+         LEFT JOIN teacher_school_settings settings ON settings.teacher_id=c.teacher_id
+         WHERE s.id=? AND s.status='active' AND s.deleted_at IS NULL",
         [$studentId]
     );
     if (!$student) Http::json(['error' => 'حساب الطالبة أو الفصل غير متاح.'], 404);
@@ -625,8 +920,8 @@ function paper_student_owned_assessment(int $studentId, int $assessmentId): arra
     $student = paper_student_context($studentId);
     $row = fetch_one(
         "SELECT p.*,c.name AS class_name FROM teacher_paper_assessments p JOIN classes c ON c.id=p.class_id
-         WHERE p.id=? AND p.class_id=? AND p.collection_mode='student_entry' AND p.deleted_at IS NULL",
-        [$assessmentId,(int) $student['class_id']]
+         WHERE p.id=? AND p.class_id=? AND p.academic_year=? AND p.collection_mode='student_entry' AND p.deleted_at IS NULL",
+        [$assessmentId,(int) $student['class_id'],(string)$student['current_academic_year']]
     );
     if (!$row) Http::json(['error' => 'الاختبار الورقي غير متاح لحسابكِ.'], 404);
     return [$student,$row];
@@ -652,10 +947,10 @@ function paper_student_list(int $studentId): never
                 (SELECT COUNT(*) FROM teacher_paper_assessment_questions q WHERE q.assessment_id=p.id) AS question_count
          FROM teacher_paper_assessments p JOIN classes c ON c.id=p.class_id
          LEFT JOIN teacher_paper_assessment_submissions su ON su.assessment_id=p.id AND su.student_id=?
-         WHERE p.class_id=? AND p.collection_mode='student_entry' AND p.deleted_at IS NULL
+         WHERE p.class_id=? AND p.academic_year=? AND p.collection_mode='student_entry' AND p.deleted_at IS NULL
            AND (p.workflow_status IN ('open','closed') OR su.id IS NOT NULL)
          ORDER BY p.assessment_date DESC,p.id DESC",
-        [$studentId,(int) $student['class_id']]
+        [$studentId,(int) $student['class_id'],(string)$student['current_academic_year']]
     );
     $assessments = [];
     foreach ($rows as $row) {
@@ -929,13 +1224,24 @@ function teacher_paper_assessment_routes(string $method,array $segments,int $tea
         $assessmentId = (int)$first;
         $second = $segments[1] ?? '';
         if ($second === '' && $method === 'GET') paper_teacher_show($teacherId,$assessmentId);
+        if ($second === 'grades' && $method === 'POST') paper_teacher_save_gradebook($teacherId,$assessmentId,false);
+        if (in_array($second,['approve-grades','approve-results'],true) && $method === 'POST') paper_teacher_save_gradebook($teacherId,$assessmentId,true);
         if (in_array($second,['publish','close','reopen','delete'],true) && $method === 'POST') paper_teacher_workflow($teacherId,$assessmentId,$second);
         if ($second === 'approve-bulk' && $method === 'POST') paper_teacher_bulk_approve($teacherId,$assessmentId);
         if ($second === 'submissions' && isset($segments[2]) && ctype_digit((string)$segments[2])) {
             $submissionId = (int)$segments[2];
             $action = $segments[3] ?? '';
             if ($action === '' && $method === 'GET') paper_teacher_submission_show($teacherId,$assessmentId,$submissionId);
+            if ($action === 'grades' && $method === 'POST') paper_teacher_submission_update_grades($teacherId,$assessmentId,$submissionId);
             if (in_array($action,['approve','return','reopen'],true) && $method === 'POST') paper_teacher_submission_action($teacherId,$assessmentId,$submissionId,$action);
+        }
+        if ($second === 'source-files') {
+            if (!isset($segments[2]) && $method === 'POST') paper_teacher_upload_source_files($teacherId,$assessmentId);
+            if (isset($segments[2]) && ctype_digit((string)$segments[2])) {
+                $fileId = (int)$segments[2];
+                if (($segments[3] ?? '') === 'delete' && $method === 'POST') paper_teacher_delete_source_file($teacherId,$assessmentId,$fileId);
+                if (($segments[3] ?? '') === '' && $method === 'GET') paper_teacher_source_file($teacherId,$assessmentId,$fileId);
+            }
         }
         if ($second === 'files' && isset($segments[2]) && ctype_digit((string)$segments[2]) && $method === 'GET') paper_teacher_file($teacherId,$assessmentId,(int)$segments[2]);
     }

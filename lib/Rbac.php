@@ -80,6 +80,7 @@ final class Rbac
         'parent.follow_up.view' => ['عرض الحضور والمتابعة والواجبات للأبناء', 'صلاحيات ولي الأمر'],
         'parent.files.view' => ['عرض ملفات وموارد الأبناء', 'صلاحيات ولي الأمر'],
         'parent.community.view' => ['عرض مجمع مدار لأولياء الأمور', 'صلاحيات ولي الأمر'],
+        'parent.community.post' => ['نشر مشاركة في مجمع مدار', 'صلاحيات ولي الأمر'],
     ];
 
     private static bool $schemaEnsured = false;
@@ -150,7 +151,7 @@ final class Rbac
             self::ADMIN => ['dashboard.view','users.view','teachers.manage','students.manage','tests.view','analytics.view','files.manage','print.use','export.use'],
             self::TEACHER => ['dashboard.view','students.manage','parents.manage','parent_community.manage','content.manage','question_bank.manage','ai_question_bank.manage','tests.view','tests.manage','attempts.manage','grades.manage','analytics.view','files.manage','school_settings.manage','academic_period.manage','print.use','export.use'],
             self::STUDENT => ['dashboard.view','student.profile.use','student.tests.use','student.results.view','student.points.view','student.files.use','student.games.use'],
-            self::PARENT => ['dashboard.view','parent.children.view','parent.results.view','parent.points.view','parent.analytics.view','parent.follow_up.view','parent.files.view','parent.community.view'],
+            self::PARENT => ['dashboard.view','parent.children.view','parent.results.view','parent.points.view','parent.analytics.view','parent.follow_up.view','parent.files.view','parent.community.view','parent.community.post'],
         ];
         $rp = $pdo->prepare('INSERT IGNORE INTO rbac_role_permissions(role_code,permission_code) VALUES(?,?)');
         foreach ($defaults as $role => $permissions) foreach ($permissions as $permission) $rp->execute([$role,$permission]);

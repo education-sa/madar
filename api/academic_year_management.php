@@ -356,6 +356,7 @@ function academic_available_years(string $currentYear = ''): array
     $sources = [
         ['academic_year_periods', 'academic_year'],
         ['tests', 'academic_year'],
+        ['teacher_paper_assessments', 'academic_year'],
         ['follow_up_settings', 'academic_year'],
         ['student_follow_up', 'academic_year'],
         ['weekly_attendance', 'academic_year'],
@@ -372,8 +373,25 @@ function academic_available_years(string $currentYear = ''): array
             if ($year !== '') $years[$year] = true;
         }
     }
+    if (academic_db_table_exists('game_attempts') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+        $scope = academic_game_attempt_year_scope();
+        $attemptYears = fetch_all(
+            'SELECT DISTINCT scoped.attempt_year AS academic_year FROM ('
+            . 'SELECT ' . $scope['expression'] . ' AS attempt_year '
+            . 'FROM game_attempts a JOIN students s ON s.id=a.student_id JOIN classes c ON c.id=s.class_id '
+            . $scope['publicationJoin']
+            . ') scoped WHERE scoped.attempt_year IS NOT NULL AND TRIM(scoped.attempt_year)<>\'\''
+        );
+        foreach ($attemptYears as $row) {
+            $year = trim((string)($row['academic_year'] ?? ''));
+            if ($year !== '') $years[$year] = true;
+        }
+    }
     if ($currentYear !== '') $years[$currentYear] = true;
-    $result = array_keys($years);
+    // PHP converts numeric-string array keys (for example "1446") to integers.
+    // Keep academic years as strings so the strict return types and comparisons
+    // used by the settings endpoint remain valid.
+    $result = array_map('strval', array_keys($years));
     usort($result, static function (string $a, string $b): int {
         $na = (int) preg_replace('/\D+/', '', $a);
         $nb = (int) preg_replace('/\D+/', '', $b);
@@ -384,7 +402,10 @@ function academic_available_years(string $currentYear = ''): array
 
 function academic_default_previous_year(string $currentYear, array $available): string
 {
-    foreach ($available as $year) if ($year !== '' && $year !== $currentYear) return $year;
+    foreach ($available as $year) {
+        $year = (string) $year;
+        if ($year !== '' && $year !== $currentYear) return $year;
+    }
     return '';
 }
 
@@ -407,6 +428,30 @@ function academic_count_query(string $sql, array $params = []): int
     return (int) (fetch_one($sql, $params)['n'] ?? 0);
 }
 
+/**
+ * يعيد ربط محاولة اللعبة بعامها من نشر اللعبة أو اللقطة المحفوظة.
+ * المحاولات القديمة جدًا التي سبقت حفظ العام تُنسب إلى عام فصل الطالبة.
+ */
+function academic_game_attempt_year_scope(): array
+{
+    $publicationJoin = '';
+    $publicationYear = 'NULL';
+    if (academic_db_table_exists('interactive_game_publications') && academic_db_column_exists('game_attempts','publication_id')) {
+        $publicationJoin = ' LEFT JOIN interactive_game_publications publication ON publication.id=a.publication_id ';
+        $publicationYear = "NULLIF(TRIM(publication.academic_year),'')";
+    }
+    $snapshotYear = 'NULL';
+    $snapshotSettingsYear = 'NULL';
+    if (academic_db_column_exists('game_attempts','game_snapshot_json')) {
+        $snapshotYear = "NULLIF(NULLIF(TRIM(CASE WHEN JSON_VALID(a.game_snapshot_json) THEN JSON_UNQUOTE(JSON_EXTRACT(a.game_snapshot_json,'$.context.academicYear')) END),''),'null')";
+        $snapshotSettingsYear = "NULLIF(NULLIF(TRIM(CASE WHEN JSON_VALID(a.game_snapshot_json) THEN JSON_UNQUOTE(JSON_EXTRACT(a.game_snapshot_json,'$.settings.academic_year')) END),''),'null')";
+    }
+    return [
+        'expression'=>"COALESCE({$publicationYear},{$snapshotYear},{$snapshotSettingsYear},NULLIF(TRIM(c.academic_year),''))",
+        'publicationJoin'=>$publicationJoin,
+    ];
+}
+
 function academic_normalize_reset_selection(array $selectedItems): array
 {
     $selection = [];
@@ -415,6 +460,7 @@ function academic_normalize_reset_selection(array $selectedItems): array
         'followUp' => true,
         'weekly' => true,
         'documents' => true,
+        'games' => true,
         'learningStyle' => true,
         'motivation' => true,
         'notifications' => true,
@@ -440,6 +486,14 @@ function academic_reset_counts(string $targetYear): array
         'studentAnalyses' => 0,
         'questionAnalyses' => 0,
         'skillAnalyses' => 0,
+        'paperAssessments' => 0,
+        'paperQuestions' => 0,
+        'paperSubmissions' => 0,
+        'paperAnswers' => 0,
+        'paperFiles' => 0,
+        'gameAttempts' => 0,
+        'gameAttemptAnswers' => 0,
+        'gameAttemptSkills' => 0,
         'followUpRecords' => 0,
         'weeklyAcademicRecords' => 0,
         'documents' => 0,
@@ -463,6 +517,67 @@ function academic_reset_counts(string $targetYear): array
         $counts['studentAnalyses'] = academic_count_query("SELECT COUNT(DISTINCT a.student_id) AS n FROM test_attempts a JOIN tests t ON t.id=a.test_id WHERE t.academic_year=? AND a.status IN ('submitted','graded')", [$targetYear]);
         $counts['questionAnalyses'] = $counts['answers'];
         $counts['skillAnalyses'] = academic_count_query('SELECT COUNT(DISTINCT COALESCE(aq.skill_id,tq.skill_id)) AS n FROM answers x JOIN test_attempts a ON a.id=x.attempt_id JOIN tests t ON t.id=a.test_id LEFT JOIN test_attempt_questions aq ON aq.id=x.attempt_question_id LEFT JOIN test_questions tq ON tq.id=x.question_id WHERE t.academic_year=? AND COALESCE(aq.skill_id,tq.skill_id) IS NOT NULL', [$targetYear]);
+    }
+    if (academic_db_table_exists('teacher_paper_assessments')) {
+        $counts['paperAssessments'] = academic_count_query(
+            'SELECT COUNT(*) AS n FROM teacher_paper_assessments WHERE academic_year=?',
+            [$targetYear]
+        );
+        if (academic_db_table_exists('teacher_paper_assessment_questions')) {
+            $counts['paperQuestions'] = academic_count_query(
+                'SELECT COUNT(*) AS n FROM teacher_paper_assessment_questions q JOIN teacher_paper_assessments p ON p.id=q.assessment_id WHERE p.academic_year=?',
+                [$targetYear]
+            );
+        }
+        if (academic_db_table_exists('teacher_paper_assessment_submissions')) {
+            $counts['paperSubmissions'] = academic_count_query(
+                'SELECT COUNT(*) AS n FROM teacher_paper_assessment_submissions s JOIN teacher_paper_assessments p ON p.id=s.assessment_id WHERE p.academic_year=?',
+                [$targetYear]
+            );
+        }
+        if (academic_db_table_exists('teacher_paper_assessment_answers') && academic_db_table_exists('teacher_paper_assessment_submissions')) {
+            $counts['paperAnswers'] = academic_count_query(
+                'SELECT COUNT(*) AS n FROM teacher_paper_assessment_answers a JOIN teacher_paper_assessment_submissions s ON s.id=a.submission_id JOIN teacher_paper_assessments p ON p.id=s.assessment_id WHERE p.academic_year=?',
+                [$targetYear]
+            );
+        }
+        if (academic_db_table_exists('teacher_paper_assessment_files') && academic_db_table_exists('teacher_paper_assessment_submissions')) {
+            $submissionFiles = academic_count_query(
+                'SELECT COUNT(*) AS n FROM teacher_paper_assessment_files f JOIN teacher_paper_assessment_submissions s ON s.id=f.submission_id JOIN teacher_paper_assessments p ON p.id=s.assessment_id WHERE p.academic_year=?',
+                [$targetYear]
+            );
+            $counts['paperFiles'] += $submissionFiles;
+            $counts['physicalFiles'] += $submissionFiles;
+        }
+        if (academic_db_table_exists('teacher_paper_assessment_source_files')) {
+            $sourceFiles = academic_count_query(
+                'SELECT COUNT(*) AS n FROM teacher_paper_assessment_source_files f JOIN teacher_paper_assessments p ON p.id=f.assessment_id WHERE p.academic_year=?',
+                [$targetYear]
+            );
+            $counts['paperFiles'] += $sourceFiles;
+            $counts['physicalFiles'] += $sourceFiles;
+        }
+    }
+    if (academic_db_table_exists('game_attempts') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+        $scope = academic_game_attempt_year_scope();
+        $from = ' FROM game_attempts a JOIN students s ON s.id=a.student_id JOIN classes c ON c.id=s.class_id '
+            . $scope['publicationJoin'];
+        $where = ' WHERE ' . $scope['expression'] . '=?';
+        $counts['gameAttempts'] = academic_count_query('SELECT COUNT(*) AS n' . $from . $where,[$targetYear]);
+        if (academic_db_table_exists('interactive_game_attempt_answers')) {
+            $counts['gameAttemptAnswers'] = academic_count_query(
+                'SELECT COUNT(*) AS n FROM interactive_game_attempt_answers detail JOIN game_attempts a ON a.id=detail.attempt_id JOIN students s ON s.id=a.student_id JOIN classes c ON c.id=s.class_id '
+                . $scope['publicationJoin'] . $where,
+                [$targetYear]
+            );
+        }
+        if (academic_db_table_exists('interactive_game_attempt_skills')) {
+            $counts['gameAttemptSkills'] = academic_count_query(
+                'SELECT COUNT(*) AS n FROM interactive_game_attempt_skills detail JOIN game_attempts a ON a.id=detail.attempt_id JOIN students s ON s.id=a.student_id JOIN classes c ON c.id=s.class_id '
+                . $scope['publicationJoin'] . $where,
+                [$targetYear]
+            );
+        }
     }
     if (academic_db_table_exists('student_follow_up')) $counts['followUpRecords'] += academic_count_query('SELECT COUNT(*) AS n FROM student_follow_up WHERE academic_year=?', [$targetYear]);
     if (academic_db_table_exists('follow_up_settings')) $counts['followUpRecords'] += academic_count_query('SELECT COUNT(*) AS n FROM follow_up_settings WHERE academic_year=?', [$targetYear]);
@@ -508,7 +623,7 @@ function academic_reset_counts(string $targetYear): array
         );
     }
     $counts['totalDatabaseRecords'] = array_sum(array_intersect_key($counts, array_flip([
-        'tests','testModels','questionDistributions','attempts','answers','followUpRecords','weeklyAcademicRecords','documents','studentFiles','activityRecords','learningStyleCampaigns','learningStyleResults','motivationPoints','notifications','remedialPlans'
+        'tests','testModels','questionDistributions','attempts','answers','paperAssessments','paperQuestions','paperSubmissions','paperAnswers','paperFiles','gameAttempts','gameAttemptAnswers','gameAttemptSkills','followUpRecords','weeklyAcademicRecords','documents','studentFiles','activityRecords','learningStyleCampaigns','learningStyleResults','motivationPoints','notifications','remedialPlans'
     ])));
     return $counts;
 }
@@ -679,10 +794,11 @@ function owner_academic_backup(int $ownerId): never
     }
 }
 
-function academic_target_files(string $targetYear): array
+function academic_target_files(string $targetYear, array $selectedItems = []): array
 {
     $files = [];
-    if (academic_db_table_exists('knowledge_resources') && academic_db_column_exists('knowledge_resources', 'academic_year')) {
+    $selectedSet = array_fill_keys($selectedItems,true);
+    if (isset($selectedSet['documents']) && academic_db_table_exists('knowledge_resources') && academic_db_column_exists('knowledge_resources', 'academic_year')) {
         foreach (fetch_all("SELECT stored_name FROM knowledge_resources WHERE academic_year=? AND resource_type='file' AND stored_name IS NOT NULL", [$targetYear]) as $row) {
             $stored = (string) ($row['stored_name'] ?? '');
             if (preg_match('/^[a-f0-9]{40}\.(?:pdf|jpg|png|webp|gif|avif|heic|heif)$/', $stored)) {
@@ -690,11 +806,36 @@ function academic_target_files(string $targetYear): array
             }
         }
     }
-    if (academic_db_table_exists('student_portfolio_files') && academic_db_column_exists('student_portfolio_files', 'academic_year')) {
+    if (isset($selectedSet['documents']) && academic_db_table_exists('student_portfolio_files') && academic_db_column_exists('student_portfolio_files', 'academic_year')) {
         foreach (fetch_all('SELECT stored_name FROM student_portfolio_files WHERE academic_year=? AND stored_name IS NOT NULL', [$targetYear]) as $row) {
             $stored = (string) ($row['stored_name'] ?? '');
             if (preg_match('/^[a-f0-9]{40}\.(?:pdf|jpg|png|webp|gif|avif|heic|heif)$/', $stored)) {
                 $files[] = ['path' => MADAR_ROOT . '/storage/private/student-portfolios/' . $stored, 'relative' => 'student-portfolios/' . $stored];
+            }
+        }
+    }
+    if (isset($selectedSet['tests']) && academic_db_table_exists('teacher_paper_assessments')) {
+        $paperDirectory = MADAR_ROOT . '/storage/private/paper-assessment-submissions/';
+        if (academic_db_table_exists('teacher_paper_assessment_files') && academic_db_table_exists('teacher_paper_assessment_submissions')) {
+            foreach (fetch_all(
+                'SELECT f.stored_name FROM teacher_paper_assessment_files f JOIN teacher_paper_assessment_submissions s ON s.id=f.submission_id JOIN teacher_paper_assessments p ON p.id=s.assessment_id WHERE p.academic_year=? AND f.stored_name IS NOT NULL',
+                [$targetYear]
+            ) as $row) {
+                $stored = (string)($row['stored_name'] ?? '');
+                if (preg_match('/^[a-f0-9]{48}\.(?:pdf|jpg|png|webp)$/',$stored)) {
+                    $files[] = ['path'=>$paperDirectory.$stored,'relative'=>'paper-assessment-submissions/'.$stored];
+                }
+            }
+        }
+        if (academic_db_table_exists('teacher_paper_assessment_source_files')) {
+            foreach (fetch_all(
+                'SELECT f.stored_name FROM teacher_paper_assessment_source_files f JOIN teacher_paper_assessments p ON p.id=f.assessment_id WHERE p.academic_year=? AND f.stored_name IS NOT NULL',
+                [$targetYear]
+            ) as $row) {
+                $stored = (string)($row['stored_name'] ?? '');
+                if (preg_match('/^[a-f0-9]{48}\.(?:pdf|jpg|png|webp)$/',$stored)) {
+                    $files[] = ['path'=>$paperDirectory.$stored,'relative'=>'paper-assessment-submissions/'.$stored];
+                }
             }
         }
     }
@@ -790,7 +931,7 @@ function owner_academic_reset_execute(int $ownerId): never
         $operationId = (int) $pdo->lastInsertId();
 
         if (!mkdir($quarantine, 0750, true) && !is_dir($quarantine)) throw new RuntimeException('تعذّر تجهيز مساحة الحذف المؤقتة.');
-        foreach (academic_target_files($target) as $item) {
+        foreach (academic_target_files($target,$selectedItems) as $item) {
             if (!is_file($item['path'])) continue;
             $destination = $quarantine . '/' . $item['relative'];
             $directory = dirname($destination);
@@ -830,6 +971,23 @@ function owner_academic_reset_execute(int $ownerId): never
                     $transaction->prepare('DELETE a FROM learning_style_assessments a JOIN learning_style_campaigns c ON c.id=a.campaign_id WHERE c.academic_year=?')->execute([$target]);
                 }
                 $transaction->prepare('DELETE FROM learning_style_campaigns WHERE academic_year=?')->execute([$target]);
+            }
+            if (isset($selectedSet['games']) && academic_db_table_exists('game_attempts') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
+                $scope = academic_game_attempt_year_scope();
+                $attemptIds = 'SELECT a.id FROM game_attempts a JOIN students s ON s.id=a.student_id JOIN classes c ON c.id=s.class_id '
+                    . $scope['publicationJoin'] . ' WHERE ' . $scope['expression'] . '=?';
+                if (academic_db_table_exists('interactive_game_attempt_answers')) {
+                    $transaction->prepare("DELETE FROM interactive_game_attempt_answers WHERE attempt_id IN ({$attemptIds})")
+                        ->execute([$target]);
+                }
+                if (academic_db_table_exists('interactive_game_attempt_skills')) {
+                    $transaction->prepare("DELETE FROM interactive_game_attempt_skills WHERE attempt_id IN ({$attemptIds})")
+                        ->execute([$target]);
+                }
+                $transaction->prepare(
+                    'DELETE a FROM game_attempts a JOIN students s ON s.id=a.student_id JOIN classes c ON c.id=s.class_id '
+                    . $scope['publicationJoin'] . ' WHERE ' . $scope['expression'] . '=?'
+                )->execute([$target]);
             }
             if (isset($selectedSet['motivation']) && academic_db_table_exists('motivational_points') && academic_db_table_exists('students') && academic_db_table_exists('classes')) {
                 $transaction->prepare(
@@ -877,6 +1035,11 @@ function owner_academic_reset_execute(int $ownerId): never
             }
             if (isset($selectedSet['tests']) && academic_db_table_exists('tests')) {
                 $transaction->prepare('DELETE FROM tests WHERE academic_year=?')->execute([$target]);
+            }
+            // الاختبارات الورقية جزء من خيار «الاختبارات» نفسه. حذف السجل الرئيس
+            // يحذف الأسئلة والتسليمات والإجابات التابعة له عبر قيود CASCADE.
+            if (isset($selectedSet['tests']) && academic_db_table_exists('teacher_paper_assessments')) {
+                $transaction->prepare('DELETE FROM teacher_paper_assessments WHERE academic_year=?')->execute([$target]);
             }
 
             if (isset($selectedSet['tests'])) {

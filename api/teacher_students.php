@@ -148,16 +148,21 @@ function teacher_students_routes(string $method, array $segments, int $teacherId
     if (($segments[1] ?? '') === 'reset-password' && $method === 'PUT') {
         $data=Http::input();
         Http::requireFields($data,['newPassword']);
-        Auth::validatePassword((string)$data['newPassword']);
-        execute_sql('UPDATE students SET password_hash=?,must_change_password=1 WHERE id=?',[password_hash((string)$data['newPassword'],PASSWORD_DEFAULT),$studentId]);
-        Activity::log('teacher',$teacherId,'إعادة تعيين كلمة مرور طالبة',"الطالبة رقم {$studentId}");
+        $password=(string)$data['newPassword']; if (($data['confirmPassword']??$password) !== $password) Http::json(['error'=>'كلمتا المرور غير متطابقتين.'],422); if (mb_strlen($password)<10 || !preg_match('/\p{L}/u',$password) || !preg_match('/\p{N}/u',$password)) Http::json(['error'=>'كلمة المرور يجب أن تكون 10 أحرف على الأقل وتحتوي حرفًا ورقمًا.'],422);
+        execute_sql('UPDATE students SET password_hash=? WHERE id=?',[password_hash($password,PASSWORD_DEFAULT),$studentId]);
+        Activity::log('teacher',$teacherId,'تغيير كلمة مرور طالبة',"الطالبة رقم {$studentId}");
         Http::json(['ok'=>true]);
     }
     if ($method === 'PUT') {
         teacher_update_student($teacherId,$studentId);
     }
     if ($method === 'DELETE') {
-        Http::json(['error'=>'حذف حسابات المستخدمين متاح لمالك الموقع فقط. يمكنكِ تعديل بيانات الطالبة أو التواصل مع مالكة الموقع لتعطيل الحساب.'],403);
+        execute_sql(
+            "UPDATE students SET status='disabled',deleted_at=NOW() WHERE id=? AND deleted_at IS NULL",
+            [$studentId]
+        );
+        Activity::log('teacher',$teacherId,'حذف طالبة مؤقتًا',"الطالبة رقم {$studentId}");
+        Http::json(['ok'=>true,'softDeleted'=>true]);
     }
     Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
 }

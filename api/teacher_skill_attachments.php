@@ -1153,7 +1153,7 @@ function teacher_attachments_export_print(int $teacherId): never
     exit;
 }
 
-function teacher_skill_assessment_context_data(int $teacherId): array
+function teacher_skill_assessment_context_data(int $teacherId, bool $includeAllTeacherClasses = false): array
 {
     $scope = teacher_attachments_scope($teacherId);
     $settings = fetch_one('SELECT subject_name,academic_year,current_semester FROM teacher_school_settings WHERE teacher_id=?', [$teacherId]);
@@ -1164,9 +1164,11 @@ function teacher_skill_assessment_context_data(int $teacherId): array
     );
     $classes = [];
     foreach ($classRows as $class) {
-        if ($scope['stage'] !== '' && (string) $class['stage'] !== $scope['stage']) continue;
-        if (!teacher_attachments_grade_matches((string) $class['stage'], (string) $class['grade_label'], $scope['gradeLabel'])) continue;
-        if ($scope['academicYear'] !== '' && (string) $class['academic_year'] !== $scope['academicYear'] && (string) ($settings['academic_year'] ?? '') !== $scope['academicYear']) continue;
+        if (!$includeAllTeacherClasses) {
+            if ($scope['stage'] !== '' && (string) $class['stage'] !== $scope['stage']) continue;
+            if (!teacher_attachments_grade_matches((string) $class['stage'], (string) $class['grade_label'], $scope['gradeLabel'])) continue;
+            if ($scope['academicYear'] !== '' && (string) $class['academic_year'] !== $scope['academicYear'] && (string) ($settings['academic_year'] ?? '') !== $scope['academicYear']) continue;
+        }
         $classes[] = teacher_analysis_option($class['id'], (string) $class['name'], [
             'stage' => (string) $class['stage'],
             'gradeLabel' => (string) $class['grade_label'],

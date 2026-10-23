@@ -10,6 +10,7 @@ function interactive_game_catalog(): array
     return [
         'percentage-challenge' => [
             'gameKey' => 'percentage-challenge',
+            'name' => 'تحدي النسبة المئوية',
             'playPath' => '/games/percentage/percentage.html',
         ],
     ];
@@ -53,6 +54,22 @@ function interactive_games_missing_columns(): array
 function interactive_games_schema_ready(): bool
 {
     return interactive_games_table_exists() && interactive_games_missing_columns() === [];
+}
+
+function interactive_games_has_column(string $column): bool
+{
+    static $columns = null;
+    if ($columns === null) {
+        if (!interactive_games_table_exists()) return false;
+        $rows = fetch_all(
+            "SELECT COLUMN_NAME AS schema_column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='teacher_interactive_games'"
+        );
+        $columns = array_fill_keys(array_map(
+            static fn(array $row): string => strtolower((string) $row['schema_column_name']),
+            $rows
+        ), true);
+    }
+    return isset($columns[strtolower($column)]);
 }
 
 function interactive_games_publication_missing_columns(): array
@@ -189,7 +206,10 @@ function interactive_game_select_columns(): string
     $publicationColumns = interactive_games_publication_schema_ready()
         ? ',semester,class_id'
         : ',NULL AS semester,NULL AS class_id';
-    return 'id,teacher_id,game_key,lesson_name,unit_number,lesson_number,stage,grade_label'
+    $nameColumn = interactive_games_has_column('name') ? ',name' : ',NULL AS name';
+    return 'id,teacher_id,game_key'
+        . $nameColumn
+        . ',lesson_name,unit_number,lesson_number,stage,grade_label'
         . $publicationColumns
         . ',time_mode,time_per_question_seconds,certificate_portfolio_enabled,is_active,created_at,updated_at';
 }
@@ -215,11 +235,16 @@ function interactive_game_is_configured(?array $row): bool
 function interactive_game_json(string $gameKey, ?array $row): array
 {
     $catalog = interactive_game_catalog()[$gameKey] ?? [
+        'name' => '',
         'playPath' => $row && !empty($row['id']) ? '/games/game-player.php?game=' . (int)$row['id'] : '',
     ];
     $configured = interactive_game_is_configured($row);
+    $storedName = trim((string) ($row['name'] ?? ''));
+    $gameName = $storedName !== '' ? $storedName : trim((string) ($catalog['name'] ?? ''));
     return [
         'gameKey' => $gameKey,
+        'name' => $gameName,
+        'nameEditable' => interactive_games_has_column('name'),
         'playPath' => $catalog['playPath'],
         'exists' => $row !== null,
         'configured' => $configured,
@@ -348,6 +373,8 @@ function teacher_interactive_games_routes(string $method, array $segments, int $
         Http::json(interactive_game_json($gameKey, interactive_game_row($teacherId, $gameKey)));
     } else {
         interactive_games_require_publication_schema();
+        $catalogGameName = interactive_game_catalog()[$gameKey]['name'] ?? 'لعبة تفاعلية';
+        $gameName = academic_clean_text($data['name'] ?? ($current['name'] ?? $catalogGameName), 190, 'اسم اللعبة', true);
         $lessonName = academic_clean_text($data['lessonName'] ?? '', 190, 'اسم درس اللعبة', true);
         $unitNumber = interactive_game_positive_int($data['unitNumber'] ?? null);
         $lessonNumber = interactive_game_positive_int($data['lessonNumber'] ?? null);
@@ -382,13 +409,23 @@ function teacher_interactive_games_routes(string $method, array $segments, int $
         }
     }
 
-    execute_sql(
-        'INSERT INTO teacher_interactive_games
-         (teacher_id,game_key,lesson_name,unit_number,lesson_number,stage,grade_label,semester,class_id,time_mode,time_per_question_seconds,certificate_portfolio_enabled,is_active)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-         ON DUPLICATE KEY UPDATE lesson_name=VALUES(lesson_name),unit_number=VALUES(unit_number),lesson_number=VALUES(lesson_number),stage=VALUES(stage),grade_label=VALUES(grade_label),semester=VALUES(semester),class_id=VALUES(class_id),time_mode=VALUES(time_mode),time_per_question_seconds=VALUES(time_per_question_seconds),certificate_portfolio_enabled=VALUES(certificate_portfolio_enabled),is_active=VALUES(is_active)',
-        [$teacherId, $gameKey, $lessonName, $unitNumber, $lessonNumber, $stage, $gradeLabel, $semester, $classId, $timeMode, $timeSeconds, $certificateEnabled ? 1 : 0, $isActive ? 1 : 0]
-    );
-    Activity::log('teacher', $teacherId, 'تحديث لعبة تفاعلية', $gameKey . ' · ' . $lessonName);
+    if (interactive_games_has_column('name')) {
+        execute_sql(
+            'INSERT INTO teacher_interactive_games
+             (teacher_id,game_key,name,lesson_name,unit_number,lesson_number,stage,grade_label,semester,class_id,time_mode,time_per_question_seconds,certificate_portfolio_enabled,is_active)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             ON DUPLICATE KEY UPDATE name=VALUES(name),lesson_name=VALUES(lesson_name),unit_number=VALUES(unit_number),lesson_number=VALUES(lesson_number),stage=VALUES(stage),grade_label=VALUES(grade_label),semester=VALUES(semester),class_id=VALUES(class_id),time_mode=VALUES(time_mode),time_per_question_seconds=VALUES(time_per_question_seconds),certificate_portfolio_enabled=VALUES(certificate_portfolio_enabled),is_active=VALUES(is_active)',
+            [$teacherId, $gameKey, $gameName, $lessonName, $unitNumber, $lessonNumber, $stage, $gradeLabel, $semester, $classId, $timeMode, $timeSeconds, $certificateEnabled ? 1 : 0, $isActive ? 1 : 0]
+        );
+    } else {
+        execute_sql(
+            'INSERT INTO teacher_interactive_games
+             (teacher_id,game_key,lesson_name,unit_number,lesson_number,stage,grade_label,semester,class_id,time_mode,time_per_question_seconds,certificate_portfolio_enabled,is_active)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+             ON DUPLICATE KEY UPDATE lesson_name=VALUES(lesson_name),unit_number=VALUES(unit_number),lesson_number=VALUES(lesson_number),stage=VALUES(stage),grade_label=VALUES(grade_label),semester=VALUES(semester),class_id=VALUES(class_id),time_mode=VALUES(time_mode),time_per_question_seconds=VALUES(time_per_question_seconds),certificate_portfolio_enabled=VALUES(certificate_portfolio_enabled),is_active=VALUES(is_active)',
+            [$teacherId, $gameKey, $lessonName, $unitNumber, $lessonNumber, $stage, $gradeLabel, $semester, $classId, $timeMode, $timeSeconds, $certificateEnabled ? 1 : 0, $isActive ? 1 : 0]
+        );
+    }
+    Activity::log('teacher', $teacherId, 'تحديث لعبة تفاعلية', $gameKey . ' · ' . $gameName . ' · ' . $lessonName);
     Http::json(interactive_game_json($gameKey, interactive_game_row($teacherId, $gameKey)), $current ? 200 : 201);
 }

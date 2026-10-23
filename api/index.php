@@ -54,10 +54,14 @@ try {
     require_once __DIR__ . '/academic_year_management.php';
     require_once __DIR__ . '/interactive_games.php';
     require_once __DIR__ . '/interactive_game_builder.php';
+    require_once __DIR__ . '/planning_content.php';
     require_once __DIR__ . '/game_sessions.php';
     require_once __DIR__ . '/learning_styles.php';
+    require_once __DIR__ . '/parent_community_media.php';
     require_once __DIR__ . '/parent_portal.php';
     require_once __DIR__ . '/platform_enhancements.php';
+    require_once __DIR__ . '/announcements.php';
+    require_once __DIR__ . '/live_competitions.php';
     require_once __DIR__ . '/teacher_routes.php';
     require_once __DIR__ . '/student_routes.php';
     require_once __DIR__ . '/owner_rbac.php';

@@ -260,15 +260,24 @@ function teacher_publish_test(int $teacherId,int $testId,bool $publish): never
 
 function teacher_duplicate_test(int $teacherId,int $testId): never
 {
-    $newId=Database::transaction(function(PDO $pdo) use($teacherId,$testId): int {
+    $data=Http::input();
+    $requestedTitle=trim((string)($data['title']??''));
+    $requestedType=trim((string)($data['type']??''));
+    $validTypes=['pre_diagnostic','post_diagnostic','quiz'];
+    if ($requestedType!==''&&!in_array($requestedType,$validTypes,true)) Http::json(['error'=>'نوع الاختبار غير صالح.'],422);
+    $newId=Database::transaction(function(PDO $pdo) use($teacherId,$testId,$requestedTitle,$requestedType): int {
         $test=fetch_one('SELECT * FROM tests WHERE id=? AND teacher_id=?',[$testId,$teacherId]);
+        $copyTitle=$requestedTitle!==''?$requestedTitle:trim((string)$test['title']).' (نسخة)';
+        $copyType=$requestedType!==''?$requestedType:(string)$test['test_type'];
         $stmt=$pdo->prepare("INSERT INTO tests (teacher_id,class_id,skill_id,title,test_type,question_source,bank_stage,bank_grade_label,bank_term_label,bank_import_batch,bank_skill_ids_json,expected_lesson_count,status,duration_minutes,max_attempts,shuffle_questions,show_result,total_points,academic_year,semester) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'draft',?,?,?,?,?,?,?)");
-        $stmt->execute([$teacherId,$test['class_id'],$test['skill_id'],$test['title'].' (نسخة)',$test['test_type'],$test['question_source'],$test['bank_stage'],$test['bank_grade_label'],$test['bank_term_label'],$test['bank_import_batch'],$test['bank_skill_ids_json'],$test['expected_lesson_count'],$test['duration_minutes'],$test['max_attempts'],$test['shuffle_questions'],$test['show_result'],$test['total_points'],$test['academic_year'],$test['semester']]);
+        $stmt->execute([$teacherId,$test['class_id'],$test['skill_id'],$copyTitle,$copyType,$test['question_source'],$test['bank_stage'],$test['bank_grade_label'],$test['bank_term_label'],$test['bank_import_batch'],$test['bank_skill_ids_json'],$test['expected_lesson_count'],$test['duration_minutes'],$test['max_attempts'],$test['shuffle_questions'],$test['show_result'],$test['total_points'],$test['academic_year'],$test['semester']]);
         $id=(int)$pdo->lastInsertId();
         $pdo->prepare('INSERT INTO test_questions (test_id,bank_question_id,skill_id,question_type,question_text,options_json,correct_answer,explanation,points,order_index) SELECT ?,bank_question_id,skill_id,question_type,question_text,options_json,correct_answer,explanation,points,order_index FROM test_questions WHERE test_id=?')->execute([$id,$testId]);
         return $id;
     });
-    Http::json(['id'=>$newId],201);
+    $copy=fetch_one('SELECT id,title,test_type AS type FROM tests WHERE id=? AND teacher_id=?',[$newId,$teacherId]);
+    Activity::log('teacher',$teacherId,'تكرار اختبار',(string)($copy['title']??"الاختبار رقم {$newId}"));
+    Http::json($copy?:['id'=>$newId],201);
 }
 
 function teacher_test_results(int $testId): never
@@ -482,24 +491,51 @@ function teacher_create_diagnostic_test_from_bank(int $teacherId): never
     $termAliases=teacher_diagnostic_term_aliases($termLabel);
     $termPlaceholders=implode(',',array_fill(0,count($termAliases),'?'));
     $skills=fetch_all("SELECT s.id,s.name,s.code,s.stage,s.grade_label,
-            COUNT(q.id) AS approved_questions
+            SUM(CASE WHEN q.review_status='approved' THEN 1 ELSE 0 END) AS approved_questions,
+            SUM(CASE WHEN q.review_status='pending' THEN 1 ELSE 0 END) AS pending_questions
         FROM skills s
-        LEFT JOIN question_bank q ON q.skill_id=s.id AND q.teacher_id=? AND q.review_status='approved' AND q.is_active=1
-            AND q.term_label IN ({$termPlaceholders}) AND q.lesson_code IS NOT NULL AND q.lesson_code<>''
+        LEFT JOIN question_bank q ON q.skill_id=s.id AND q.teacher_id=? AND q.is_active=1
+            AND q.term_label IN ({$termPlaceholders})
         WHERE s.id IN ({$placeholders})
         GROUP BY s.id,s.name,s.code,s.stage,s.grade_label",[$teacherId,...$termAliases,...$skillIds]);
     $skillMap=[];
     foreach($skills as $skill) $skillMap[(int)$skill['id']]=$skill;
-    $unknown=[];$missing=[];
+    $unknown=[];$missing=[];$pending=[];$pendingSkillIds=[];
     foreach($skillIds as $skillId) {
         if (!isset($skillMap[$skillId])) {$unknown[]=$skillId;continue;}
         $skillStage=teacher_diagnostic_normalized_stage((string)$skillMap[$skillId]['stage']);
         $skillGrade=teacher_diagnostic_normalized_grade($skillStage,(string)$skillMap[$skillId]['grade_label']);
         if ($skillStage!==$wantedStage||$skillGrade!==$wantedGrade) {$unknown[]=$skillId;continue;}
-        if ((int)$skillMap[$skillId]['approved_questions']<1) $missing[]=(string)$skillMap[$skillId]['name'];
+        if ((int)$skillMap[$skillId]['approved_questions']<1) {
+            if ((int)$skillMap[$skillId]['pending_questions']>0) {
+                $pending[]=(string)$skillMap[$skillId]['name'];
+                $pendingSkillIds[]=$skillId;
+            } else {
+                $missing[]=(string)$skillMap[$skillId]['name'];
+            }
+        }
     }
     if ($unknown) Http::json(['error'=>'بعض المهارات المحددة لا تنتمي إلى المرحلة والصف المختارين.'],422);
-    if ($missing) Http::json(['error'=>'لا توجد أسئلة معتمدة لهذه المهارات: '.implode('، ',$missing).'. اعتمدي سؤالًا واحدًا على الأقل لكل مهارة أولًا.','missingSkills'=>$missing],422);
+    if ($missing) Http::json([
+        'error'=>'لا توجد أسئلة صالحة لهذه المهارات: '.implode('، ',$missing).'. أضيفي سؤالًا واحدًا على الأقل لكل مهارة أولًا.',
+        'missingSkills'=>$missing,
+        'pendingSkills'=>$pending,
+    ],422);
+
+    $approvePending=($data['approvePending']??false)===true;
+    if ($pending&&!$approvePending) Http::json([
+        'error'=>'توجد أسئلة لهذه المهارات لكنها بانتظار الاعتماد: '.implode('، ',$pending).'.',
+        'requiresApproval'=>true,
+        'pendingSkills'=>$pending,
+    ],409);
+    if ($pending&&$approvePending) {
+        $pendingPlaceholders=implode(',',array_fill(0,count($pendingSkillIds),'?'));
+        execute_sql("UPDATE question_bank SET review_status='approved',status='approved'
+            WHERE teacher_id=? AND is_active=1 AND review_status='pending'
+              AND term_label IN ({$termPlaceholders}) AND skill_id IN ({$pendingPlaceholders})",
+            [$teacherId,...$termAliases,...$pendingSkillIds]);
+        Activity::log('teacher',$teacherId,'اعتماد أسئلة المهارات قبل إنشاء الاختبار',implode('، ',$pending));
+    }
 
     $school=teacher_school_settings_row($teacherId);
     $semester=(string)($school['current_semester']??'first');

@@ -91,12 +91,14 @@
 }
 .analysis-workspace__view{min-height:35px;border-color:transparent;background:transparent;}
 .analysis-workspace__view.is-active{color:#fff;background:var(--analysis-teal);box-shadow:0 3px 9px rgba(31,157,145,.19);}
+.analysis-workspace__view-note{padding:4px 7px;color:#286a64;font-size:.75rem;font-weight:800;line-height:1.55;}
 
 .analysis-workspace__filters{padding:19px 21px;border:1px solid var(--analysis-line);}
 .analysis-workspace__section-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:15px;}
 .analysis-workspace__section-heading h2{margin:0;color:var(--purple-950,#45206c);font-size:1rem;}
 .analysis-workspace__section-heading p{max-width:350px;margin:0;color:var(--analysis-muted);font-size:.78rem;line-height:1.7;}
 .analysis-workspace__filter-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;}
+.analysis-workspace__academic-filters{display:contents;}
 .analysis-workspace__filter{display:grid;gap:6px;min-width:0;color:#5a4a69;font-size:.78rem;font-weight:800;}
 .analysis-workspace__filter select{
   width:100%;
@@ -166,6 +168,70 @@
 .analysis-workspace button:focus-visible,
 .analysis-workspace select:focus-visible{outline:3px solid rgba(31,157,145,.28);outline-offset:2px;}
 
+body>[inert],.analysis-workspace[inert]{pointer-events:none;user-select:none;}
+.analysis-print-dialog-backdrop{
+  position:fixed;
+  inset:0;
+  z-index:1200;
+  display:grid;
+  place-items:center;
+  padding:20px;
+  background:rgba(31,23,45,.58);
+}
+.analysis-print-dialog{
+  width:min(560px,100%);
+  max-height:min(680px,calc(100vh - 40px));
+  overflow:auto;
+  border:1px solid #d8cce4;
+  border-radius:16px;
+  padding:22px;
+  color:#302640;
+  background:#fff;
+  box-shadow:0 24px 70px rgba(26,17,39,.26);
+  direction:rtl;
+}
+.analysis-print-dialog__header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;border-bottom:1px solid #e4dceb;padding-bottom:16px;}
+.analysis-print-dialog__header>div{min-width:0;}
+.analysis-print-dialog__header span{display:block;margin-bottom:3px;color:#1f7f76;font-size:.76rem;font-weight:900;}
+.analysis-print-dialog__header h2{margin:0;color:#4d246e;font-size:1.2rem;}
+.analysis-print-dialog__header p{margin:6px 0 0;color:#6d6377;font-size:.8rem;line-height:1.7;}
+.analysis-print-dialog__close{
+  flex:0 0 auto;
+  width:36px;
+  height:36px;
+  border:1px solid #ded5e5;
+  border-radius:9px;
+  color:#594966;
+  background:#faf8fc;
+  font:700 1.25rem/1 Tajawal,"Segoe UI",Tahoma,sans-serif;
+  cursor:pointer;
+}
+.analysis-print-dialog__choices{display:grid;gap:9px;margin-top:16px;}
+.analysis-print-dialog__choice{
+  display:grid;
+  gap:3px;
+  width:100%;
+  border:1px solid #ddd3e8;
+  border-right:4px solid #6b3fa0;
+  border-radius:11px;
+  padding:12px 14px;
+  color:#33263f;
+  background:#fff;
+  font:inherit;
+  text-align:right;
+  cursor:pointer;
+  transition:border-color .16s ease,background .16s ease,transform .16s ease;
+}
+.analysis-print-dialog__choice:first-child{border-right-color:#1f9d91;background:#f8fdfc;}
+.analysis-print-dialog__choice:hover{border-color:#a98bc8;background:#faf7fd;transform:translateY(-1px);}
+.analysis-print-dialog__choice strong{color:#4d246e;font-size:.88rem;}
+.analysis-print-dialog__choice span{color:#6b6075;font-size:.75rem;line-height:1.55;}
+.analysis-print-dialog__choice:disabled,.analysis-print-dialog__close:disabled{cursor:wait;opacity:.55;}
+.analysis-print-dialog__choice:focus-visible,.analysis-print-dialog__close:focus-visible{outline:3px solid rgba(31,157,145,.3);outline-offset:2px;}
+.analysis-print-dialog__status{min-height:1.5em;margin:14px 0 0;color:#6b6075;font-size:.78rem;font-weight:800;}
+.analysis-print-dialog__status.is-loading{color:#6b3fa0;}
+.analysis-print-dialog__status.is-error{color:#a13636;}
+
 @media (max-width:1080px){
   .analysis-workspace__filter-grid{grid-template-columns:repeat(3,minmax(150px,1fr));}
   .analysis-workspace__summary{grid-template-columns:repeat(3,minmax(0,1fr));}
@@ -189,4 +255,6 @@
   .analysis-workspace__view-toggle{width:100%;}
   .analysis-workspace__view{flex:1 1 0;}
   .analysis-workspace__summary{grid-template-columns:1fr 1fr;}
+  .analysis-print-dialog-backdrop{align-items:end;padding:10px;}
+  .analysis-print-dialog{max-height:calc(100vh - 20px);border-radius:14px;padding:17px;}
 }

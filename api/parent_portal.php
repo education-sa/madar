@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/parent_community_media.php';
+
 /**
  * بوابة ولي الأمر وإدارة حساباته من لوحة المعلمة.
  * جميع الاستعلامات مقيدة إما بهوية ولي الأمر أو بفصول المعلمة.
@@ -194,8 +196,13 @@ function teacher_parent_access(int $teacherId, int $parentId): array
 {
     ensure_parent_portal_schema();
     $own = (int)(fetch_one(
-        'SELECT COUNT(*) AS n FROM parent_student_links l JOIN students s ON s.id=l.student_id JOIN classes c ON c.id=s.class_id WHERE l.parent_id=? AND l.status=\'active\' AND c.teacher_id=?',
-        [$parentId,$teacherId]
+        "SELECT COUNT(*) AS n
+         FROM parent_student_links l
+         JOIN students s ON s.id=l.student_id
+         LEFT JOIN classes c ON c.id=s.class_id
+         WHERE l.parent_id=? AND l.status='active'
+           AND (l.linked_by_teacher=? OR (l.linked_by_teacher IS NULL AND c.teacher_id=?))",
+        [$parentId,$teacherId,$teacherId]
     )['n'] ?? 0);
     $total = (int)(fetch_one(
         "SELECT COUNT(*) AS n FROM parent_student_links WHERE parent_id=? AND status='active'",
@@ -208,13 +215,14 @@ function teacher_parent_json(int $teacherId, array $row): array
 {
     $parentId = (int)$row['id'];
     $children = fetch_all(
-        "SELECT s.id,s.name,s.email,s.stage,s.grade_label,c.name AS class_name
+        "SELECT s.id,s.name,s.email,s.stage,s.grade_label,c.name AS class_name,s.deleted_at
          FROM parent_student_links l
          JOIN students s ON s.id=l.student_id
-         JOIN classes c ON c.id=s.class_id
-         WHERE l.parent_id=? AND l.status='active' AND c.teacher_id=?
+         LEFT JOIN classes c ON c.id=s.class_id
+         WHERE l.parent_id=? AND l.status='active'
+           AND (l.linked_by_teacher=? OR (l.linked_by_teacher IS NULL AND c.teacher_id=?))
          ORDER BY c.name,s.name",
-        [$parentId,$teacherId]
+        [$parentId,$teacherId,$teacherId]
     );
     $access = teacher_parent_access($teacherId,$parentId);
     return [
@@ -229,6 +237,7 @@ function teacher_parent_json(int $teacherId, array $row): array
             'stage'=>(string)$child['stage'],
             'gradeLabel'=>(string)($child['grade_label']??''),
             'className'=>(string)($child['class_name']??''),
+            'deleted'=>$child['deleted_at'] !== null,
         ],$children),
         'sharedWithOtherTeachers'=>!$access['exclusive'],
     ];
@@ -242,10 +251,11 @@ function teacher_parent_accounts_payload(int $teacherId): array
          FROM platform_users p
          JOIN parent_student_links l ON l.parent_id=p.id AND l.status='active'
          JOIN students s ON s.id=l.student_id
-         JOIN classes c ON c.id=s.class_id
-         WHERE p.role_code='PARENT' AND p.deleted_at IS NULL AND c.teacher_id=?
+         LEFT JOIN classes c ON c.id=s.class_id
+         WHERE p.role_code='PARENT' AND p.deleted_at IS NULL
+           AND (l.linked_by_teacher=? OR (l.linked_by_teacher IS NULL AND c.teacher_id=?))
          ORDER BY p.name",
-        [$teacherId]
+        [$teacherId,$teacherId]
     );
     $requests = fetch_all(
         "SELECT id,name,email,student_emails_json,status,review_note,created_at,updated_at
@@ -418,11 +428,35 @@ function teacher_parent_add_link(int $teacherId, int $parentId): never
 
 function teacher_parent_remove_link(int $teacherId, int $parentId, int $studentId): never
 {
-    if (!teacher_owns_student($teacherId,$studentId)) Http::json(['error'=>'الطالبة لا تتبع فصولك.'],403);
-    $changed = execute_sql('DELETE FROM parent_student_links WHERE parent_id=? AND student_id=?',[$parentId,$studentId]);
+    $changed = execute_sql(
+        "DELETE l FROM parent_student_links l
+         JOIN students s ON s.id=l.student_id
+         LEFT JOIN classes c ON c.id=s.class_id
+         WHERE l.parent_id=? AND l.student_id=?
+           AND (l.linked_by_teacher=? OR (l.linked_by_teacher IS NULL AND c.teacher_id=?))",
+        [$parentId,$studentId,$teacherId,$teacherId]
+    );
     if ($changed->rowCount()<1) Http::json(['error'=>'الربط غير موجود.'],404);
     Activity::log('teacher',$teacherId,'إلغاء ربط طالبة بولي أمر',"parent:{$parentId};student:{$studentId}");
     Http::json(['ok'=>true]);
+}
+
+function teacher_parent_delete(int $teacherId, int $parentId): never
+{
+    $access = teacher_parent_access($teacherId,$parentId);
+    if ($access['own']<1) Http::json(['error'=>'حساب ولي الأمر غير مرتبط بروابط أنشأتها المعلمة.'],404);
+    if (!$access['exclusive']) Http::json(['error'=>'الحساب مشترك مع معلمة أخرى؛ حذفه متاح لمالكة الموقع فقط.'],403);
+    $parent = fetch_one(
+        "SELECT id,name,status FROM platform_users WHERE id=? AND role_code='PARENT' AND deleted_at IS NULL",
+        [$parentId]
+    );
+    if (!$parent) Http::json(['error'=>'حساب ولي الأمر غير موجود.'],404);
+    execute_sql(
+        "UPDATE platform_users SET status='disabled',deleted_at=NOW() WHERE id=? AND role_code='PARENT' AND deleted_at IS NULL",
+        [$parentId]
+    );
+    Activity::logDetailed('teacher',$teacherId,'حذف حساب ولي أمر مؤقتًا','parent:'.$parentId,$parent,null);
+    Http::json(['ok'=>true,'softDeleted'=>true]);
 }
 
 function teacher_parent_routes(string $method, array $segments, int $teacherId): never
@@ -438,6 +472,7 @@ function teacher_parent_routes(string $method, array $segments, int $teacherId):
     if (isset($segments[0])) {
         $parentId = route_id($segments,0);
         if (count($segments)===1 && $method==='PUT') teacher_parent_update($teacherId,$parentId);
+        if (count($segments)===1 && $method==='DELETE') teacher_parent_delete($teacherId,$parentId);
         if (($segments[1]??'')==='reset-password' && $method==='PUT') teacher_parent_reset_password($teacherId,$parentId);
         if (($segments[1]??'')==='links' && count($segments)===2 && $method==='POST') teacher_parent_add_link($teacherId,$parentId);
         if (($segments[1]??'')==='links' && isset($segments[2]) && $method==='DELETE') teacher_parent_remove_link($teacherId,$parentId,route_id($segments,2));
@@ -448,6 +483,9 @@ function teacher_parent_routes(string $method, array $segments, int $teacherId):
 function teacher_parent_community_routes(string $method, array $segments, int $teacherId): never
 {
     ensure_parent_portal_schema();
+    if (($segments[0] ?? '') === 'media') {
+        teacher_parent_community_media_routes($method,array_slice($segments,1),$teacherId);
+    }
     if (!$segments && $method==='GET') {
         $classes = fetch_all('SELECT id,name,stage,grade_label FROM classes WHERE teacher_id=? ORDER BY name',[$teacherId]);
         $posts = fetch_all(
@@ -634,6 +672,204 @@ function parent_portal_tests(int $parentId, int $studentId): never
     Http::json(['attempts'=>$attempts,'availableTests'=>$available]);
 }
 
+function parent_portal_gradebook_empty_periods(): array
+{
+    $settings = [
+        1 => teacher_follow_up_defaults(1),
+        2 => teacher_follow_up_defaults(2),
+        3 => teacher_follow_up_defaults(3),
+    ];
+    return parent_portal_gradebook_periods([], $settings);
+}
+
+function parent_portal_gradebook_periods(array $records, array $settings): array
+{
+    $score = static function (?array $record, string $field): ?float {
+        if (!$record || !array_key_exists($field, $record) || $record[$field] === null || $record[$field] === '') return null;
+        return (float)$record[$field];
+    };
+    $maximum = static fn(array $row, string $field): float => (float)($row[$field] ?? 0);
+    $periods = [];
+
+    foreach ([1 => 'الفترة الأولى', 2 => 'الفترة الثانية'] as $periodNo => $label) {
+        $record = $records[$periodNo] ?? null;
+        $hasRecord = $record !== null;
+        $periodSettings = $settings[$periodNo];
+        $scores = [
+            ['key'=>'periodicTest','label'=>'الاختبار الفتري','value'=>$hasRecord ? $score($record,'periodic_test_score') : null,'maximum'=>$maximum($periodSettings,'periodic_test_max')],
+            ['key'=>'participation','label'=>'المشاركة','value'=>$hasRecord ? $score($record,'participation_score') : null,'maximum'=>$maximum($periodSettings,'participation_max')],
+            ['key'=>'homework','label'=>'الواجبات','value'=>$hasRecord ? $score($record,'homework_score') : null,'maximum'=>$maximum($periodSettings,'homework_max')],
+            ['key'=>'tasks','label'=>'المهام','value'=>$hasRecord ? $score($record,'tasks_score') : null,'maximum'=>$maximum($periodSettings,'tasks_max')],
+        ];
+        $periods[] = [
+            'period'=>$periodNo,
+            'label'=>$label,
+            'hasRecord'=>$hasRecord,
+            'scores'=>$scores,
+            'total'=>[
+                'value'=>$hasRecord ? round(array_sum(array_map(static fn(array $item): float => (float)($item['value'] ?? 0), $scores)), 2) : null,
+                'maximum'=>round(array_sum(array_column($scores,'maximum')), 2),
+            ],
+        ];
+    }
+
+    $first = $records[1] ?? null;
+    $second = $records[2] ?? null;
+    $final = $records[3] ?? null;
+    $hasFinalRecord = $final !== null;
+    $firstSettings = $settings[1];
+    $secondSettings = $settings[2];
+    $finalSettings = $settings[3];
+    $periodicTestAverage = null;
+    $participationAverage = null;
+    $homeworkAverage = null;
+    $tasksAverage = null;
+    $finalExamScore = null;
+
+    if ($hasFinalRecord) {
+        $firstTest = $score($first,'periodic_test_score');
+        $secondTest = $score($second,'periodic_test_score');
+        $periodicTestAverage = ($firstTest === null || $secondTest === null) ? null : round(($firstTest + $secondTest) / 2, 2);
+        $participationRatio = teacher_score_ratio_average(
+            [$score($first,'participation_score'),$score($second,'participation_score')],
+            [$firstSettings['participation_max'],$secondSettings['participation_max']]
+        );
+        $homeworkRatio = teacher_score_ratio_average(
+            [$score($first,'homework_score'),$score($second,'homework_score')],
+            [$firstSettings['homework_max'],$secondSettings['homework_max']]
+        );
+        $tasksRatio = teacher_score_ratio_average(
+            [$score($first,'tasks_score'),$score($second,'tasks_score')],
+            [$firstSettings['tasks_max'],$secondSettings['tasks_max']]
+        );
+        $participationAverage = round($participationRatio * $maximum($finalSettings,'participation_max'), 2);
+        $homeworkAverage = round($homeworkRatio * $maximum($finalSettings,'homework_max'), 2);
+        $tasksAverage = round($tasksRatio * $maximum($finalSettings,'tasks_max'), 2);
+        $finalExamScore = $score($final,'final_exam_score');
+    }
+
+    $periodicTestMaximum = round(($maximum($firstSettings,'periodic_test_max') + $maximum($secondSettings,'periodic_test_max')) / 2, 2);
+    $finalScores = [
+        ['key'=>'periodicTestAverage','label'=>'متوسط الاختبارين','value'=>$periodicTestAverage,'maximum'=>$periodicTestMaximum],
+        ['key'=>'participationAverage','label'=>'متوسط المشاركة','value'=>$participationAverage,'maximum'=>$maximum($finalSettings,'participation_max')],
+        ['key'=>'homeworkAverage','label'=>'متوسط الواجبات','value'=>$homeworkAverage,'maximum'=>$maximum($finalSettings,'homework_max')],
+        ['key'=>'tasksAverage','label'=>'متوسط المهام','value'=>$tasksAverage,'maximum'=>$maximum($finalSettings,'tasks_max')],
+        ['key'=>'finalExam','label'=>'الاختبار النهائي','value'=>$finalExamScore,'maximum'=>$maximum($finalSettings,'final_exam_max')],
+    ];
+    $periods[] = [
+        'period'=>3,
+        'label'=>'النهائي',
+        'hasRecord'=>$hasFinalRecord,
+        'scores'=>$finalScores,
+        'total'=>[
+            'value'=>$hasFinalRecord ? round(array_sum(array_map(static fn(array $item): float => (float)($item['value'] ?? 0), $finalScores)), 2) : null,
+            'maximum'=>round(array_sum(array_column($finalScores,'maximum')), 2),
+        ],
+    ];
+    return $periods;
+}
+
+function parent_portal_gradebook(int $parentId, int $studentId): never
+{
+    Auth::requirePermission('parent.results.view',false);
+    ensure_teacher_tools_schema();
+    $student = parent_portal_linked_student($parentId,$studentId);
+    if (!$student) Http::json(['error'=>'الطالبة غير مرتبطة بحسابك.'],404);
+
+    $teacherId = (int)($student['teacher_id'] ?? 0);
+    $studentJson = [
+        'id'=>(int)$student['id'],
+        'name'=>(string)$student['name'],
+        'stage'=>(string)($student['stage'] ?? ''),
+        'gradeLabel'=>(string)($student['grade_label'] ?? ''),
+        'className'=>(string)($student['class_name'] ?? ''),
+        'teacherName'=>(string)($student['teacher_name'] ?? ''),
+    ];
+    if ($teacherId < 1) {
+        Http::json(['student'=>$studentJson,'contexts'=>[],'context'=>null,'hasAnyRecord'=>false,'periods'=>parent_portal_gradebook_empty_periods()]);
+    }
+
+    $contexts = [];
+    $contextKeys = [];
+    $appendContext = static function (string $academicYear, string $semester, bool $current = false) use (&$contexts,&$contextKeys): void {
+        $semester = $semester === 'second' ? 'second' : 'first';
+        $key = $academicYear . "\0" . $semester;
+        if (isset($contextKeys[$key])) {
+            if ($current) {
+                $index = $contextKeys[$key];
+                $contexts[$index]['current'] = true;
+            }
+            return;
+        }
+        $contextKeys[$key] = count($contexts);
+        $contexts[] = [
+            'academicYear'=>$academicYear,
+            'semester'=>$semester,
+            'semesterLabel'=>$semester === 'second' ? 'الفصل الدراسي الثاني' : 'الفصل الدراسي الأول',
+            'current'=>$current,
+        ];
+    };
+
+    $school = teacher_school_settings_row($teacherId);
+    $schoolAcademicYear = trim((string)($school['academic_year'] ?? ''));
+    $schoolSemester = (string)($school['current_semester'] ?? 'first');
+    if ($schoolAcademicYear !== '') $appendContext($schoolAcademicYear,$schoolSemester,true);
+
+    $actualContexts = fetch_all(
+        'SELECT academic_year,semester,MAX(updated_at) AS latest_update FROM student_follow_up WHERE teacher_id=? AND student_id=? GROUP BY academic_year,semester ORDER BY latest_update DESC',
+        [$teacherId,$studentId]
+    );
+    foreach ($actualContexts as $row) $appendContext((string)$row['academic_year'],(string)$row['semester']);
+
+    $hasAcademicYear = array_key_exists('academicYear',$_GET);
+    $hasSemester = array_key_exists('semester',$_GET);
+    if ($hasAcademicYear xor $hasSemester) Http::json(['error'=>'حددي العام الدراسي والفصل الدراسي معًا.'],422);
+
+    $selectedContext = null;
+    if ($hasAcademicYear && $hasSemester) {
+        $requestedYear = trim((string)$_GET['academicYear']);
+        $requestedSemester = (string)$_GET['semester'];
+        if (mb_strlen($requestedYear) > 30 || !in_array($requestedSemester,['first','second'],true)) {
+            Http::json(['error'=>'السياق الدراسي المطلوب غير صالح.'],422);
+        }
+        foreach ($contexts as $context) {
+            if ($context['academicYear'] === $requestedYear && $context['semester'] === $requestedSemester) {
+                $selectedContext = $context;
+                break;
+            }
+        }
+        if (!$selectedContext) Http::json(['error'=>'السياق الدراسي المطلوب غير متاح لهذه الطالبة.'],422);
+    } elseif ($contexts) {
+        $selectedContext = $contexts[0];
+    }
+
+    if (!$selectedContext) {
+        Http::json(['student'=>$studentJson,'contexts'=>[],'context'=>null,'hasAnyRecord'=>false,'periods'=>parent_portal_gradebook_empty_periods()]);
+    }
+
+    $academicYear = (string)$selectedContext['academicYear'];
+    $semester = (string)$selectedContext['semester'];
+    $rows = fetch_all(
+        'SELECT period_no,periodic_test_score,participation_score,homework_score,tasks_score,final_exam_score,updated_at FROM student_follow_up WHERE teacher_id=? AND student_id=? AND academic_year=? AND semester=? AND period_no IN (1,2,3)',
+        [$teacherId,$studentId,$academicYear,$semester]
+    );
+    $records = [];
+    foreach ($rows as $row) $records[(int)$row['period_no']] = $row;
+    $settings = [
+        1=>teacher_follow_up_settings($teacherId,1,$academicYear,$semester),
+        2=>teacher_follow_up_settings($teacherId,2,$academicYear,$semester),
+        3=>teacher_follow_up_settings($teacherId,3,$academicYear,$semester),
+    ];
+
+    Http::json([
+        'student'=>$studentJson,
+        'contexts'=>$contexts,
+        'context'=>$selectedContext,
+        'hasAnyRecord'=>!empty($records),
+        'periods'=>parent_portal_gradebook_periods($records,$settings),
+    ]);
+}
+
 function parent_portal_analysis(int $parentId, int $studentId): never
 {
     Auth::requirePermission('parent.analytics.view',false);
@@ -699,6 +935,40 @@ function parent_portal_follow_up(int $parentId, int $studentId): never
         [$studentId]
     );
     Http::json(['attendance'=>array_merge($attendance,$weeklyAttendance),'assignments'=>$assignments,'periods'=>$periods,'weeklyScores'=>$weeklyScores]);
+}
+
+function parent_portal_semester_plans(int $parentId,int $studentId): never
+{
+    Auth::requirePermission('parent.files.view',false);
+    $student=parent_portal_linked_student($parentId,$studentId);
+    if(!$student) Http::json(['error'=>'الطالبة غير مرتبطة بحسابك.'],404);
+    if(!planning_content_schema_ready()||!planning_content_parent_publication_schema_ready()) {
+        Http::json([
+            'migrationReady'=>false,
+            'migration'=>PLANNING_CONTENT_PARENT_PUBLICATION_MIGRATION,
+            'student'=>['id'=>(int)$student['id'],'name'=>(string)$student['name']],
+            'items'=>[],
+        ]);
+    }
+    $classId=(int)($student['class_id']??0);$teacherId=(int)($student['teacher_id']??0);$academicYear=trim((string)($student['academic_year']??''));
+    if($classId<1||$teacherId<1||$academicYear==='') Http::json(['migrationReady'=>true,'items'=>[]]);
+    $rows=fetch_all(
+        "SELECT pc.*,p.published_at AS parent_published_at,p.academic_year AS publication_academic_year,p.semester AS publication_semester
+         FROM teacher_planning_content_parent_publications p
+         JOIN teacher_planning_content pc ON pc.id=p.content_id AND pc.teacher_id=? AND pc.destination='semester-plans' AND pc.deleted_at IS NULL
+         JOIN teacher_school_settings ss ON ss.teacher_id=pc.teacher_id AND ss.current_semester=p.semester
+         WHERE p.class_id=? AND p.academic_year=? AND p.status='published' AND (ss.academic_year='' OR ss.academic_year=p.academic_year)
+         ORDER BY p.published_at DESC,pc.id DESC",
+        [$teacherId,$classId,$academicYear]
+    );
+    $items=array_map(static fn(array $row):array=>[
+        'id'=>(int)$row['id'],'name'=>(string)$row['name'],'unitNumber'=>(int)$row['unit_number'],'lessonNumber'=>(int)$row['lesson_number'],
+        'lessonName'=>(string)$row['lesson_name'],'contentType'=>(string)$row['content_type'],'sourceType'=>(string)$row['source_type'],
+        'hasCover'=>!empty($row['cover_entry_file']),'coverUrl'=>!empty($row['cover_entry_file'])?'/planning/content-cover.php?content='.(int)$row['id'].'&v='.rawurlencode((string)$row['updated_at']):'',
+        'playerUrl'=>'/planning/content-player.php?content='.(int)$row['id'],'publishedAt'=>(string)$row['parent_published_at'],
+        'academicYear'=>(string)$row['publication_academic_year'],'semester'=>(string)$row['publication_semester'],
+    ],$rows);
+    Http::json(['migrationReady'=>true,'student'=>['id'=>(int)$student['id'],'name'=>(string)$student['name'],'className'=>(string)($student['class_name']??'')],'items'=>$items]);
 }
 
 function parent_portal_files(int $parentId, int $studentId): never
@@ -775,14 +1045,27 @@ function handle_parent_portal_routes(string $method, array $segments, int $paren
         $studentId = route_id($segments,1);
         $action = $segments[2] ?? 'overview';
         if ($action==='overview' && $method==='GET') parent_portal_overview($parentId,$studentId);
+        if ($action==='gradebook' && $method==='GET') parent_portal_gradebook($parentId,$studentId);
         if ($action==='tests' && $method==='GET') parent_portal_tests($parentId,$studentId);
         if ($action==='analysis' && $method==='GET') parent_portal_analysis($parentId,$studentId);
         if ($action==='points' && $method==='GET') parent_portal_points($parentId,$studentId);
         if ($action==='follow-up' && $method==='GET') parent_portal_follow_up($parentId,$studentId);
+        if ($action==='semester-plans' && $method==='GET') parent_portal_semester_plans($parentId,$studentId);
         if ($action==='files' && count($segments)===3 && $method==='GET') parent_portal_files($parentId,$studentId);
         if ($action==='files' && isset($segments[3]) && ($segments[4]??'')==='download' && $method==='GET') parent_portal_download_file($parentId,$studentId,route_id($segments,3));
         if ($action==='resources' && isset($segments[3]) && ($segments[4]??'')==='file' && $method==='GET') parent_portal_download_resource($parentId,$studentId,route_id($segments,3));
     }
-    if ($resource==='community' && $method==='GET') parent_portal_community($parentId);
+    if ($resource==='community') {
+        if (($segments[1] ?? '') === 'media' && isset($segments[2]) && $method==='GET') {
+            parent_community_media_stream(route_id($segments,2),'parent',$parentId);
+        }
+        if (($segments[1] ?? '') === 'posts' && count($segments)===2 && $method==='POST') {
+            parent_community_media_parent_create($parentId);
+        }
+        if (($segments[1] ?? '') === 'posts' && isset($segments[2]) && $method==='DELETE') {
+            parent_community_media_parent_archive($parentId,route_id($segments,2));
+        }
+        if (count($segments)===1 && $method==='GET') parent_community_media_parent_feed($parentId);
+    }
     Http::json(['error'=>'المسار المطلوب غير موجود.'],404);
 }

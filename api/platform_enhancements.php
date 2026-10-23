@@ -1,5 +1,7 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__.'/remedial_content.php';
+
 
 /**
  * تحسينات منصة مدار v11:
@@ -340,6 +342,9 @@ function teacher_student_summary_metrics(array $results,array $attendance,array 
 function teacher_remedial_routes(string $method,array $segments,int $teacherId): never
 {
     $action=$segments[0]??'';
+    if($action==='catalog'&&$method==='GET') remedial_content_catalog($teacherId);
+    if($action==='results'&&$method==='GET') remedial_content_results($teacherId);
+    if($action==='create-content'&&$method==='POST') remedial_content_create($teacherId);
     if ($action==='auto'&&$method==='POST') {
         $data=Http::input();$studentId=(int)($data['studentId']??0);
         if (!$studentId||!teacher_owns_student($teacherId,$studentId)) Http::json(['error'=>'الطالبة غير موجودة ضمن فصولك.'],404);
@@ -366,7 +371,7 @@ function teacher_remedial_routes(string $method,array $segments,int $teacherId):
         if ($studentId){$where[]='r.student_id=?';$params[]=$studentId;}
         if ($status!==''){$where[]='r.status=?';$params[]=$status;}
         $rows=fetch_all("SELECT r.*,s.name AS student_name,c.id AS class_id,c.stage,c.grade_label,c.name AS class_name,sk.name AS skill_name,t.title AS source_test_title,rt.title AS reassessment_title FROM remedial_plans r JOIN students s ON s.id=r.student_id JOIN classes c ON c.id=s.class_id LEFT JOIN skills sk ON sk.id=r.skill_id LEFT JOIN tests t ON t.id=r.source_test_id LEFT JOIN tests rt ON rt.id=r.reassessment_test_id WHERE ".implode(' AND ',$where).' ORDER BY FIELD(r.status,\'in_progress\',\'planned\',\'reassessed\',\'completed\',\'cancelled\'),r.due_date,r.created_at DESC',$params);
-        Http::json(['items'=>$rows]);
+        Http::json(['items'=>remedial_content_attach($rows)]);
     }
     if (!$segments&&$method==='POST') {
         $data=Http::input();Http::requireFields($data,['studentId','title']);$studentId=(int)$data['studentId'];
@@ -564,6 +569,7 @@ function student_enhancement_routes(string $method,array $segments,int $studentI
         $plans=fetch_all("SELECT r.*,sk.name AS skill_name,t.title AS source_test_title,rt.title AS reassessment_title FROM remedial_plans r LEFT JOIN skills sk ON sk.id=r.skill_id LEFT JOIN tests t ON t.id=r.source_test_id LEFT JOIN tests rt ON rt.id=r.reassessment_test_id WHERE r.student_id=? AND r.teacher_id=? AND r.status<>'cancelled' ORDER BY FIELD(r.status,'in_progress','planned','reassessed','completed'),r.due_date,r.created_at DESC",[$studentId,$teacherId]);
         $resources=fetch_all("SELECT lr.id,lr.title,lr.resource_type,lr.resource_url,lr.description,sk.name AS skill_name FROM learning_resource_links lr LEFT JOIN skills sk ON sk.id=lr.skill_id WHERE lr.is_active=1 AND (lr.teacher_id IS NULL OR lr.teacher_id=?) AND (lr.skill_id IS NULL OR EXISTS(SELECT 1 FROM remedial_plans rp WHERE rp.student_id=? AND rp.skill_id=lr.skill_id AND rp.status IN('planned','in_progress','reassessed'))) ORDER BY lr.teacher_id IS NULL DESC,lr.created_at DESC",[$teacherId,$studentId]);
         $games=fetch_all('SELECT id,game_key,difficulty,score,question_count,correct_count,best_streak,accuracy,duration_seconds,played_at FROM game_attempts WHERE student_id=? ORDER BY played_at DESC LIMIT 20',[$studentId]);
+        $plans=remedial_content_attach($plans);
         Http::json(compact('plans','resources','games'));
     }
     if($resource==='alerts'&&$method==='GET'){

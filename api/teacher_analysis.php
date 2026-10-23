@@ -35,11 +35,11 @@ function teacher_analysis_latest_attempts(int $teacherId,int $classId=0,int $tes
 
     $rows=fetch_all(
         "SELECT a.id,a.test_id,a.student_id,a.attempt_no,a.status,a.score,a.total_points,a.percentage,a.submitted_at,
-                t.title,t.test_type,t.question_source,t.class_id,t.skill_id AS test_skill_id,
+                t.title,t.test_type,t.question_source,c.id AS class_id,t.class_id AS test_class_id,t.skill_id AS test_skill_id,
                 t.bank_stage,t.bank_grade_label,t.bank_term_label,t.academic_year,t.semester,
                 t.created_at AS test_created_at,
                 s.name AS student_name,s.email AS student_email,c.name AS class_name,
-                c.stage AS class_stage,c.grade_label AS class_grade_label
+                c.stage AS class_stage,c.grade_label AS class_grade_label,c.academic_year AS class_academic_year
          FROM test_attempts a
          JOIN tests t ON t.id=a.test_id
          JOIN students s ON s.id=a.student_id
@@ -280,7 +280,16 @@ function teacher_analysis_gradebook(int $teacherId): never
     if ($classId&&!teacher_owns_class($teacherId,$classId)) Http::json(['error'=>'الفصل غير موجود.'],404);
 
     $testWhere='t.teacher_id=?';$testParams=[$teacherId];
-    if ($classId>0) {$testWhere.=' AND t.class_id=?';$testParams[]=$classId;}
+    if ($classId>0) {
+        $testWhere.=' AND (t.class_id=? OR EXISTS (
+            SELECT 1 FROM test_attempts scoped_attempt
+            JOIN students scoped_student ON scoped_student.id=scoped_attempt.student_id
+            WHERE scoped_attempt.test_id=t.id AND scoped_student.class_id=?
+              AND scoped_attempt.status IN (\'submitted\',\'graded\')
+              AND scoped_student.status=\'active\' AND scoped_student.deleted_at IS NULL
+        ))';
+        $testParams[]=$classId;$testParams[]=$classId;
+    }
     $tests=fetch_all(
         "SELECT t.id,t.title,t.test_type AS type,t.status,t.class_id,t.total_points,t.created_at,c.name AS class_name
          FROM tests t LEFT JOIN classes c ON c.id=t.class_id
@@ -478,6 +487,8 @@ function teacher_analysis_row_matches_context(array $row,array $context): bool
         $rowGrade=teacher_analysis_grade_key($stage,(string)($row['class_grade_label']??$row['grade_label']??''));
         if ($rowGrade!==teacher_analysis_grade_key($context['stage']!==''?$context['stage']:$stage,$context['gradeLabel'])) return false;
     }
+    if ($context['academicYear']!==''&&array_key_exists('class_academic_year',$row)
+        &&trim((string)$row['class_academic_year'])!==$context['academicYear']) return false;
     if ($context['semester']!==''&&(string)($row['semester']??'')!==$context['semester']) return false;
     return true;
 }
@@ -533,21 +544,35 @@ function teacher_analysis_workspace_options(int $teacherId,array $context,string
     }
 
     $testRows=fetch_all(
-        'SELECT t.id,t.title,t.test_type,t.status,t.class_id,t.semester,t.created_at,c.name AS class_name,c.stage AS class_stage,c.grade_label AS class_grade_label FROM tests t LEFT JOIN classes c ON c.id=t.class_id WHERE t.teacher_id=? ORDER BY t.created_at,t.id',
+        'SELECT t.id,t.title,t.test_type,t.status,t.class_id AS test_class_id,t.semester,t.created_at,c.name AS test_class_name,c.stage AS class_stage,c.grade_label AS class_grade_label,c.academic_year AS class_academic_year FROM tests t LEFT JOIN classes c ON c.id=t.class_id WHERE t.teacher_id=? ORDER BY t.created_at,t.id',
         [$teacherId]
     );
+    $attemptTestContexts=[];
+    foreach(teacher_analysis_latest_attempts($teacherId) as $attempt) {
+        if (!teacher_analysis_row_matches_context($attempt,$context)) continue;
+        if (!teacher_analysis_test_type_matches($attempt,array_merge($context,['testType'=>'']))) continue;
+        $attemptTestContexts[(int)$attempt['test_id']]=$attempt;
+    }
     $testOptions=[];
     foreach($testRows as $test) {
-        if (!teacher_analysis_row_matches_context($test,$context)) continue;
         if (!teacher_analysis_test_type_matches($test,array_merge($context,['testType'=>'']))) continue;
+        $testId=(int)$test['id'];
+        $attemptContext=$attemptTestContexts[$testId]??null;
+        $testScope=$test;
+        $testScope['class_id']=$test['test_class_id'];
+        if (!$attemptContext&&!teacher_analysis_row_matches_context($testScope,$context)) continue;
         $testOptions[]=teacher_analysis_option($test['id'],(string)$test['title'],[
-            'type'=>$test['test_type'],'status'=>$test['status'],'classId'=>$test['class_id']!==null?(int)$test['class_id']:null,
-            'className'=>$test['class_name']??'—','semester'=>$test['semester'],'createdAt'=>$test['created_at'],
+            'type'=>$test['test_type'],'status'=>$test['status'],
+            'classId'=>$attemptContext!==null?(int)$attemptContext['class_id']:($test['test_class_id']!==null?(int)$test['test_class_id']:null),
+            'className'=>$attemptContext['class_name']??$test['test_class_name']??'—',
+            'testClassId'=>$test['test_class_id']!==null?(int)$test['test_class_id']:null,
+            'semester'=>$test['semester'],'createdAt'=>$test['created_at'],
         ]);
     }
 
     $contexts=fetch_all(
-        "SELECT DISTINCT t.id AS test_id,t.test_type,t.semester,t.class_id,c.stage AS class_stage,c.grade_label AS class_grade_label,
+        "SELECT DISTINCT t.id AS test_id,t.test_type,t.semester,s.class_id,t.class_id AS test_class_id,
+                c.stage AS class_stage,c.grade_label AS class_grade_label,c.academic_year AS class_academic_year,
                 COALESCE(NULLIF(qb.subject_name,''),'') AS subject_name,
                 COALESCE(NULLIF(qb.unit_name,''),NULLIF(qb.chapter_name,''),'') AS unit_name,
                 COALESCE(NULLIF(qb.lesson_name,''),NULLIF(qb.topic,''),'') AS lesson_name,
@@ -581,6 +606,15 @@ function teacher_analysis_workspace_options(int $teacherId,array $context,string
         $skillId=(int)($row['skill_id']??0);
         $skillName=trim((string)($row['skill_name']??''));
         if ($skillId>0&&$skillName!=='') $skills[]=teacher_analysis_option($skillId,$skillName);
+    }
+
+    if (in_array($context['category'],['periodic','final'],true)) {
+        $skills=[];
+        foreach(teacher_analysis_paper_skill_answer_rows($teacherId,array_merge($context,['skillId'=>0])) as $row) {
+            $skillId=(int)($row['skill_id']??0);
+            $skillName=trim((string)($row['skill_name_snapshot']??''));
+            if ($skillId>0&&$skillName!=='') $skills[]=teacher_analysis_option($skillId,$skillName);
+        }
     }
 
     $gameOptions=[];
@@ -644,12 +678,20 @@ function teacher_analysis_workspace(int $teacherId): never
     $context=teacher_analysis_workspace_context($teacherId);
     $settings=fetch_one('SELECT subject_name,current_semester,academic_year FROM teacher_school_settings WHERE teacher_id=? LIMIT 1',[$teacherId])?:[];
     $defaultSubject=trim((string)($settings['subject_name']??''));
-    if ($context['academicYear']==='') $context['academicYear']=trim((string)($settings['academic_year']??''));
+    // A selected class is the authoritative scope for analysis. Teacher settings
+    // may still reference an older year while completed attempts belong to the
+    // class's current year; applying that stale value hides every real result.
+    if ($context['classId']>0) {
+        $class=fetch_one('SELECT academic_year FROM classes WHERE id=? AND teacher_id=?',[$context['classId'],$teacherId]);
+        $context['academicYear']=trim((string)($class['academic_year']??''));
+    }
     $options=teacher_analysis_workspace_options($teacherId,$context,$defaultSubject);
     $report=match($context['category']) {
         'diagnostic','short' => teacher_analysis_test_workspace_report($teacherId,$context,$defaultSubject),
         'games' => teacher_analysis_game_workspace_report($teacherId,$context),
-        'periodic','final' => teacher_analysis_follow_up_workspace_report($teacherId,$context),
+        'periodic','final' => $context['view']==='skill'
+            ? teacher_analysis_paper_skill_workspace_report($teacherId,$context)
+            : teacher_analysis_follow_up_workspace_report($teacherId,$context),
     };
     Http::json([
         'selection'=>$context,
@@ -659,8 +701,8 @@ function teacher_analysis_workspace(int $teacherId): never
             'diagnostic'=>['available'=>true,'reason'=>''],
             'short'=>['available'=>true,'reason'=>''],
             'games'=>['available'=>interactive_games_schema_ready(),'reason'=>interactive_games_schema_ready()?'':'جدول إعدادات الألعاب غير متاح.'],
-            'periodic'=>['available'=>true,'reason'=>'تتوفر الدرجة الإجمالية من سجل المتابعة؛ لا تتوفر أسئلة للاختبار الفتري.'],
-            'final'=>['available'=>true,'reason'=>'تتوفر الدرجة الإجمالية من سجل المتابعة؛ لا تتوفر أسئلة للاختبار النهائي.'],
+            'periodic'=>['available'=>true,'reason'=>'يعرض «لكل طالبة» درجات سجل المتابعة، ويعرض «لكل مهارة» نتائج الاختبارات الورقية المعتمدة.'],
+            'final'=>['available'=>true,'reason'=>'يعرض «لكل طالبة» درجات سجل المتابعة، ويعرض «لكل مهارة» نتائج الاختبارات الورقية المعتمدة.'],
         ],
         'meta'=>[
             'subjectName'=>$defaultSubject,
@@ -928,6 +970,64 @@ function teacher_analysis_diagnostic_comparison_report(array $attempts,array $co
 function teacher_analysis_short_comparison_report(array $attempts,array $context): array
 {
     if (!$attempts) return teacher_analysis_empty_report('short','لا توجد نتائج اختبارات قصيرة متاحة للمقارنة.');
+
+    if (($context['view']??'student')==='skill') {
+        $tests=[];$skills=[];$allValues=[];
+        foreach($attempts as $attempt) {
+            $testId=(int)$attempt['test_id'];
+            $tests[$testId]=(string)$attempt['title'];
+            foreach($attempt['analysis_answers'] as $answer) {
+                $skillId=(int)($answer['skill_id']??0);
+                $skillName=trim((string)($answer['skill_name']??''))?:'غير مرتبطة بمهارة';
+                $skillKey=$skillId>0?'skill:'.$skillId:'name:'.$skillName;
+                if (!isset($skills[$skillKey])) $skills[$skillKey]=['skill'=>$skillName,'tests'=>[]];
+                if (!isset($skills[$skillKey]['tests'][$testId])) {
+                    $skills[$skillKey]['tests'][$testId]=['score'=>0.0,'maximum'=>0.0];
+                }
+                $skills[$skillKey]['tests'][$testId]['score']+=(float)$answer['points_earned'];
+                $skills[$skillKey]['tests'][$testId]['maximum']+=max(0,(float)$answer['question_points']);
+            }
+        }
+        if (!$skills) return teacher_analysis_empty_report('short','لا توجد إجابات مرتبطة بمهارات ضمن نتائج الاختبارات القصيرة.');
+
+        asort($tests,SORT_NATURAL);
+        uasort($skills,static fn(array $a,array $b):int=>strnatcasecmp((string)$a['skill'],(string)$b['skill']));
+        $columns=[['key'=>'skill','label'=>'المهارة']];
+        $series=[];
+        $palette=['#6b3fa0','#1f9d91','#ef8d32','#8d78aa'];
+        foreach($tests as $testId=>$title) {
+            $key='test_'.$testId;
+            $columns[]=['key'=>$key,'label'=>$title,'format'=>'percent'];
+            $series[]=['label'=>$title,'values'=>[],'color'=>$palette[count($series)%count($palette)],'testKey'=>$key];
+        }
+        $rows=[];
+        foreach($skills as $skill) {
+            $row=['skill'=>$skill['skill']];
+            foreach($tests as $testId=>$title) {
+                $totals=$skill['tests'][$testId]??null;
+                $value=$totals&&$totals['maximum']>0
+                    ? teacher_analysis_percent((float)$totals['score'],(float)$totals['maximum'])
+                    : null;
+                $row['test_'.$testId]=$value;
+                if ($value!==null) $allValues[]=$value;
+            }
+            $rows[]=$row;
+        }
+        foreach($series as &$item) {
+            $item['values']=array_map(static fn(array $row)=>$row[$item['testKey']]??null,$rows);
+            unset($item['testKey']);
+        }
+        unset($item);
+        $studentCount=count(array_unique(array_map('intval',array_column($attempts,'student_id'))));
+        return [
+            'status'=>'ready','category'=>'short','title'=>'مقارنة الاختبارات القصيرة حسب المهارة',
+            'message'=>'يعرض كل لون اختبارًا قصيرًا، وتظهر نسبة الإتقان لكل مهارة داخل ذلك الاختبار.',
+            'summary'=>teacher_analysis_summary($allValues,$studentCount,count($attempts)),
+            'charts'=>[ ['title'=>'مقارنة الإتقان لكل مهارة','type'=>'bar','labels'=>array_column($rows,'skill'),'series'=>$series] ],
+            'tables'=>[ ['title'=>'مقارنة إتقان المهارات بين الاختبارات القصيرة','columns'=>$columns,'rows'=>$rows] ],
+        ];
+    }
+
     $tests=[];$students=[];$scores=[];
     foreach($attempts as $attempt) {
         $testId=(int)$attempt['test_id'];$studentId=(int)$attempt['student_id'];
@@ -1032,41 +1132,55 @@ function teacher_analysis_game_workspace_report(int $teacherId,array $context): 
     if (!$rows) return teacher_analysis_empty_report('games','لا توجد نتائج ألعاب تفاعلية مطابقة للفلاتر المحددة.');
 
     if ($context['view']==='skill') {
-        if(!$builderReady) return teacher_analysis_empty_report('games','لا تتوفر روابط مهارات لنتائج الألعاب القديمة. اربطي المهارات بإصدارات الألعاب الجديدة أولًا.','limited');
-        $attemptIds=array_map('intval',array_column($rows,'id'));$placeholders=implode(',',array_fill(0,count($attemptIds),'?'));
-        $skillEvidence=fetch_all(
-            "SELECT e.attempt_id,e.skill_id,e.question_count,e.correct_count,e.points_earned,e.max_points,e.verification_source,sk.name AS skill_name,a.student_id
-             FROM interactive_game_attempt_skills e JOIN skills sk ON sk.id=e.skill_id JOIN game_attempts a ON a.id=e.attempt_id
-             WHERE e.attempt_id IN ($placeholders) ORDER BY sk.name,e.attempt_id",
-            $attemptIds
-        );
-        if($context['skillId']>0)$skillEvidence=array_values(array_filter($skillEvidence,static fn(array $item):bool=>(int)$item['skill_id']===$context['skillId']));
-        if(!$skillEvidence)return teacher_analysis_empty_report('games','لا توجد نتائج مرتبطة بمهارات ضمن أحدث محاولات الألعاب المحددة.','limited');
-        $groups=[];
-        foreach($skillEvidence as $item) {
-            $skillId=(int)$item['skill_id'];
-            if(!isset($groups[$skillId]))$groups[$skillId]=['skill'=>(string)$item['skill_name'],'questions'=>0,'correct'=>0,'points'=>0.0,'maximum'=>0.0,'students'=>[],'attempts'=>0,'verified'=>0,'reported'=>0];
-            $groups[$skillId]['questions']+=(int)$item['question_count'];$groups[$skillId]['correct']+=(int)$item['correct_count'];
-            $groups[$skillId]['points']+=(float)$item['points_earned'];$groups[$skillId]['maximum']+=(float)$item['max_points'];
-            $groups[$skillId]['students'][(int)$item['student_id']]=true;$groups[$skillId]['attempts']+=1;
-            $item['verification_source']==='server_verified'?$groups[$skillId]['verified']++:$groups[$skillId]['reported']++;
+        $games=[];
+        foreach($rows as $row) {
+            $gameId=(int)($row['game_id']??0);
+            $gameKey=$gameId>0?'id:'.$gameId:'key:'.(string)$row['game_key'];
+            $gameName=trim((string)($row['game_name']??''))?:trim((string)($row['lesson_name']??''))?:'لعبة غير مسماة';
+            if(!isset($games[$gameKey]))$games[$gameKey]=[
+                'game'=>$gameName,'students'=>[],'passed'=>[],'attempts'=>0,'correct'=>0,'questions'=>0,'accuracyTotal'=>0.0,'duration'=>0,
+            ];
+            $studentId=(int)$row['student_id'];
+            $questions=max(0,(int)$row['question_count']);
+            $correct=max(0,(int)$row['correct_count']);
+            $accuracy=$questions>0?teacher_analysis_percent((float)$correct,(float)$questions):max(0,min(100,(float)($row['accuracy']??0)));
+            $games[$gameKey]['students'][$studentId]=true;
+            $games[$gameKey]['passed'][$studentId]=$accuracy>=60;
+            $games[$gameKey]['attempts']++;
+            $games[$gameKey]['correct']+=$correct;
+            $games[$gameKey]['questions']+=$questions;
+            $games[$gameKey]['accuracyTotal']+=$accuracy;
+            $games[$gameKey]['duration']+=max(0,(int)$row['duration_seconds']);
         }
-        $skillRows=[];
-        foreach($groups as $group)$skillRows[]=[
-            'skill'=>$group['skill'],'students'=>count($group['students']),'attempts'=>$group['attempts'],'questions'=>$group['questions'],'correct'=>$group['correct'],
-            'score'=>teacher_analysis_number($group['points']),'maximum'=>teacher_analysis_number($group['maximum']),
-            'percentage'=>$group['maximum']>0?teacher_analysis_percent($group['points'],$group['maximum']):teacher_analysis_percent((float)$group['correct'],(float)$group['questions']),
-            'verification'=>$group['reported']>0?'مبلّغة من الحزمة':'متحقق منها في الخادم',
-        ];
-        $percentages=array_column($skillRows,'percentage');
+        uasort($games,static fn(array $a,array $b):int=>strnatcasecmp((string)$a['game'],(string)$b['game']));
+        $gameRows=[];
+        foreach($games as $game) {
+            $studentCount=count($game['students']);
+            $passedCount=count(array_filter($game['passed']));
+            $gameRows[]=[
+                'game'=>$game['game'],'students'=>$studentCount,'passed'=>$passedCount,
+                'passRate'=>teacher_analysis_percent((float)$passedCount,(float)$studentCount),
+                'accuracy'=>$game['questions']>0
+                    ?teacher_analysis_percent((float)$game['correct'],(float)$game['questions'])
+                    :round($game['accuracyTotal']/max(1,$game['attempts']),1),
+                'correct'=>$game['correct'],'questions'=>$game['questions'],
+                'duration'=>(int)round($game['duration']/max(1,$game['attempts'])),
+            ];
+        }
+        $passRates=array_column($gameRows,'passRate');
         return [
-            'status'=>'ready','category'=>'games','title'=>'تحليل الألعاب حسب المهارة','message'=>'تعرض النتيجة المهارات المرتبطة بأحدث محاولة لكل طالبة، مع توضيح مصدر التحقق.',
-            'summary'=>teacher_analysis_summary($percentages,count(array_unique(array_column($rows,'student_id'))),count($rows)),
-            'charts'=>[ ['title'=>'نسبة الإتقان حسب المهارة','type'=>'bar','labels'=>array_column($skillRows,'skill'),'series'=>[['label'=>'الإتقان','values'=>$percentages,'color'=>'#ef8d32']]] ],
-            'tables'=>[ ['title'=>'إحصاءات المهارات من الألعاب','columns'=>[
-                ['key'=>'skill','label'=>'المهارة'],['key'=>'students','label'=>'عدد الطالبات'],['key'=>'attempts','label'=>'النتائج'],
-                ['key'=>'correct','label'=>'الإجابات الصحيحة'],['key'=>'questions','label'=>'عدد الأسئلة'],['key'=>'percentage','label'=>'الإتقان','format'=>'percent'],['key'=>'verification','label'=>'مصدر النتيجة'],
-            ],'rows'=>$skillRows] ],
+            'status'=>'ready','category'=>'games','title'=>'تحليل الألعاب التفاعلية لكل لعبة',
+            'message'=>'تعرض نسبة الطالبات المجتازات لكل لعبة (بنسبة ٦٠٪ فأعلى)، مع متوسط دقة جميع الطالبات في اللعبة.',
+            'summary'=>teacher_analysis_summary($passRates,count(array_unique(array_column($rows,'student_id'))),count($rows)),
+            'charts'=>[ ['title'=>'نسبة اجتياز الطالبات حسب اسم اللعبة','type'=>'bar','labels'=>array_column($gameRows,'game'),'series'=>[
+                ['label'=>'نسبة الاجتياز','values'=>$passRates,'color'=>'#6b3fa0'],
+                ['label'=>'متوسط الدقة','values'=>array_column($gameRows,'accuracy'),'color'=>'#1f9d91'],
+            ]] ],
+            'tables'=>[ ['title'=>'ملخص جميع الطالبات لكل لعبة','columns'=>[
+                ['key'=>'game','label'=>'اسم اللعبة'],['key'=>'students','label'=>'عدد الطالبات'],['key'=>'passed','label'=>'المجتازات'],
+                ['key'=>'passRate','label'=>'نسبة الاجتياز','format'=>'percent'],['key'=>'accuracy','label'=>'متوسط الدقة','format'=>'percent'],
+                ['key'=>'correct','label'=>'الإجابات الصحيحة'],['key'=>'questions','label'=>'عدد الأسئلة'],['key'=>'duration','label'=>'متوسط الوقت','format'=>'duration'],
+            ],'rows'=>$gameRows] ],
         ];
     }
 
@@ -1120,15 +1234,105 @@ function teacher_analysis_game_workspace_report(int $teacherId,array $context): 
     ];
 }
 
+function teacher_analysis_paper_skill_answer_rows(int $teacherId,array $context): array
+{
+    if (!function_exists('paper_assessments_schema_ready')||!paper_assessments_schema_ready()) return [];
+    $testType=$context['category']==='final'?'final':($context['subtype']==='second'?'periodic_2':'periodic_1');
+    $where=["p.teacher_id=?","p.deleted_at IS NULL","p.test_type=?","su.status='approved'"];
+    $params=[$teacherId,$testType];
+    if ($context['academicYear']!=='') {$where[]='p.academic_year=?';$params[]=$context['academicYear'];}
+    if ($context['semester']!=='') {$where[]='p.semester=?';$params[]=$context['semester'];}
+    if ($context['classId']>0) {$where[]='p.class_id=?';$params[]=$context['classId'];}
+    if ($context['studentId']>0) {$where[]='su.student_id=?';$params[]=$context['studentId'];}
+    if ($context['stage']!==''&&$context['stage']!=='all') {$where[]='c.stage=?';$params[]=$context['stage'];}
+    if ($context['skillId']>0) {$where[]='q.skill_id=?';$params[]=$context['skillId'];}
+    $rows=fetch_all(
+        "SELECT q.skill_id,q.skill_name_snapshot,q.id AS question_id,p.id AS assessment_id,
+                a.earned_points,q.max_points,su.student_id,c.stage,c.grade_label
+         FROM teacher_paper_assessment_answers a
+         JOIN teacher_paper_assessment_submissions su ON su.id=a.submission_id
+         JOIN teacher_paper_assessments p ON p.id=su.assessment_id
+         JOIN teacher_paper_assessment_questions q ON q.id=a.question_id AND q.assessment_id=p.id
+         JOIN classes c ON c.id=p.class_id AND c.teacher_id=p.teacher_id
+         WHERE ".implode(' AND ',$where).' ORDER BY q.skill_name_snapshot,q.sort_order,q.id',
+        $params
+    );
+    if ($context['gradeLabel']==='') return $rows;
+    return array_values(array_filter($rows,static function(array $row) use($context):bool {
+        $stage=(string)$row['stage'];
+        return teacher_analysis_grade_key($stage,(string)$row['grade_label'])
+            ===teacher_analysis_grade_key($context['stage']!==''?$context['stage']:$stage,$context['gradeLabel']);
+    }));
+}
+
+function teacher_analysis_paper_skill_workspace_report(int $teacherId,array $context): array
+{
+    $rows=teacher_analysis_paper_skill_answer_rows($teacherId,$context);
+    $title=$context['category']==='final'
+        ? 'تحليل الاختبار النهائي لكل مهارة'
+        : 'تحليل الاختبار الفتري لكل مهارة — '.($context['subtype']==='second'?'الفترة الثانية':'الفترة الأولى');
+    if (!$rows) return teacher_analysis_empty_report(
+        $context['category'],
+        'لا توجد نتائج اختبارات ورقية معتمدة مرتبطة بمهارات ضمن النطاق المحدد.'
+    );
+    $groups=[];$allStudents=[];
+    foreach($rows as $row) {
+        $skillId=(int)($row['skill_id']??0);
+        $skillName=trim((string)($row['skill_name_snapshot']??''))?:'مهارة غير مسماة';
+        $key=$skillId>0?'id:'.$skillId:'name:'.$skillName;
+        if (!isset($groups[$key])) $groups[$key]=[
+            'skill'=>$skillName,'earned'=>0.0,'possible'=>0.0,'students'=>[],'questions'=>[],'assessments'=>[],'responses'=>0,
+        ];
+        $earned=max(0,min((float)$row['max_points'],(float)$row['earned_points']));
+        $groups[$key]['earned']+=$earned;
+        $groups[$key]['possible']+=(float)$row['max_points'];
+        $groups[$key]['students'][(int)$row['student_id']]=true;
+        $groups[$key]['questions'][(int)$row['question_id']]=true;
+        $groups[$key]['assessments'][(int)$row['assessment_id']]=true;
+        $groups[$key]['responses']++;
+        $allStudents[(int)$row['student_id']]=true;
+    }
+    $resultRows=[];
+    foreach($groups as $group) {
+        $resultRows[]=[
+            'skill'=>$group['skill'],
+            'earned'=>teacher_analysis_number($group['earned']),
+            'possible'=>teacher_analysis_number($group['possible']),
+            'mastery'=>teacher_analysis_percent($group['earned'],$group['possible']),
+            'students'=>count($group['students']),
+            'questions'=>count($group['questions']),
+            'assessments'=>count($group['assessments']),
+            'responses'=>$group['responses'],
+        ];
+    }
+    usort($resultRows,static fn(array $a,array $b):int=>strcmp((string)$a['skill'],(string)$b['skill']));
+    $percentages=array_column($resultRows,'mastery');
+    return [
+        'status'=>'ready','category'=>$context['category'],'title'=>$title,
+        'message'=>'تُحتسب من درجات الأسئلة في الاختبارات الورقية، ولا تشمل إلا النتائج التي اعتمدتها المعلمة.',
+        'summary'=>[
+            ['label'=>'المهارات','value'=>count($resultRows),'suffix'=>''],
+            ['label'=>'الطالبات المعتمدات','value'=>count($allStudents),'suffix'=>''],
+            ['label'=>'متوسط الإتقان','value'=>round(array_sum($percentages)/max(1,count($percentages)),1),'suffix'=>'%'],
+            ['label'=>'إجابات أسئلة معتمدة','value'=>count($rows),'suffix'=>''],
+        ],
+        'charts'=>[[
+            'title'=>'نسبة الإتقان لكل مهارة','type'=>'bar','labels'=>array_column($resultRows,'skill'),
+            'series'=>[['label'=>'الإتقان','values'=>$percentages,'color'=>'#1f9d91']],
+        ]],
+        'tables'=>[[
+            'title'=>'تفاصيل إتقان المهارات','columns'=>[
+                ['key'=>'skill','label'=>'المهارة'],['key'=>'earned','label'=>'مجموع الدرجات'],
+                ['key'=>'possible','label'=>'المجموع الممكن'],['key'=>'mastery','label'=>'نسبة الإتقان','format'=>'percent'],
+                ['key'=>'students','label'=>'الطالبات'],['key'=>'questions','label'=>'الأسئلة'],
+                ['key'=>'assessments','label'=>'الاختبارات'],['key'=>'responses','label'=>'الإجابات المعتمدة'],
+            ],'rows'=>$resultRows,
+        ]],
+    ];
+}
+
 function teacher_analysis_follow_up_workspace_report(int $teacherId,array $context): array
 {
-    if ($context['view']==='skill') return teacher_analysis_empty_report(
-        $context['category'],
-        $context['category']==='periodic'
-            ? 'يتوفر للاختبار الفتري مجموع الدرجة فقط في سجل المتابعة، ولا توجد أسئلة أو مهارات مرتبطة به لتحليلها.'
-            : 'يتوفر للاختبار النهائي مجموع الدرجة فقط في سجل المتابعة، ولا توجد أسئلة أو مهارات مرتبطة به لتحليلها.',
-        'limited'
-    );
     $period=$context['category']==='final'?3:($context['subtype']==='second'?2:1);
     $scoreColumn=$context['category']==='final'?'final_exam_score':'periodic_test_score';
     $maxColumn=$context['category']==='final'?'final_exam_max':'periodic_test_max';

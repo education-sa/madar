@@ -58,7 +58,7 @@
 .paper-assessment__rows article>div strong,.paper-assessment__rows article>div small { display:block; }
 .paper-assessment__rows article>div small { margin-block-start:4px; color:var(--muted); font-size:.72rem; }
 .paper-assessment__rows label { color:var(--muted); font-size:.72rem; font-weight:800; }
-.paper-assessment__rows input { width:100%; margin-block-start:5px; padding:10px; border:1px solid var(--border); border-radius:10px; background:#fff; }
+.paper-assessment__rows input { width:100%; min-height:44px; margin-block-start:5px; padding:10px; border:1px solid var(--border); border-radius:10px; background:#fff; }
 .paper-assessment__rows .paper-assessment__wide { grid-column:1/-2; }
 .paper-assessment__actions,.paper-assessment__files { display:flex; flex-wrap:wrap; gap:8px; }
 .paper-assessment__chart { padding-block:12px 18px; }
@@ -71,6 +71,52 @@
 .paper-status.is-closed { color:#6f6878; background:#ece9f0; }
 .paper-assessment__submission-detail td small { display:block; max-width:420px; margin-block-start:4px; color:var(--muted); white-space:normal; }
 .paper-assessment__files { margin-block-start:14px; }
+.paper-assessment__questions-title { margin-block-start:24px; }
+.paper-assessment__form-band { grid-column:1/-1; display:flex; align-items:baseline; gap:9px; margin-block-start:5px; padding:10px 12px; border-inline-start:4px solid var(--sf-teal); border-radius:10px; color:var(--purple-900); background:#f7f4fc; }
+.paper-assessment__form-band:first-child { margin-block-start:0; }
+.paper-assessment__form-band small { color:var(--muted); font-size:.7rem; }
+.paper-assessment__student-route-note,.paper-assessment__legacy { margin-block:16px; padding:15px 17px; border:1px solid #ead8a9; border-inline-start:4px solid var(--sf-orange); border-radius:13px; color:#70451f; background:#fff9ea; }
+.paper-assessment__student-route-note { line-height:1.7; }
+.paper-assessment__legacy strong { color:#6a431a; }
+.paper-assessment__legacy p { margin:5px 0 0; line-height:1.65; }
+.paper-assessment__source { grid-column:span 2; padding:13px; border:1px dashed #c9b9e4; border-radius:13px; background:#fbf9ff; }
+.paper-assessment__source-file { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border-radius:9px; background:#fff; }
+.paper-assessment__source-file a { overflow:hidden; color:var(--purple-700); text-overflow:ellipsis; white-space:nowrap; }
+.paper-assessment__source-file button { border:0; color:#b7332d; background:transparent; font:inherit; font-size:.72rem; font-weight:900; cursor:pointer; }
+.paper-assessment__gradebook { margin-block-start:22px; padding-block-start:20px; border-block-start:1px solid var(--border); }
+.paper-assessment__gradebook-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-block-end:8px; }
+.paper-assessment__gradebook-head>div>span,.paper-assessment__preview>div>span { color:var(--sf-teal); font-size:.75rem; font-weight:900; }
+.paper-assessment__gradebook-head h3,.paper-assessment__preview h3 { margin:3px 0; color:var(--purple-900); }
+.paper-assessment__gradebook-head p,.paper-assessment__preview>div>p { max-width:760px; margin:0; color:var(--muted); font-size:.78rem; line-height:1.65; }
+.paper-assessment__scroll-hint { display:none; margin:8px 0; color:var(--purple-700); font-size:.72rem; font-weight:800; }
+.paper-assessment__grade-scroll { position:relative; max-width:100%; box-shadow:inset 15px 0 20px -22px rgba(51,28,88,.7),inset -15px 0 20px -22px rgba(51,28,88,.7); }
+.paper-assessment__grade-table { min-width:max(940px,100%); table-layout:auto; }
+.paper-assessment__grade-table th:not(.is-student):not(.is-summary),.paper-assessment__grade-table td:not(.is-student):not(.is-summary) { min-width:104px; text-align:center; }
+.paper-assessment__grade-table th span,.paper-assessment__grade-table th small { display:block; }
+.paper-assessment__grade-table th small { margin-block-start:3px; color:var(--muted); font-weight:700; }
+.paper-assessment__grade-table .is-student { position:sticky; z-index:3; inset-inline-start:0; min-width:185px; background:#fff; box-shadow:-8px 0 14px -15px #3b225c; }
+.paper-assessment__grade-table thead .is-student { z-index:5; background:#f4f0fc; }
+.paper-assessment__grade-table .is-summary { position:sticky; z-index:3; min-width:122px; background:#fbf9ff; box-shadow:8px 0 14px -15px #3b225c; }
+.paper-assessment__grade-table thead .is-summary { z-index:5; background:#ede6f9; }
+.paper-assessment__grade-table .is-status { inset-inline-end:0; }
+.paper-assessment__grade-table .is-percent { inset-inline-end:122px; }
+.paper-assessment__grade-table .is-total { inset-inline-end:244px; }
+.paper-assessment__grade-table tbody tr:hover td { background:#fcfbfe; }
+.paper-assessment__grade-table tbody tr:hover .is-summary { background:#f6f2fb; }
+.paper-assessment__grade-input,.paper-assessment__review-input input { width:82px; min-height:44px; padding:8px 7px; border:1px solid #cfc3df; border-radius:9px; background:#fff; text-align:center; font:inherit; font-weight:800; }
+.paper-assessment__grade-input:focus,.paper-assessment__review-input input:focus { border-color:var(--sf-purple); outline:3px solid rgba(93,53,165,.13); }
+.paper-assessment__grade-input.is-invalid,.paper-assessment__review-input input:invalid { border-color:#c93b34; background:#fff6f5; }
+.paper-assessment__field-error { display:block; max-width:90px; margin:3px auto 0; color:#b7332d; font-size:.62rem; white-space:normal; }
+.paper-assessment__preview { margin-block-start:18px; padding:18px; border:1px solid #d9cdec; border-radius:16px; background:#fbfaff; }
+.paper-assessment__preview-columns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:22px; margin-block-start:16px; }
+.paper-assessment__preview-columns>section { min-width:0; padding:15px; border:1px solid var(--border); border-radius:13px; background:#fff; }
+.paper-assessment__preview-columns h4 { margin:0 0 14px; color:var(--purple-900); }
+.paper-assessment__preview .skill-files__chart-list { gap:15px; }
+.paper-assessment__grid-empty { min-height:150px; display:grid; place-items:center; align-content:center; margin-block-start:18px; padding:22px; border:1px dashed #cfc2e8; border-radius:16px; color:var(--purple-900); background:#fbfaff; text-align:center; }
+.paper-assessment__grid-empty p { margin:5px 0 0; color:var(--muted); }
+.paper-assessment__empty-small { min-height:120px; padding:18px; border-radius:13px; }
+.paper-assessment__review-input { display:flex; align-items:center; gap:7px; }
+.paper-assessment__review-input span { color:var(--muted); font-size:.72rem; }
 .skill-files__table-scroll { overflow:auto; border:1px solid var(--border); border-radius:13px; }
 .skill-files__table-scroll table { width:100%; min-width:760px; border-collapse:collapse; }
 .skill-files__table-scroll th,.skill-files__table-scroll td { padding:12px 13px; border-block-end:1px solid #eee9f7; text-align:right; white-space:nowrap; }
@@ -159,6 +205,8 @@
   .skill-files__metrics { grid-template-columns:repeat(3,minmax(120px,1fr)); }
   .skill-files__file-list { grid-template-columns:1fr; }
   .skill-files__manual-skills { grid-template-columns:1fr; }
+  .paper-assessment__grade-table .is-summary { position:static; }
+  .paper-assessment__scroll-hint { display:block; }
 }
 @media (max-width:680px) {
   .skill-files { gap:13px; }
@@ -183,6 +231,15 @@
   .paper-assessment__rows article>div,.paper-assessment__rows .paper-assessment__wide { grid-column:1/-1; }
   .paper-assessment__add { align-items:stretch; flex-direction:column; }
   .paper-assessment__add select { min-width:0; width:100%; }
+  .paper-assessment__rows input,.paper-assessment__rows .btn,.paper-assessment__add select,.paper-assessment__add .btn { min-height:44px; }
+  .paper-assessment__form-band { align-items:flex-start; flex-direction:column; gap:3px; }
+  .paper-assessment__editor form>.skill-files__manual-actions { position:sticky; z-index:8; inset-block-end:8px; margin-inline:-8px; padding:12px; border:1px solid var(--border); border-radius:14px; background:rgba(255,255,255,.97); box-shadow:0 12px 30px rgba(57,34,96,.16); backdrop-filter:blur(8px); }
+  .paper-assessment__editor form>.skill-files__manual-actions .btn { width:100%; min-height:46px; }
+  .paper-assessment__source { grid-column:auto; }
+  .paper-assessment__gradebook-head { align-items:stretch; flex-direction:column; }
+  .paper-assessment__preview-columns { grid-template-columns:1fr; }
+  .paper-assessment__grade-table .is-student { min-width:155px; }
+  .paper-assessment__grade-input { width:74px; min-height:44px; }
 }
 @media (prefers-reduced-motion:reduce) {
   .skill-files * { scroll-behavior:auto!important; transition:none!important; }

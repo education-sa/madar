@@ -11,20 +11,24 @@
             box-sizing: border-box;
         }
 
+        html,
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f5f0f8;
-            padding: 20px;
+            background: transparent;
+        }
+
+        body {
+            padding: 0;
         }
 
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 10px 40px rgba(128, 0, 128, 0.1);
-            padding: 30px;
-            border: 2px solid #e8d5f5;
+            background: transparent;
+            border-radius: 0;
+            box-shadow: none;
+            padding: 0;
+            border: 0;
         }
 
         .page-header {
@@ -1082,9 +1086,10 @@
 
         /* ===== هوية مدار: تغيير الألوان والخط فقط ===== */
         @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap');
-        body { font-family: 'Tajawal', sans-serif; background: #f7f4fc; color: #241b3c; }
+        html, body { background: transparent; }
+        body { font-family: 'Tajawal', sans-serif; color: #241b3c; }
         button, input, select { font-family: 'Tajawal', sans-serif; }
-        .container { max-width: 1500px; border-color: #dfd4ef; box-shadow: 0 18px 48px rgba(64,32,118,.10); }
+        .container { max-width: 1500px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
         .page-header h1, .total-points, .points-label { color: #47218c; }
         .btn-outline { border-color: #6137c8; color: #47218c; }
         .btn-outline:hover, .search-filters .search-btn { background: #47218c; color: #fff; }
@@ -1148,8 +1153,8 @@
         .term-switch button + button { border-inline-start: 1px solid #e5dcf0; }
         .term-switch button.active { color: #fff; background: linear-gradient(135deg,#47218c,#7848e8); }
         @media (max-width: 720px) {
-            body { padding: 10px; }
-            .container { padding: 18px 10px; border-radius: 16px; }
+            body { padding: 0; }
+            .container { padding: 0; border-radius: 0; }
             .page-header { align-items: flex-start; }
             .header-tools { width: 100%; min-width: 0; }
             .header-buttons { width: 100%; gap: 5px; }
@@ -1166,7 +1171,8 @@
             .quick-point-btn { width: 30px; height: 30px; font-size: 18px; }
         }
 
-    </style>
+    .points-breakdown{font-size:11px;text-align:right;margin-top:7px;min-width:130px}.points-breakdown summary{color:#56318c;cursor:pointer;white-space:nowrap}.points-breakdown ul{padding:8px 18px;margin:5px 0;background:#f6f2fc;border-radius:8px}.points-breakdown li{margin:4px 0}.unified-points-note{margin:14px 0;padding:14px 18px;background:#f3effa;border:1px solid #ded3ef;border-radius:12px;color:#47218c;line-height:1.9;font-size:13px}@media print{.points-breakdown{display:none}}
+</style>
 </head>
 <body>
 
@@ -1271,19 +1277,19 @@
         <div class="hint-text" id="add-hint">👇 اختر عدد النقاط أو المهارة أو كليهما معاً</div>
         
         <div class="icon-grid">
-            <button id="add-point-1">
+            <button id="add-point-1" data-points="1">
                 ⭐
                 <span>نقطة</span>
             </button>
-            <button id="add-point-2">
+            <button id="add-point-2" data-points="2">
                 ⭐⭐
                 <span>نقطتان</span>
             </button>
-            <button id="add-point-5">
+            <button id="add-point-5" data-points="5">
                 🏅
                 <span>خمس نقاط</span>
             </button>
-            <button id="add-point-10">
+            <button id="add-point-10" data-points="10">
                 👑
                 <span>عشر نقاط</span>
             </button>
@@ -1303,8 +1309,8 @@
         <div class="custom-add-section">
             <div class="custom-title">✏️ سبب آخر</div>
             <div class="custom-row">
-                <input type="number" id="add-custom-points" placeholder="نقاط" min="1" max="20" value="1">
-                <input type="text" id="add-custom-reason" placeholder="سبب الإضافة...">
+                <input type="text" id="add-custom-points" placeholder="نقاط" inputmode="numeric" autocomplete="off" pattern="[0-9٠-٩۰-۹]+" value="1">
+                <input type="text" id="add-custom-reason" placeholder="سبب الإضافة (اختياري)">
             </div>
         </div>
 
@@ -1344,7 +1350,7 @@
         <div class="custom-deduct">
             <div class="custom-title">✏️ خسارة مخصصة</div>
             <div class="custom-row">
-                <input type="number" id="custom-deduct-points" placeholder="نقاط" min="1" max="20" value="1">
+                <input type="text" id="custom-deduct-points" placeholder="نقاط" inputmode="numeric" autocomplete="off" pattern="[0-9٠-٩۰-۹]+" value="1">
                 <input type="text" id="custom-deduct-reason" placeholder="سبب الخسارة...">
             </div>
             <button class="deduct-custom-btn">➖ خصم</button>
@@ -1373,8 +1379,8 @@
         <div class="bulk-custom-section">
             <div class="custom-title">✏️ سبب آخر</div>
             <div class="custom-row">
-                <input type="number" id="bulk-add-custom-points" placeholder="نقاط" min="1" max="20" value="1">
-                <input type="text" id="bulk-add-custom-reason" placeholder="سبب الإضافة...">
+                <input type="text" id="bulk-add-custom-points" placeholder="نقاط" inputmode="numeric" autocomplete="off" pattern="[0-9٠-٩۰-۹]+" value="1">
+                <input type="text" id="bulk-add-custom-reason" placeholder="سبب الإضافة (اختياري)">
             </div>
             <button class="bulk-custom-add-btn">➕ إضافة</button>
         </div>
@@ -1401,7 +1407,7 @@
         <div class="bulk-custom-section">
             <div class="custom-title">✏️ سبب آخر</div>
             <div class="custom-row">
-                <input type="number" id="bulk-deduct-custom-points" placeholder="نقاط" min="1" max="20" value="1">
+                <input type="text" id="bulk-deduct-custom-points" placeholder="نقاط" inputmode="numeric" autocomplete="off" pattern="[0-9٠-٩۰-۹]+" value="1">
                 <input type="text" id="bulk-deduct-custom-reason" placeholder="سبب الخصم...">
             </div>
             <button class="bulk-custom-deduct-btn">➖ خصم</button>
@@ -1459,6 +1465,20 @@
         const map = {'واجب':'homework','مشاركة':'participation','حضور':'attendance','مهام':'task','مهمة':'task'};
         const category = map[clean] || 'other';
         return {category, otherReason: category === 'other' ? (clean || 'نقاط تحفيزية') : '', details: '', term: currentTerm};
+    }
+
+    function readPointsInput(id) {
+        const input = document.getElementById(id);
+        const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
+        const persianDigits = '۰۱۲۳۴۵۶۷۸۹';
+        const normalized = String(input?.value || '')
+            .trim()
+            .replace(/[٠-٩]/g, digit => String(arabicDigits.indexOf(digit)))
+            .replace(/[۰-۹]/g, digit => String(persianDigits.indexOf(digit)))
+            .replace(/[٬,\s]/g, '');
+        const points = /^\d+$/.test(normalized) ? Number(normalized) : NaN;
+        if (Number.isInteger(points) && input) input.value = String(points);
+        return points;
     }
 
     function setBusy(value) {
@@ -1519,6 +1539,7 @@
             semester: extractSection(student.class_name),
             className: student.class_name || '',
             points: Number(student.points || 0),
+            pointsSummary: student.pointsSummary || {},
             reasons: []
         };
     }
@@ -1545,6 +1566,7 @@
             body: JSON.stringify({points: actual, ...reasonPayload(reason)})
         });
         student.points = Number(result.total || 0);
+        student.pointsSummary = result.pointsSummary || student.pointsSummary;
         return actual;
     }
 
@@ -1566,6 +1588,7 @@
     }
 
     async function initializePage() {
+        const notice=document.createElement('p');notice.className='unified-points-note';notice.textContent='الرصيد موحّد مع حساب الطالبة: الألعاب والمسابقات المكتملة، الاختبارات المصححة، الصف المقلوب، الحضور والمشاركة والواجبات والمهام، مع التحفيز اليدوي. تُحسب الأنشطة مرة واحدة من سجلاتها الأصلية، حسب العام والترم الحاليين.';document.getElementById('points-table').parentElement.before(notice);
         document.getElementById('table-body').innerHTML = '<tr><td colspan="9" class="loading-state">جارٍ تحميل طالباتكِ...</td></tr>';
         try {
             const me = await apiRequest('/me');
@@ -1596,8 +1619,8 @@
         document.querySelector('.search-btn').addEventListener('click', filterTable);
         document.querySelector('.clear-btn').addEventListener('click', resetFilters);
 
-        document.querySelectorAll('#modal-add .icon-grid button').forEach((button,index) => {
-            const points = [1,2,5,10][index];
+        document.querySelectorAll('#modal-add .icon-grid button').forEach(button => {
+            const points = Number(button.dataset.points);
             button.addEventListener('click', () => selectAddPoints(points, button));
         });
         document.querySelectorAll('#modal-add .skills-grid button').forEach(button => {
@@ -1644,6 +1667,14 @@
         orb.innerHTML = `<span>أعلى نقاط</span><strong title="${escapeHtml(top.name)}">${escapeHtml(top.name)}</strong><small>${Number(top.points || 0)} نقطة</small>`;
     }
 
+    function pointBreakdown(student) {
+        const labels={games:'الألعاب والمسابقات',grade:'الاختبارات والدرجات',homework:'الواجبات',participation:'المشاركة',attendance:'الحضور',task:'المهام',motivation:'التحفيز اليدوي'};
+        const summary=student.pointsSummary||{};
+        const items=Object.entries(labels).filter(([key])=>Number(summary[key]||0)!==0);
+        if(!items.length)return '';
+        return '<details class="points-breakdown"><summary>تفصيل النقاط</summary><ul>'+items.map(([key,label])=>'<li>'+escapeHtml(label)+': <b>'+Number(summary[key]||0).toLocaleString('ar-SA')+'</b></li>').join('')+'</ul></details>';
+    }
+
     function renderTable(data) {
         const tbody = document.getElementById('table-body');
         tbody.innerHTML = '';
@@ -1666,7 +1697,7 @@
                 <td><button class="quick-point-btn" type="button" title="إضافة نقطة سريعة">⭐</button></td>
                 <td><button class="action-btn add" type="button">➕ إضافة</button></td>
                 <td><button class="action-btn deduct" type="button">➖ خسارة</button></td>
-                <td><span class="${totalClass}">${points}</span><span class="points-label">نقاط مدار</span></td>`;
+                <td><span class="${totalClass}">${points}</span><span class="points-label">نقاط مدار</span>${pointBreakdown(student)}</td>`;
             tr.querySelector('.quick-point-btn').addEventListener('click', () => quickAddPoint(student.id));
             tr.querySelector('.action-btn.add').addEventListener('click', () => openAddModal(student.id));
             tr.querySelector('.action-btn.deduct').addEventListener('click', () => openDeductModal(student.id));
@@ -1711,7 +1742,7 @@
         if(!selectedStudentId||operationBusy)return; const student=studentById(selectedStudentId); let points=0,reason='';
         if(selectedAddPoints&&!selectedAddSkill){points=selectedAddPoints;reason=({1:'⭐ نقطة',2:'⭐⭐ نقطتان',5:'🏅 خمس نقاط',10:'👑 عشر نقاط'})[points]||`${points} نقاط`;}
         else if(!selectedAddPoints&&selectedAddSkill){points=1;reason=selectedAddSkill;}
-        else if(!selectedAddPoints&&!selectedAddSkill){points=Number(document.getElementById('add-custom-points').value);reason=document.getElementById('add-custom-reason').value.trim();if(!Number.isInteger(points)||points<1)return showToast('⚠️ الرجاء إدخال عدد صحيح من النقاط','warning');if(!reason)return showToast('⚠️ الرجاء كتابة سبب الإضافة','warning');}
+        else if(!selectedAddPoints&&!selectedAddSkill){points=readPointsInput('add-custom-points');reason=document.getElementById('add-custom-reason').value.trim()||'نقاط تحفيزية';if(!Number.isInteger(points)||points<1||points>1000)return showToast('⚠️ اكتبي عدد نقاط صحيحًا بين 1 و1000','warning');}
         else return executeAutoAdd();
         try{setBusy(true);await saveStudentPoints(student,points,reason);showToast(`✅ تمت إضافة ${points} نقاط للطالبة ${student.name} (${reason})`,'blue');closeAddModal();renderTable(getFilteredData());}
         catch(error){showToast(error.message,'error');}finally{setBusy(false);}
@@ -1722,7 +1753,7 @@
     function closeDeductModal(){document.getElementById('modal-deduct').classList.remove('active');selectedStudentId=null;}
 
     async function quickDeduct(reason){const student=studentById(selectedStudentId);if(!student||operationBusy)return;try{setBusy(true);const actual=await saveStudentPoints(student,-1,`❌ ${reason}`);showToast(`⚠️ تم خصم ${Math.abs(actual)} نقطة من ${student.name} (${reason})`,'error');closeDeductModal();renderTable(getFilteredData());}catch(error){showToast(error.message,'error');}finally{setBusy(false);}}
-    async function saveCustomDeduct(){const student=studentById(selectedStudentId);if(!student||operationBusy)return;const points=Number(document.getElementById('custom-deduct-points').value);const reason=document.getElementById('custom-deduct-reason').value.trim();if(!Number.isInteger(points)||points<1)return showToast('⚠️ الرجاء إدخال عدد صحيح من النقاط','warning');if(!reason)return showToast('⚠️ الرجاء إدخال سبب الخسارة','warning');try{setBusy(true);const actual=await saveStudentPoints(student,-points,`❌ ${reason}`);showToast(`⚠️ تم خصم ${Math.abs(actual)} نقاط من ${student.name}`,'error');closeDeductModal();renderTable(getFilteredData());}catch(error){showToast(error.message,'error');}finally{setBusy(false);}}
+    async function saveCustomDeduct(){const student=studentById(selectedStudentId);if(!student||operationBusy)return;const points=readPointsInput('custom-deduct-points');const reason=document.getElementById('custom-deduct-reason').value.trim();if(!Number.isInteger(points)||points<1||points>1000)return showToast('⚠️ اكتبي عدد نقاط صحيحًا بين 1 و1000','warning');if(!reason)return showToast('⚠️ الرجاء إدخال سبب الخسارة','warning');try{setBusy(true);const actual=await saveStudentPoints(student,-points,`❌ ${reason}`);showToast(`⚠️ تم خصم ${Math.abs(actual)} نقاط من ${student.name}`,'error');closeDeductModal();renderTable(getFilteredData());}catch(error){showToast(error.message,'error');}finally{setBusy(false);}}
 
     function openBulkAddModal(){const data=getFilteredData();if(!data.length)return showToast('⚠️ لا توجد طالبات ضمن نتائج البحث','warning');document.querySelector('#modal-bulk-add .info-text').textContent='📌 سيتم التطبيق على نتائج البحث الحالية فقط';document.getElementById('bulk-add-custom-points').value=1;document.getElementById('bulk-add-custom-reason').value='';document.getElementById('modal-bulk-add').classList.add('active');}
     function closeBulkAddModal(){document.getElementById('modal-bulk-add').classList.remove('active');}
@@ -1732,9 +1763,9 @@
 
     async function applyBulk(points,reason){const data=getFilteredData();if(!data.length||operationBusy)return;let success=0,skipped=0,failed=0;setBusy(true);try{for(let i=0;i<data.length;i+=6){const chunk=data.slice(i,i+6);const results=await Promise.allSettled(chunk.map(async student=>{let actual=points;if(points<0){const available=Math.max(0,Number(student.points||0));if(!available)return{skipped:true};actual=-Math.min(Math.abs(points),available);}await saveStudentPoints(student,actual,reason);return{skipped:false};}));results.forEach(result=>{if(result.status==='fulfilled'){result.value.skipped?skipped++:success++;}else failed++;});}closeAllModals();renderTable(getFilteredData());if(failed)showToast(`تم تحديث ${success} طالبة وتعذّر تحديث ${failed} طالبة`,'warning');else if(points>0)showToast(`✅ تمت إضافة ${points} ${points===1?'نقطة':'نقاط'} إلى ${success} طالبة (${reason})`,'success');else showToast(`⚠️ تم الخصم من ${success} طالبة${skipped?` وتجاوز ${skipped} بلا رصيد`:''}`,'error');}finally{setBusy(false);}}
     function bulkAddAuto(reason){return applyBulk(1,reason);}
-    function saveBulkAddCustom(){const points=Number(document.getElementById('bulk-add-custom-points').value);const reason=document.getElementById('bulk-add-custom-reason').value.trim();if(!Number.isInteger(points)||points<1)return showToast('⚠️ الرجاء إدخال عدد صحيح من النقاط','warning');if(!reason)return showToast('⚠️ الرجاء كتابة سبب الإضافة','warning');return applyBulk(points,reason);}
+    function saveBulkAddCustom(){const points=readPointsInput('bulk-add-custom-points');const reason=document.getElementById('bulk-add-custom-reason').value.trim()||'نقاط تحفيزية';if(!Number.isInteger(points)||points<1||points>1000)return showToast('⚠️ اكتبي عدد نقاط صحيحًا بين 1 و1000','warning');return applyBulk(points,reason);}
     function bulkDeductAuto(reason){return applyBulk(-1,`❌ ${reason}`);}
-    function saveBulkDeductCustom(){const points=Number(document.getElementById('bulk-deduct-custom-points').value);const reason=document.getElementById('bulk-deduct-custom-reason').value.trim();if(!Number.isInteger(points)||points<1)return showToast('⚠️ الرجاء إدخال عدد صحيح من النقاط','warning');if(!reason)return showToast('⚠️ الرجاء إدخال سبب الخصم','warning');return applyBulk(-points,`❌ ${reason}`);}
+    function saveBulkDeductCustom(){const points=readPointsInput('bulk-deduct-custom-points');const reason=document.getElementById('bulk-deduct-custom-reason').value.trim();if(!Number.isInteger(points)||points<1||points>1000)return showToast('⚠️ اكتبي عدد نقاط صحيحًا بين 1 و1000','warning');if(!reason)return showToast('⚠️ الرجاء إدخال سبب الخصم','warning');return applyBulk(-points,`❌ ${reason}`);}
 
     function getFilteredData(){const stage=document.getElementById('filter-stage').value;const classFilter=document.getElementById('filter-class').value;const semester=document.getElementById('filter-semester').value;const search=document.getElementById('search-input').value.trim().toLocaleLowerCase('ar');return studentsData.filter(student=>{if(stage!=='all'&&student.stage!==stage)return false;if(classFilter!=='all'&&student.class!==classFilter)return false;if(semester!=='all'&&student.semester!==semester)return false;const text=`${student.name} ${student.email}`.toLocaleLowerCase('ar');return !search||text.includes(search);});}
     function filterTable(){renderTable(getFilteredData());}

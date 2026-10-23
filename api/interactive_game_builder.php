@@ -1,5 +1,7 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__.'/remedial_content.php';
+
 
 const INTERACTIVE_GAME_BUILDER_MIGRATION = 'migration_20260810_interactive_game_builder.sql';
 const INTERACTIVE_GAME_PACKAGE_MAX_BYTES = 20971520;
@@ -150,6 +152,11 @@ function interactive_game_builder_metadata(int $teacherId,array $data,?array $cu
     $pointsValue=$pointsEnabled
         ? interactive_game_builder_positive_int($data['pointsValue']??$current['points_value']??null,'نقاط إكمال اللعبة',1000)
         : 0;
+    $pointsPerQuestion=interactive_game_builder_positive_int(
+        $data['pointsPerQuestion']??$current['points_per_question']??$current['pointsPerQuestion']??100,
+        'عدد النقاط لكل سؤال',
+        1000
+    );
     $skills=interactive_game_builder_skill_ids($teacherId,$data['skillIds']??[],$stage,$grade);
     return [
         'gameKey'=>interactive_game_builder_key($data['gameKey']??$current['game_key']??''),
@@ -162,7 +169,7 @@ function interactive_game_builder_metadata(int $teacherId,array $data,?array $cu
         'sourceType'=>$source,'templateType'=>$template,'questionCount'=>$questionCount,
         'difficulties'=>array_keys($difficulties),'timeMode'=>$timeMode,'timeSeconds'=>$timeSeconds,
         'certificateEnabled'=>interactive_game_builder_bool($data['certificateEnabled']??$current['certificate_portfolio_enabled']??true,true),
-        'pointsEnabled'=>$pointsEnabled,'pointsValue'=>(int)$pointsValue,'skillIds'=>$skills,
+        'pointsEnabled'=>$pointsEnabled,'pointsValue'=>(int)$pointsValue,'pointsPerQuestion'=>(int)$pointsPerQuestion,'skillIds'=>$skills,
     ];
 }
 
@@ -222,10 +229,12 @@ function interactive_game_builder_questions(array $data,string $templateType,arr
 
 function interactive_game_builder_owned_game(int $teacherId,int $gameId,bool $includeDeleted=false): array
 {
-    $sql='SELECT * FROM teacher_interactive_games WHERE id=? AND teacher_id=?';
+    // لا تعرض واجهات الاستديو إلا الألعاب التي أنشأتها أو استوردتها المعلمة.
+    // بهذا لا يمكن لمس سجل اللعبة الثابتة القديمة (مثل النسبة المئوية) عبر مسار الاستديو.
+    $sql="SELECT * FROM teacher_interactive_games WHERE id=? AND teacher_id=? AND source_type IN ('template','package')";
     if(!$includeDeleted) $sql.=' AND deleted_at IS NULL';
     $row=fetch_one($sql.' LIMIT 1',[$gameId,$teacherId]);
-    if(!$row) Http::json(['error'=>'اللعبة غير موجودة ضمن حساب المعلمة.'],404);
+    if(!$row) Http::json(['error'=>'اللعبة المنشأة أو المستوردة غير موجودة ضمن حساب المعلمة.'],404);
     return $row;
 }
 
@@ -240,6 +249,7 @@ function interactive_game_builder_insert_version(PDO $pdo,int $teacherId,int $ga
         'questionCount'=>$metadata['questionCount'],'difficulties'=>$metadata['difficulties'],
         'timeMode'=>$metadata['timeMode'],'timePerQuestionSeconds'=>$metadata['timeSeconds'],
         'certificateEnabled'=>$metadata['certificateEnabled'],'pointsEnabled'=>$metadata['pointsEnabled'],'pointsValue'=>$metadata['pointsValue'],
+        'pointsPerQuestion'=>$metadata['pointsPerQuestion'],
     ];
     $insert=$pdo->prepare(
         'INSERT INTO interactive_game_versions (game_id,version_number,source_type,template_type,manifest_json,settings_json,entry_file,runtime_key,storage_key,original_zip_name,package_size_bytes,content_sha256,validation_status,validation_message,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
@@ -318,7 +328,8 @@ function interactive_game_builder_game_json(array $row): array
         'difficulties'=>interactive_game_builder_json_decode($row['allowed_difficulties_json']??null,[]),
         'timeMode'=>(string)$row['time_mode'],'timePerQuestionSeconds'=>$row['time_per_question_seconds']!==null?(int)$row['time_per_question_seconds']:null,
         'certificateEnabled'=>(bool)$row['certificate_portfolio_enabled'],'pointsEnabled'=>(bool)($row['points_enabled']??false),
-        'pointsValue'=>(int)($row['points_value']??0),'publicationCount'=>(int)($row['publication_count']??0),
+        'pointsValue'=>(int)($row['points_value']??0),'pointsPerQuestion'=>(int)($row['points_per_question']??100),
+        'publicationCount'=>(int)($row['publication_count']??0),
         'coverUrl'=>!empty($row['cover_stored_name'])?'/games/game-cover.php?game='.(int)$row['id']:'',
         'playUrl'=>'/games/game-player.php?game='.(int)$row['id'],'previewUrl'=>'/games/game-player.php?game='.(int)$row['id'].'&preview=1',
         'updatedAt'=>$row['updated_at']??null,
@@ -334,6 +345,7 @@ function interactive_game_builder_with_version(array $game,?array $version): arr
         'unitNumber'=>'unit_number','lessonNumber'=>'lesson_number','stage'=>'stage','gradeLabel'=>'grade_label','semester'=>'semester',
         'questionCount'=>'question_count','timeMode'=>'time_mode','timePerQuestionSeconds'=>'time_per_question_seconds',
         'certificateEnabled'=>'certificate_portfolio_enabled','pointsEnabled'=>'points_enabled','pointsValue'=>'points_value',
+        'pointsPerQuestion'=>'points_per_question',
     ];
     foreach($mapping as $setting=>$column) if(array_key_exists($setting,$settings)) $game[$column]=$settings[$setting];
     if(array_key_exists('difficulties',$settings))$game['allowed_difficulties_json']=interactive_game_builder_json_encode($settings['difficulties']);
@@ -351,10 +363,34 @@ function interactive_game_builder_list(int $teacherId): array
                 (SELECT COUNT(*) FROM interactive_game_publications p WHERE p.game_id=g.id AND p.status='published') AS publication_count
          FROM teacher_interactive_games g
          LEFT JOIN interactive_game_versions v ON v.id=g.current_version_id
-         WHERE g.teacher_id=? AND g.deleted_at IS NULL AND g.source_type IS NOT NULL
+         WHERE g.teacher_id=? AND g.deleted_at IS NULL AND g.source_type IN ('template','package')
          ORDER BY g.updated_at DESC,g.id DESC",[$teacherId]
     );
-    return array_map('interactive_game_builder_game_json',$rows);
+    $publicationTargets=[];
+    $gameIds=array_map(static fn(array $row):int=>(int)$row['id'],$rows);
+    if($gameIds) {
+        $placeholders=implode(',',array_fill(0,count($gameIds),'?'));
+        foreach(fetch_all(
+            "SELECT p.game_id,p.class_id,p.semester,c.stage,c.grade_label
+             FROM interactive_game_publications p
+             JOIN classes c ON c.id=p.class_id AND c.teacher_id=?
+             WHERE p.game_id IN ($placeholders) AND p.status='published'
+             ORDER BY p.game_id,c.stage,c.grade_label,c.name,c.id",
+            [$teacherId,...$gameIds]
+        ) as $publication) {
+            $publicationTargets[(int)$publication['game_id']][]=[
+                'classId'=>(int)$publication['class_id'],
+                'semester'=>(string)$publication['semester'],
+                'stage'=>(string)$publication['stage'],
+                'gradeLabel'=>(string)$publication['grade_label'],
+            ];
+        }
+    }
+    return array_map(static function(array $row) use($publicationTargets):array {
+        $game=interactive_game_builder_game_json($row);
+        $game['publicationTargets']=$publicationTargets[(int)$row['id']]??[];
+        return $game;
+    },$rows);
 }
 
 function interactive_game_builder_detail(int $teacherId,int $gameId): array
@@ -364,7 +400,19 @@ function interactive_game_builder_detail(int $teacherId,int $gameId): array
     $row=interactive_game_builder_with_version($game,$version?:null);
     $result=interactive_game_builder_game_json($row);
     $result['skillIds']=$version?array_map('intval',array_column(fetch_all('SELECT skill_id FROM interactive_game_version_skills WHERE version_id=?',[(int)$version['id']]),'skill_id')):[];
-    $result['classIds']=array_map('intval',array_column(fetch_all("SELECT class_id FROM interactive_game_publications WHERE game_id=? AND semester=? AND status='published'",[$gameId,(string)$game['semester']]),'class_id'));
+    $publicationTargets=fetch_all(
+        "SELECT p.class_id,p.semester,c.stage,c.grade_label
+         FROM interactive_game_publications p
+         JOIN classes c ON c.id=p.class_id AND c.teacher_id=?
+         WHERE p.game_id=? AND p.status='published'
+         ORDER BY c.stage,c.grade_label,c.name,c.id",
+        [$teacherId,$gameId]
+    );
+    $result['publicationTargets']=array_map(static fn(array $target):array=>[
+        'classId'=>(int)$target['class_id'],'semester'=>(string)$target['semester'],
+        'stage'=>(string)$target['stage'],'gradeLabel'=>(string)$target['grade_label'],
+    ],$publicationTargets);
+    $result['classIds']=array_map(static fn(array $target):int=>(int)$target['class_id'],$publicationTargets);
     $result['questions']=[];
     if($version&&(string)$version['source_type']==='template') {
         foreach(fetch_all('SELECT * FROM interactive_game_questions WHERE version_id=? ORDER BY sort_order,id',[(int)$version['id']]) as $question) {
@@ -402,13 +450,94 @@ function interactive_game_builder_update_template(int $teacherId,int $gameId): n
 {
     interactive_game_builder_require_schema();$current=interactive_game_builder_owned_game($teacherId,$gameId);
     if((string)$current['source_type']!=='template') Http::json(['error'=>'هذه اللعبة حزمة مبرمجة؛ استخدمي رفع إصدار ZIP جديد لتحديثها.'],422);
-    $data=Http::input();$data['sourceType']='template';$data['gameKey']=$current['game_key'];$data['templateType']=$current['template_type'];$metadata=interactive_game_builder_metadata($teacherId,$data,$current);
+    $data=Http::input();$data['sourceType']='template';$data['gameKey']=$current['game_key'];$data['templateType']=$current['template_type'];
+    $currentVersion=$current['current_version_id']?fetch_one('SELECT * FROM interactive_game_versions WHERE id=? AND game_id=?',[(int)$current['current_version_id'],$gameId]):null;
+    $metadata=interactive_game_builder_metadata($teacherId,$data,interactive_game_builder_with_version($current,$currentVersion?:null));
     $questions=interactive_game_builder_questions($data,(string)$metadata['templateType'],$metadata['skillIds']);
     Database::transaction(function(PDO $pdo) use($teacherId,$gameId,$metadata,$questions): void {
         interactive_game_builder_update_metadata($pdo,$teacherId,$gameId,$metadata);
         interactive_game_builder_insert_version($pdo,$teacherId,$gameId,$metadata,$questions);
     });
     Activity::log('teacher',$teacherId,'إنشاء إصدار جديد للعبة',$metadata['name']);
+    Http::json(['game'=>interactive_game_builder_detail($teacherId,$gameId)]);
+}
+
+function interactive_game_builder_settings(int $teacherId,int $gameId): never
+{
+    interactive_game_builder_require_schema();
+    $current=interactive_game_builder_owned_game($teacherId,$gameId);
+    $detail=interactive_game_builder_detail($teacherId,$gameId);
+    $data=Http::input();
+    $timerOnly=interactive_game_builder_bool($data['timerOnly']??false);
+    $syncPublication=!$timerOnly&&interactive_game_builder_bool($data['syncPublication']??false);
+    $semester=$timerOnly
+        ? (string)$detail['semester']
+        : interactive_game_semester($data['semester']??$detail['semester']??'');
+    $timeMode=(string)($data['timeMode']??$detail['timeMode']??'open');
+    if(!in_array($timeMode,['open','timed'],true)) Http::json(['error'=>'وضع وقت اللعبة غير صالح.'],422);
+    $timeSeconds=null;
+    if($timeMode==='timed') {
+        $timeSeconds=interactive_game_builder_positive_int($data['timePerQuestionSeconds']??$detail['timePerQuestionSeconds']??null,'وقت السؤال',120);
+        if($timeSeconds<15) Http::json(['error'=>'وقت السؤال المحدد يجب أن يكون بين 15 و120 ثانية.'],422);
+    }
+    $metadata=interactive_game_builder_metadata($teacherId,[
+        'gameKey'=>$detail['gameKey'],'name'=>$timerOnly?$detail['name']:($data['name']??$detail['name']),'description'=>$detail['description'],'subjectName'=>$detail['subjectName'],
+        'lessonName'=>$timerOnly?$detail['lessonName']:($data['lessonName']??$detail['lessonName']),
+        'unitNumber'=>$timerOnly?$detail['unitNumber']:($data['unitNumber']??$detail['unitNumber']),
+        'lessonNumber'=>$timerOnly?$detail['lessonNumber']:($data['lessonNumber']??$detail['lessonNumber']),
+        'stage'=>$timerOnly?$detail['stage']:($data['stage']??$detail['stage']),
+        'gradeLabel'=>$timerOnly?$detail['gradeLabel']:($data['gradeLabel']??$detail['gradeLabel']),
+        'semester'=>$semester,'sourceType'=>$detail['sourceType'],'templateType'=>$detail['templateType'],
+        'questionCount'=>max(1,(int)$detail['questionCount']),'difficulties'=>$detail['difficulties'],
+        'timeMode'=>$timeMode,'timePerQuestionSeconds'=>$timeSeconds,
+        'certificateEnabled'=>$timerOnly?$detail['certificateEnabled']:($data['certificateEnabled']??$detail['certificateEnabled']),
+        'pointsEnabled'=>$detail['pointsEnabled'],'pointsValue'=>$detail['pointsValue'],
+        'pointsPerQuestion'=>$timerOnly?$detail['pointsPerQuestion']:($data['pointsPerQuestion']??$detail['pointsPerQuestion']),
+        'skillIds'=>$detail['skillIds'],
+    ],$current);
+    $classes=[];
+    if($syncPublication) {
+        $classIds=[];
+        foreach((array)($data['classIds']??[]) as $item) {
+            $id=filter_var($item,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+            if($id!==false) $classIds[(int)$id]=true;
+        }
+        if(!$classIds) Http::json(['error'=>'لا توجد فصول مطابقة لنطاق النشر المختار.'],422);
+        $ids=array_keys($classIds);$placeholders=implode(',',array_fill(0,count($ids),'?'));
+        $classes=fetch_all("SELECT id,academic_year FROM classes WHERE teacher_id=? AND id IN ($placeholders)",[$teacherId,...$ids]);
+        if(count($classes)!==count($ids)) Http::json(['error'=>'أحد الفصول المختارة لا يتبع حساب المعلمة.'],403);
+    }
+    $sourceVersion=fetch_one('SELECT * FROM interactive_game_versions WHERE id=? AND game_id=?',[(int)$current['current_version_id'],$gameId]);
+    if(!$sourceVersion) Http::json(['error'=>'لا يوجد إصدار حالي يمكن تحديث إعداداته.'],422);
+    $questions=$metadata['sourceType']==='template'
+        ? interactive_game_builder_questions(['questions'=>$detail['questions']],(string)$metadata['templateType'],$metadata['skillIds'])
+        : [];
+    if($metadata['sourceType']==='template') {
+        foreach($questions as &$question) $question['points']=$metadata['pointsPerQuestion'];
+        unset($question);
+    }
+    $package=null;
+    if($metadata['sourceType']==='package') $package=[
+        'manifest'=>interactive_game_builder_json_decode($sourceVersion['manifest_json'],[]),'entry'=>$sourceVersion['entry_file'],'runtime'=>$sourceVersion['runtime_key'],
+        'storageKey'=>$sourceVersion['storage_key'],'originalName'=>$sourceVersion['original_zip_name'],'size'=>$sourceVersion['package_size_bytes'],
+        'sha256'=>$sourceVersion['content_sha256'],'status'=>$sourceVersion['validation_status'],'message'=>$sourceVersion['validation_message'],
+    ];
+    Database::transaction(function(PDO $pdo) use($teacherId,$gameId,$metadata,$questions,$package,$syncPublication,$classes,$semester): void {
+        interactive_game_builder_update_metadata($pdo,$teacherId,$gameId,$metadata);
+        $versionId=interactive_game_builder_insert_version($pdo,$teacherId,$gameId,$metadata,$questions,$package);
+        if($syncPublication) {
+            $pdo->prepare("UPDATE interactive_game_publications SET status='disabled',disabled_at=NOW() WHERE game_id=? AND status='published'")->execute([$gameId]);
+            $publish=$pdo->prepare(
+                "INSERT INTO interactive_game_publications (game_id,version_id,class_id,academic_year,semester,status,published_at,disabled_at) VALUES (?,?,?,?,?,'published',NOW(),NULL)
+                 ON DUPLICATE KEY UPDATE version_id=VALUES(version_id),status='published',published_at=NOW(),disabled_at=NULL"
+            );
+            foreach($classes as $class) $publish->execute([$gameId,$versionId,(int)$class['id'],(string)$class['academic_year'],$semester]);
+            $pdo->prepare("UPDATE teacher_interactive_games SET lifecycle_status='published',is_active=1,semester=? WHERE id=? AND teacher_id=?")->execute([$semester,$gameId,$teacherId]);
+        } else {
+            $pdo->prepare("UPDATE interactive_game_publications SET version_id=? WHERE game_id=? AND status='published'")->execute([$versionId,$gameId]);
+        }
+    });
+    Activity::log('teacher',$teacherId,$timerOnly?'تحديث مؤقت لعبة تفاعلية':($syncPublication?'تحديث إعدادات ونشر لعبة تفاعلية':'تحديث إعدادات لعبة تفاعلية'),(string)$current['game_key']);
     Http::json(['game'=>interactive_game_builder_detail($teacherId,$gameId)]);
 }
 
@@ -425,7 +554,7 @@ function interactive_game_builder_copy(int $teacherId,int $gameId): never
         'stage'=>$detail['stage'],'gradeLabel'=>$detail['gradeLabel'],'semester'=>$detail['semester'],'sourceType'=>$detail['sourceType'],
         'templateType'=>$detail['templateType'],'questionCount'=>max(1,$detail['questionCount']),'difficulties'=>$detail['difficulties'],
         'timeMode'=>$detail['timeMode'],'timePerQuestionSeconds'=>$detail['timePerQuestionSeconds'],'certificateEnabled'=>$detail['certificateEnabled'],
-        'pointsEnabled'=>$detail['pointsEnabled'],'pointsValue'=>$detail['pointsValue'],'skillIds'=>$detail['skillIds'],
+        'pointsEnabled'=>$detail['pointsEnabled'],'pointsValue'=>$detail['pointsValue'],'pointsPerQuestion'=>$detail['pointsPerQuestion'],'skillIds'=>$detail['skillIds'],
     ]);
     $sourceVersion=fetch_one('SELECT * FROM interactive_game_versions WHERE id=?',[(int)$current['current_version_id']]);
     $questions=$metadata['sourceType']==='template'?interactive_game_builder_questions(['questions'=>$detail['questions']],(string)$metadata['templateType'],$metadata['skillIds']):[];
@@ -460,7 +589,7 @@ function interactive_game_builder_publish(int $teacherId,int $gameId): never
     $classes=fetch_all("SELECT id,academic_year FROM classes WHERE teacher_id=? AND id IN ($placeholders)",[$teacherId,...$ids]);
     if(count($classes)!==count($ids)) Http::json(['error'=>'أحد الفصول المختارة لا يتبع حساب المعلمة.'],403);
     Database::transaction(function(PDO $pdo) use($teacherId,$gameId,$versionId,$semester,$classes): void {
-        $pdo->prepare("UPDATE interactive_game_publications SET status='disabled',disabled_at=NOW() WHERE game_id=? AND semester=?")->execute([$gameId,$semester]);
+        $pdo->prepare("UPDATE interactive_game_publications SET status='disabled',disabled_at=NOW() WHERE game_id=? AND status='published'")->execute([$gameId]);
         $publish=$pdo->prepare(
             "INSERT INTO interactive_game_publications (game_id,version_id,class_id,academic_year,semester,status,published_at,disabled_at) VALUES (?,?,?,?,?,'published',NOW(),NULL)
              ON DUPLICATE KEY UPDATE version_id=VALUES(version_id),status='published',published_at=NOW(),disabled_at=NULL"
@@ -530,7 +659,7 @@ function interactive_game_package_allowed_mimes(): array
 {
     return [
         'html'=>['text/html','text/plain'],'htm'=>['text/html','text/plain'],'css'=>['text/css','text/plain'],
-        'js'=>['text/javascript','application/javascript','application/x-javascript','text/plain'],
+        'js'=>['text/javascript','application/javascript','application/x-javascript','application/ecmascript','text/plain'],
         'json'=>['application/json','text/plain'],'png'=>['image/png'],'jpg'=>['image/jpeg'],'jpeg'=>['image/jpeg'],
         'webp'=>['image/webp'],'gif'=>['image/gif'],'mp3'=>['audio/mpeg','audio/mp3','application/octet-stream'],
         'ogg'=>['audio/ogg','application/ogg'],'wav'=>['audio/wav','audio/x-wav'],'m4a'=>['audio/mp4','audio/x-m4a','application/octet-stream'],
@@ -539,23 +668,38 @@ function interactive_game_package_allowed_mimes(): array
     ];
 }
 
+function interactive_game_package_mime_matches(string $path,string $extension,string $mime,array $allowed): bool
+{
+    if(in_array($mime,$allowed[$extension]??[],true)) return true;
+    if(!in_array($extension,['html','htm','css','js','json'],true)||!str_starts_with($mime,'text/')) return false;
+    $content=file_get_contents($path);
+    return is_string($content)&&!str_contains($content,"\0")&&mb_check_encoding($content,'UTF-8');
+}
+
 function interactive_game_package_scan_text(string $path,string $extension): void
 {
     $content=(string)file_get_contents($path);
     if(str_contains($content,'<?')) Http::json(['error'=>'الحزمة تحتوي تعليمات خادم غير مسموح بها.'],422);
-    if(in_array($extension,['html','htm','css'],true)&&preg_match('/(?:src|href)\s*=\s*["\']\s*(?:[a-z][a-z0-9+.-]*:|\/\/|\/)|url\s*\(\s*["\']?\s*(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i',$content)) {
-        Http::json(['error'=>'الحزمة تستخدم رابطًا خارجيًا أو مسارًا خارج ZIP. استخدمي ملفات محلية نسبية داخل الحزمة فقط.'],422);
+    if(in_array($extension,['html','htm','css'],true)&&preg_match('/(?:src|href)\s*=\s*["\']\s*(?:(?:https?|ftp|file|javascript):|\/\/)|url\s*\(\s*["\']?\s*(?:(?:https?|ftp|file|javascript):|\/\/)/i',$content)) {
+        Http::json(['error'=>'الحزمة تستخدم اتصالًا خارجيًا غير مسموح. ضعي الملفات داخل ZIP أو استخدمي مسارات مدار المحلية.'],422);
     }
-    if($extension==='css'&&preg_match('/@import\s+/i',$content)) Http::json(['error'=>'لا يسمح باستخدام @import داخل حزمة اللعبة.'],422);
+    if($extension==='css'&&preg_match('/@import\s+(?:url\s*\()?\s*["\']?\s*(?:(?:https?|ftp|file|javascript):|\/\/)/i',$content)) Http::json(['error'=>'لا يسمح لـ @import بالاتصال بمصدر خارجي.'],422);
     if(in_array($extension,['html','htm'],true)&&preg_match('/<(?:base|form|iframe|object|embed)\b|<meta\b[^>]*http-equiv\s*=\s*["\']?refresh/i',$content)) {
         Http::json(['error'=>'الحزمة تحتوي عنصر تنقّل أو تضمين غير مسموح.'],422);
     }
-    if(in_array($extension,['html','htm'],true)&&preg_match('/<script\b(?![^>]*\bsrc\s*=)[^>]*>/i',$content)) {
-        Http::json(['error'=>'ضعي JavaScript في ملف محلي مستقل؛ تعليمات script المضمنة غير مسموحة.'],422);
+}
+
+function interactive_game_package_install_auto_compat(string $entryPath): void
+{
+    $content=file_get_contents($entryPath);if(!is_string($content)) Http::json(['error'=>'تعذّر تجهيز صفحة تشغيل اللعبة تلقائيًا.'],422);
+    if(str_contains($content,'madar-game-auto-compat-v1.js')) return;
+    $scripts='<script src="/assets/js/madar-game-bridge-v1.js?v=20260908_ios_3"></script><script src="/assets/js/madar-game-auto-compat-v1.js?v=20260908_ios_3"></script>';
+    if(preg_match('/<head\b[^>]*>/i',$content)) {
+        $content=(string)preg_replace_callback('/<head\b[^>]*>/i',static fn(array $match):string=>$match[0].$scripts,$content,1);
+    } else {
+        $content=$scripts.$content;
     }
-    if($extension==='js'&&preg_match('/(?:\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\bEventSource\b|\bserviceWorker\b|\bimportScripts\s*\(|\bdocument\.cookie\b|\blocalStorage\b|\bsessionStorage\b|\bwindow\.open\s*\(|\blocation\.(?:assign|replace)\s*\(|\blocation\.href\s*=|\b(?:window\.|document\.)?location\s*=)/i',$content)) {
-        Http::json(['error'=>'الحزمة تحاول استخدام شبكة أو تخزين متصفح أو تنقّل مباشر. استخدمي MadarGameBridge فقط.'],422);
-    }
+    if(file_put_contents($entryPath,$content,LOCK_EX)===false) Http::json(['error'=>'تعذّر إضافة وضع التوافق الآمن إلى اللعبة.'],500);
 }
 
 function interactive_game_package_move_tree(string $source,string $target): bool
@@ -603,6 +747,131 @@ function interactive_game_package_remove_tree(string $directory): void
     @rmdir($directory);
 }
 
+function interactive_game_package_resolve_reference(string $entry,string $reference): ?string
+{
+    $path=str_replace('\\','/',$reference);
+    if(str_starts_with($path,'/')) $path=ltrim($path,'/');
+    else {
+        $directory=dirname($entry);$directory=$directory==='.'?'':$directory;
+        $path=$directory!==''?$directory.'/'.$path:$path;
+    }
+    $clean=[];
+    foreach(explode('/',$path) as $part) {
+        if($part===''||$part==='.') continue;
+        if($part==='..') {if(!$clean)return null;array_pop($clean);continue;}
+        if(str_starts_with($part,'.')||preg_match('/[\x00-\x1F\x7F]/',$part)) return null;
+        $clean[]=$part;
+    }
+    return $clean?implode('/',$clean):null;
+}
+
+function interactive_game_package_relative_reference(string $entry,string $target): string
+{
+    $from=dirname($entry);$from=$from==='.'?[]:explode('/',$from);$to=explode('/',$target);
+    while($from&&$to&&$from[0]===$to[0]){array_shift($from);array_shift($to);}
+    return str_repeat('../',count($from)).implode('/',$to);
+}
+
+function interactive_game_package_repair_script_dependencies(string $staging,string $entry,array $files): int
+{
+    $entryPath=$staging.'/'.$entry;$content=file_get_contents($entryPath);
+    if(!is_string($content)) Http::json(['error'=>'تعذّر فحص ترتيب ملفات JavaScript في اللعبة.'],422);
+    $pattern='/<script\b[^>]*\bsrc\s*=\s*(["\'])([^"\']+)\1[^>]*>\s*<\/script>/iu';$repairs=0;
+    for($pass=0;$pass<5;$pass++) {
+        if(!preg_match_all($pattern,$content,$scripts,PREG_SET_ORDER|PREG_OFFSET_CAPTURE)) break;
+        $changed=false;
+        for($index=0;$index<count($scripts)-1;$index++) {
+            $beforeTag=(string)$scripts[$index][0][0];$beforeOffset=(int)$scripts[$index][0][1];$beforeSrc=html_entity_decode((string)$scripts[$index][2][0],ENT_QUOTES|ENT_HTML5,'UTF-8');
+            $afterTag=(string)$scripts[$index+1][0][0];$afterOffset=(int)$scripts[$index+1][0][1];$afterSrc=html_entity_decode((string)$scripts[$index+1][2][0],ENT_QUOTES|ENT_HTML5,'UTF-8');
+            $between=substr($content,$beforeOffset+strlen($beforeTag),$afterOffset-($beforeOffset+strlen($beforeTag)));
+            if(trim($between)!=='') continue;
+            $beforePath=(string)preg_replace('/[?#].*$/','',$beforeSrc);$afterPath=(string)preg_replace('/[?#].*$/','',$afterSrc);
+            if($beforePath===''||$afterPath===''||str_starts_with($beforePath,'/assets/')||str_starts_with($afterPath,'/assets/')) continue;
+            $beforeFile=interactive_game_package_resolve_reference($entry,rawurldecode($beforePath));$afterFile=interactive_game_package_resolve_reference($entry,rawurldecode($afterPath));
+            if($beforeFile===null||$afterFile===null||!isset($files[$beforeFile],$files[$afterFile])) continue;
+            if(strtolower(pathinfo($beforeFile,PATHINFO_EXTENSION))!=='js'||strtolower(pathinfo($afterFile,PATHINFO_EXTENSION))!=='js') continue;
+            $beforeCode=(string)file_get_contents($staging.'/'.$beforeFile);$afterCode=(string)file_get_contents($staging.'/'.$afterFile);
+            $bindsBefore=preg_match('/(?:^|\R)\s*\$\s*\([^;\r\n]+\)\s*\.addEventListener\s*\(/u',$beforeCode)===1;
+            $definesBefore=preg_match('/\b(?:const|let|var)\s+\$\s*=/u',$beforeCode)===1;
+            $providesAfter=preg_match('/\b(?:const|let|var)\s+\$\s*=/u',$afterCode)===1&&preg_match('/\b(?:const|let|var)\s+state\s*=/u',$afterCode)===1;
+            if(!$bindsBefore||$definesBefore||!$providesAfter) continue;
+            $mount='';$beforeEntry=substr($content,0,$beforeOffset);
+            if(str_contains($beforeEntry,'data-madar-certificate')&&!str_contains($content,'MadarInteractiveGame.certificate.mount()')) {
+                $mount='<script>window.MadarInteractiveGame?.certificate?.mount?.();</script>';
+            }
+            $afterIsComplete=str_contains($afterCode,'function renderQuestion')&&str_contains($afterCode,'function startGame')
+                &&preg_match('/(?:^|\R)\s*\$\s*\([^;\r\n]+\)\s*\.addEventListener\s*\(/u',$afterCode)===1;
+            if($afterIsComplete) {
+                $content=substr_replace($content,$mount,$beforeOffset,strlen($beforeTag));
+            } else {
+                $length=$afterOffset+strlen($afterTag)-$beforeOffset;
+                $content=substr_replace($content,$afterTag.$between.$mount.$beforeTag,$beforeOffset,$length);
+            }
+            $repairs++;$changed=true;break;
+        }
+        if(!$changed) break;
+    }
+    if($repairs&&file_put_contents($entryPath,$content,LOCK_EX)===false) Http::json(['error'=>'تعذّر تصحيح ترتيب ملفات JavaScript في اللعبة.'],500);
+    return $repairs;
+}
+
+function interactive_game_package_asset_name_score(string $requested,string $candidate): int
+{
+    $requestedStem=mb_strtolower(pathinfo(basename($requested),PATHINFO_FILENAME));
+    $candidateStem=mb_strtolower(pathinfo(basename($candidate),PATHINFO_FILENAME));
+    $tokens=static function(string $value): array {
+        $parts=preg_split('/[^\p{L}\p{N}]+/u',$value,-1,PREG_SPLIT_NO_EMPTY)?:[];
+        return array_values(array_unique(array_filter($parts,static fn(string $part):bool=>mb_strlen($part)>1)));
+    };
+    $requestedTokens=$tokens($requestedStem);$candidateTokens=$tokens($candidateStem);
+    $score=count(array_intersect($requestedTokens,$candidateTokens))*30;
+    foreach(['runtime','bridge','worker','vendor','style','theme'] as $role) {
+        $requestedHas=str_contains($requestedStem,$role);$candidateHas=str_contains($candidateStem,$role);
+        if($requestedHas&&$candidateHas)$score+=100;
+        elseif($requestedHas!==$candidateHas)$score-=40;
+    }
+    similar_text($requestedStem,$candidateStem,$similarity);
+    if($similarity>=55)$score+=(int)round($similarity/5);
+    return $score;
+}
+
+function interactive_game_package_prepare_entry_assets(string $staging,string $entry,array $files): array
+{
+    $entryPath=$staging.'/'.$entry;$content=file_get_contents($entryPath);
+    if(!is_string($content)) Http::json(['error'=>'تعذّر قراءة صفحة تشغيل اللعبة.'],422);
+    $missing=[];$repaired=0;$assetExtensions=['js','css','json','png','jpg','jpeg','webp','gif','mp3','ogg','wav','m4a','woff','woff2','ttf','otf','html','htm'];
+    $byBasename=[];$byExtension=[];$claimed=[];
+    foreach(array_keys($files) as $file){$byBasename[basename($file)][]=$file;$byExtension[strtolower(pathinfo($file,PATHINFO_EXTENSION))][]=$file;}
+    $content=(string)preg_replace_callback('/\b(src|href)\s*=\s*(["\'])([^"\']+)\2/iu',static function(array $match) use($entry,$files,$byBasename,$byExtension,$assetExtensions,&$missing,&$repaired,&$claimed): string {
+        $value=html_entity_decode(trim((string)$match[3]),ENT_QUOTES|ENT_HTML5,'UTF-8');
+        if($value===''||str_starts_with($value,'#')||str_starts_with($value,'//')||preg_match('/^[a-z][a-z0-9+.-]*:/i',$value))return $match[0];
+        $path=(string)preg_replace('/[?#].*$/','',$value);$suffix=substr($value,strlen($path));
+        $extension=strtolower(pathinfo($path,PATHINFO_EXTENSION));
+        if(!in_array($extension,$assetExtensions,true))return $match[0];
+        $candidate=interactive_game_package_resolve_reference($entry,rawurldecode($path));
+        if($candidate!==null&&isset($files[$candidate]))return $match[0];
+        $alternatives=[];$basename=basename(rawurldecode($path));
+        if(preg_match('/\.(js|css)\.\1$/i',$basename,$duplicate))$alternatives[]=(string)preg_replace('/\.(js|css)\.\1$/i','.'.strtolower($duplicate[1]),$basename);
+        $alternatives[]=$basename;$target=null;
+        foreach(array_unique($alternatives) as $name){$matches=$byBasename[$name]??[];if(count($matches)===1){$target=$matches[0];break;}}
+        if($target===null&&in_array($extension,['js','css'],true)) {
+            $candidates=array_values(array_filter($byExtension[$extension]??[],static fn(string $file):bool=>!isset($claimed[$file])));
+            if(count($candidates)===1)$target=$candidates[0];
+            elseif($candidates) {
+                $scores=[];foreach($candidates as $file)$scores[$file]=interactive_game_package_asset_name_score($basename,basename($file));
+                arsort($scores,SORT_NUMERIC);$ranked=array_keys($scores);$best=$ranked[0]??null;$bestScore=$best!==null?(int)$scores[$best]:0;$runner=isset($ranked[1])?(int)$scores[$ranked[1]]:PHP_INT_MIN;
+                if($best!==null&&$bestScore>0&&$bestScore>$runner)$target=$best;
+            }
+        }
+        if($target!==null){$claimed[$target]=true;$repaired++;$quote=$match[2];return $match[1].'='.$quote.interactive_game_package_relative_reference($entry,$target).$suffix.$quote;}
+        if(!str_starts_with($path,'/assets/'))$missing[$path]=true;
+        return $match[0];
+    },$content);
+    if(file_put_contents($entryPath,$content,LOCK_EX)===false) Http::json(['error'=>'تعذّر حفظ مسارات ملفات اللعبة بعد فحصها.'],500);
+    $repaired+=interactive_game_package_repair_script_dependencies($staging,$entry,$files);
+    return ['repaired'=>$repaired,'missing'=>array_keys($missing)];
+}
+
 function interactive_game_package_extract(string $zipPath,string $originalName): array
 {
     if(!class_exists('ZipArchive')) Http::json(['error'=>'إضافة PHP Zip غير متاحة على الخادم.'],500);
@@ -618,7 +887,8 @@ function interactive_game_package_extract(string $zipPath,string $originalName):
     try {
         for($index=0;$index<$zip->numFiles;$index++) {
             $stat=$zip->statIndex($index);$raw=(string)($stat['name']??'');
-            if(str_ends_with($raw,'/')||str_starts_with($raw,'__MACOSX/')||str_starts_with(basename($raw),'._')) continue;
+            $archiveParts=explode('/',str_replace('\\','/',$raw));$archiveName=end($archiveParts);
+            if(str_ends_with($raw,'/')||in_array('__MACOSX',$archiveParts,true)||$archiveName==='.DS_Store'||str_starts_with($archiveName,'._')) continue;
             $safe=interactive_game_package_safe_path($raw);if($safe===null) Http::json(['error'=>'الحزمة تحتوي مسارًا غير آمن: '.mb_substr($raw,0,120)],422);
             $extension=strtolower(pathinfo($safe,PATHINFO_EXTENSION));if(!isset($allowed[$extension])) Http::json(['error'=>'نوع الملف .'.$extension.' غير مسموح داخل حزمة اللعبة.'],422);
             $dangerous=['php','phtml','phar','cgi','pl','py','rb','sh','bash','exe','dll','so','dylib','jar','com','bat','cmd'];
@@ -636,26 +906,69 @@ function interactive_game_package_extract(string $zipPath,string $originalName):
             $input=$zip->getStream($raw);$output=@fopen($target,'wb');if(!$input||!$output) Http::json(['error'=>'تعذّر فحص أحد ملفات الحزمة.'],422);
             $written=stream_copy_to_stream($input,$output,INTERACTIVE_GAME_PACKAGE_MAX_FILE_BYTES+1);fclose($input);fclose($output);
             if($written===false||$written!==$size) Http::json(['error'=>'حجم أحد ملفات الحزمة لا يطابق بيانات ZIP.'],422);
-            $mime=(string)($finfo->file($target)?:'application/octet-stream');if(!in_array($mime,$allowed[$extension],true)) Http::json(['error'=>'نوع MIME الفعلي للملف '.$safe.' لا يطابق امتداده.'],422);
+            $mime=(string)($finfo->file($target)?:'application/octet-stream');if(!interactive_game_package_mime_matches($target,$extension,$mime,$allowed)) Http::json(['error'=>'نوع MIME الفعلي للملف '.$safe.' لا يطابق امتداده.'],422);
             if(in_array($extension,['png','jpg','jpeg','webp','gif'],true)&&@getimagesize($target)===false) Http::json(['error'=>'الحزمة تحتوي صورة غير صالحة.'],422);
             if(in_array($extension,['html','htm','css','js','json'],true)) interactive_game_package_scan_text($target,$extension);
             $files[$safe]=true;
         }
-        $manifestPath=$staging.'/game.json';if(!isset($files['game.json'])||!is_file($manifestPath)) Http::json(['error'=>'الحزمة لا تحتوي ملف game.json في المستوى الرئيسي.'],422);
-        try{$manifest=json_decode((string)file_get_contents($manifestPath),true,512,JSON_THROW_ON_ERROR);}catch(JsonException){Http::json(['error'=>'ملف game.json غير صالح.'],422);}
-        if(!is_array($manifest)||(int)($manifest['schemaVersion']??0)!==1) Http::json(['error'=>'schemaVersion في game.json يجب أن يساوي 1.'],422);
-        $key=interactive_game_builder_key($manifest['key']??'');$name=interactive_game_builder_text($manifest['name']??'','اسم اللعبة في game.json',190);
-        $entry=interactive_game_package_safe_path((string)($manifest['entry']??''));
-        if($entry===null||!isset($files[$entry])||!in_array(strtolower(pathinfo($entry,PATHINFO_EXTENSION)),['html','htm'],true)) Http::json(['error'=>'ملف التشغيل المحدد في entry غير موجود أو ليس HTML.'],422);
-        $runtime=(string)($manifest['runtime']??'');if($runtime!=='madar-game-bridge-v1') Http::json(['error'=>'إصدار واجهة الربط غير مدعوم. استخدمي madar-game-bridge-v1.'],422);
         $bridgeFound=false;
         foreach(array_keys($files) as $file) {
             if(!in_array(strtolower(pathinfo($file,PATHINFO_EXTENSION)),['html','htm','js'],true)) continue;
             $content=(string)file_get_contents($staging.'/'.$file);
             if(str_contains($content,'MadarGameBridge')||str_contains($content,'madar:ready')){$bridgeFound=true;break;}
         }
-        $status=$bridgeFound?'ready':'needs_setup';$message=$bridgeFound?'':'الحزمة صالحة، لكنها لا تستدعي واجهة MadarGameBridge بعد.';
-        return ['staging'=>$staging,'manifest'=>$manifest,'key'=>$key,'name'=>$name,'entry'=>$entry,'runtime'=>$runtime,'status'=>$status,'message'=>$message,'expanded'=>$expanded,'sha256'=>hash_file('sha256',$zipPath),'originalName'=>mb_substr(basename($originalName),0,255)];
+        $manifestCandidates=array_values(array_filter(array_keys($files),static fn(string $file):bool=>strtolower(basename($file))==='game.json'));
+        usort($manifestCandidates,static fn(string $left,string $right):int=>substr_count($left,'/')<=>substr_count($right,'/')?:strcmp($left,$right));
+        $manifestFile=$manifestCandidates[0]??null;$manifest=null;$manifestGenerated=false;
+        if($manifestFile!==null) {
+            try{$decoded=json_decode((string)file_get_contents($staging.'/'.$manifestFile),true,512,JSON_THROW_ON_ERROR);}catch(JsonException){$decoded=null;}
+            if(is_array($decoded)) $manifest=$decoded;
+        }
+        $htmlFiles=array_values(array_filter(array_keys($files),static fn(string $file):bool=>in_array(strtolower(pathinfo($file,PATHINFO_EXTENSION)),['html','htm'],true)));
+        if(!$htmlFiles) Http::json(['error'=>'الحزمة لا تحتوي صفحة HTML يمكن تشغيلها كلعبة. أضيفي index.html أو أي ملف HTML رئيسي.'],422);
+        $htmlScores=[];
+        foreach($htmlFiles as $file) {
+            $base=strtolower(basename($file));$score=-substr_count($file,'/')*5;
+            if(in_array($base,['index.html','index.htm'],true)) $score+=100;
+            elseif(in_array($base,['game.html','game.htm','play.html','play.htm','main.html','main.htm'],true)) $score+=80;
+            $content=(string)file_get_contents($staging.'/'.$file);
+            if(str_contains($content,'MadarGameBridge')||str_contains($content,'madar:ready')) $score+=30;
+            $htmlScores[$file]=$score;
+        }
+        usort($htmlFiles,static fn(string $left,string $right):int=>$htmlScores[$right]<=>$htmlScores[$left]?:strlen($left)<=>strlen($right)?:strcmp($left,$right));
+        $entry=null;
+        if(is_array($manifest)) {
+            $declaredEntry=interactive_game_package_safe_path((string)($manifest['entry']??''));
+            if($declaredEntry!==null) {
+                $manifestDirectory=dirname((string)$manifestFile);$manifestDirectory=$manifestDirectory==='.'?'':$manifestDirectory;
+                $relativeEntry=$manifestDirectory!==''?$manifestDirectory.'/'.$declaredEntry:$declaredEntry;
+                foreach([$relativeEntry,$declaredEntry] as $candidate) {
+                    if(isset($files[$candidate])&&in_array(strtolower(pathinfo($candidate,PATHINFO_EXTENSION)),['html','htm'],true)) {$entry=$candidate;break;}
+                }
+            }
+        }
+        if($entry===null) {$entry=$htmlFiles[0];$manifestGenerated=true;}
+        $assetPreparation=interactive_game_package_prepare_entry_assets($staging,$entry,$files);
+        interactive_game_package_install_auto_compat($staging.'/'.$entry);$bridgeFound=true;
+        $entryContent=(string)file_get_contents($staging.'/'.$entry);$detectedTitle='';
+        if(preg_match('/<title\b[^>]*>(.*?)<\/title>/isu',$entryContent,$titleMatch)) {
+            $detectedTitle=trim(html_entity_decode(strip_tags((string)$titleMatch[1]),ENT_QUOTES|ENT_HTML5,'UTF-8'));
+        }
+        $fallbackName=trim((string)preg_replace('/[_-]+/u',' ',pathinfo(basename($originalName),PATHINFO_FILENAME)));
+        $nameValue=trim((string)($manifest['name']??''));
+        if($nameValue==='') $nameValue=$detectedTitle!==''?$detectedTitle:($fallbackName!==''?$fallbackName:'لعبة مستوردة');
+        $name=interactive_game_builder_text($nameValue,'اسم اللعبة',190);
+        $keyValue=strtolower(trim((string)($manifest['key']??'')));
+        if(!preg_match('/^[a-z0-9][a-z0-9-]{1,99}$/',$keyValue)) {$keyValue='imported-game-'.substr(hash_file('sha256',$zipPath),0,16);$manifestGenerated=true;}
+        $key=interactive_game_builder_key($keyValue);$runtime='madar-game-bridge-v1';
+        $manifest=is_array($manifest)?$manifest:[];
+        $manifest['schemaVersion']=1;$manifest['key']=$key;$manifest['name']=$name;$manifest['entry']=$entry;$manifest['runtime']=$runtime;$manifest['compatibilityMode']='sandboxed-auto-v1';
+        $missingAssets=$assetPreparation['missing'];
+        $status=$missingAssets?'needs_setup':($bridgeFound?'ready':'needs_setup');
+        $message=$missingAssets
+            ? 'الحزمة ناقصة ملفات مرتبطة من صفحة التشغيل: '.implode('، ',array_slice($missingAssets,0,8)).(count($missingAssets)>8?'…':'')
+            : ($bridgeFound?'':'الحزمة صالحة، لكنها لا تستدعي واجهة MadarGameBridge بعد.');
+        return ['staging'=>$staging,'manifest'=>$manifest,'manifestGenerated'=>$manifestGenerated,'autoDetected'=>$manifestGenerated||$manifestFile!=='game.json'||$assetPreparation['repaired']>0,'repairedAssets'=>$assetPreparation['repaired'],'key'=>$key,'name'=>$name,'entry'=>$entry,'runtime'=>$runtime,'status'=>$status,'message'=>$message,'expanded'=>$expanded,'sha256'=>hash_file('sha256',$zipPath),'originalName'=>mb_substr(basename($originalName),0,255)];
     } catch(Throwable $error) {
         interactive_game_package_remove_tree($staging);$zip->close();throw $error;
     } finally {
@@ -675,13 +988,41 @@ function interactive_game_builder_import(int $teacherId): never
     $data=$_POST;
     $updateId=filter_var($data['updateGameId']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:null;
     $current=$updateId?interactive_game_builder_owned_game($teacherId,(int)$updateId):null;
-    if($current&&(string)$current['game_key']!==$package['key']) {interactive_game_package_remove_tree($package['staging']);Http::json(['error'=>'مفتاح game.json لا يطابق اللعبة التي يجري تحديثها.'],422);}
+    $restored=false;
     if(!$current) {
-        $existing=fetch_one('SELECT id FROM teacher_interactive_games WHERE game_key=? AND deleted_at IS NULL LIMIT 1',[$package['key']]);
-        if($existing) {interactive_game_package_remove_tree($package['staging']);Http::json(['error'=>'معرّف اللعبة مستخدم مسبقًا على منصة مدار. اختاري معرّفًا مختلفًا.'],409);}
+        // الحذف في الاستديو أرشفة آمنة؛ لذلك يبقى المفتاح محجوزًا للمعلمة نفسها.
+        // عند إعادة رفع الحزمة نستعيد سجلها المؤرشف بدل محاولة إنشاء سجل مكرر.
+        $existing=fetch_one(
+            'SELECT * FROM teacher_interactive_games WHERE teacher_id=? AND game_key=? AND deleted_at IS NULL LIMIT 1',
+            [$teacherId,$package['key']]
+        );
+        if($existing) {
+            interactive_game_package_remove_tree($package['staging']);
+            Http::json(['error'=>'معرّف اللعبة مستخدم مسبقًا في حسابك. اختاري «رفع إصدار» من اللعبة الموجودة أو استخدمي معرّفًا مختلفًا.'],409);
+        }
+        $archived=fetch_one(
+            'SELECT * FROM teacher_interactive_games WHERE teacher_id=? AND game_key=? AND deleted_at IS NOT NULL LIMIT 1',
+            [$teacherId,$package['key']]
+        );
+        if($archived) {
+            if((string)$archived['source_type']!=='package') {
+                interactive_game_package_remove_tree($package['staging']);
+                Http::json(['error'=>'هذا المعرّف مرتبط بلعبة منشأة مؤرشفة، ولا يمكن استبدال نوعها بحزمة مبرمجة.'],409);
+            }
+            $current=$archived;$restored=true;
+        }
     }
+    if($current&&!empty($package['manifestGenerated'])) {
+        $package['key']=(string)$current['game_key'];$package['manifest']['key']=$package['key'];
+    }
+    if($current&&(string)$current['game_key']!==$package['key']) {interactive_game_package_remove_tree($package['staging']);Http::json(['error'=>'مفتاح game.json لا يطابق اللعبة التي يجري تحديثها.'],422);}
     $data['gameKey']=$package['key'];$data['name']=trim((string)($data['name']??''))!==''?$data['name']:$package['name'];$data['sourceType']='package';$data['templateType']=null;
-    $metadata=interactive_game_builder_metadata($teacherId,$data,$current);
+    $metadataCurrent=$current;
+    if($current&&!empty($current['current_version_id'])) {
+        $currentVersion=fetch_one('SELECT * FROM interactive_game_versions WHERE id=? AND game_id=?',[(int)$current['current_version_id'],(int)$current['id']]);
+        $metadataCurrent=interactive_game_builder_with_version($current,$currentVersion?:null);
+    }
+    $metadata=interactive_game_builder_metadata($teacherId,$data,$metadataCurrent);
     $root=MADAR_ROOT.'/storage/private/interactive-games';if(!is_dir($root)&&!mkdir($root,0750,true)&&!is_dir($root)){interactive_game_package_remove_tree($package['staging']);Http::json(['error'=>'تعذّر تجهيز تخزين الألعاب.'],500);}
     $storageKey=bin2hex(random_bytes(24));$final=$root.'/'.$storageKey;
     if(!interactive_game_package_move_tree($package['staging'],$final)){interactive_game_package_remove_tree($package['staging']);Http::json(['error'=>'تعذّر نقل الحزمة إلى التخزين الآمن.'],500);}
@@ -690,21 +1031,26 @@ function interactive_game_builder_import(int $teacherId): never
         'originalName'=>$package['originalName'],'size'=>$size,'sha256'=>$package['sha256'],'status'=>$package['status'],'message'=>$package['message'],
     ];
     try {
-        $gameId=Database::transaction(function(PDO $pdo) use($teacherId,$current,$metadata,$packageData): int {
+        $gameId=Database::transaction(function(PDO $pdo) use($teacherId,$current,$restored,$metadata,$packageData): int {
             $id=$current?(int)$current['id']:interactive_game_builder_insert_game($pdo,$teacherId,$metadata);
+            if($restored) {
+                $restore=$pdo->prepare("UPDATE teacher_interactive_games SET deleted_at=NULL,lifecycle_status='draft',is_active=0 WHERE id=? AND teacher_id=? AND source_type='package' AND deleted_at IS NOT NULL");
+                $restore->execute([$id,$teacherId]);
+                if($restore->rowCount()!==1) throw new RuntimeException('تعذّر استعادة سجل اللعبة المؤرشف بأمان. أعيدي المحاولة.');
+            }
             interactive_game_builder_update_metadata($pdo,$teacherId,$id,$metadata);
             interactive_game_builder_insert_version($pdo,$teacherId,$id,$metadata,[],$packageData);return $id;
         });
     } catch(Throwable $error) {interactive_game_package_remove_tree($final);throw $error;}
-    Activity::log('teacher',$teacherId,$current?'رفع إصدار ZIP جديد':'استيراد لعبة مبرمجة',$metadata['name']);
-    Http::json(['game'=>interactive_game_builder_detail($teacherId,$gameId),'needsSetup'=>$package['status']!=='ready','message'=>$package['message']],201);
+    Activity::log('teacher',$teacherId,$restored?'استعادة لعبة مبرمجة مؤرشفة':($current?'رفع إصدار ZIP جديد':'استيراد لعبة مبرمجة'),$metadata['name']);
+    Http::json(['game'=>interactive_game_builder_detail($teacherId,$gameId),'restored'=>$restored,'needsSetup'=>$package['status']!=='ready','autoDetected'=>(bool)($package['autoDetected']??false),'repairedAssets'=>(int)($package['repairedAssets']??0),'message'=>$package['message']],201);
 }
 
 function teacher_interactive_game_builder_routes(string $method,array $segments,int $teacherId): never
 {
     $action=$segments[0]??'';
     if($action==='status'&&$method==='GET') Http::json(['migrationReady'=>interactive_game_builder_schema_ready(),'migration'=>INTERACTIVE_GAME_BUILDER_MIGRATION]);
-    if($action==='library'&&$method==='GET') Http::json(['migrationReady'=>interactive_game_builder_schema_ready(),'migration'=>INTERACTIVE_GAME_BUILDER_MIGRATION,'games'=>interactive_game_builder_list($teacherId)]);
+    if($action==='library'&&count($segments)===1&&$method==='GET') Http::json(['migrationReady'=>interactive_game_builder_schema_ready(),'migration'=>INTERACTIVE_GAME_BUILDER_MIGRATION,'games'=>interactive_game_builder_list($teacherId)]);
     if($action==='create'&&$method==='POST') interactive_game_builder_create_template($teacherId);
     if($action==='import'&&$method==='POST') interactive_game_builder_import($teacherId);
     $gameId=route_id($segments,1);
@@ -713,15 +1059,109 @@ function teacher_interactive_game_builder_routes(string $method,array $segments,
     if(count($segments)===2&&$method==='DELETE') interactive_game_builder_soft_delete($teacherId,$gameId);
     $sub=$segments[2]??'';
     if($sub==='copy'&&$method==='POST') interactive_game_builder_copy($teacherId,$gameId);
+    if($sub==='settings'&&$method==='POST') interactive_game_builder_settings($teacherId,$gameId);
     if($sub==='publish'&&$method==='POST') interactive_game_builder_publish($teacherId,$gameId);
     if($sub==='status'&&$method==='POST') interactive_game_builder_status($teacherId,$gameId);
     if($sub==='cover'&&$method==='POST') interactive_game_builder_cover($teacherId,$gameId);
     Http::json(['error'=>'مسار إدارة الألعاب غير موجود.'],404);
 }
 
+/**
+ * يحدد أحدث نشر صالح لكل لعبة عند انتقال الفصل إلى عام دراسي جديد.
+ *
+ * تبقى هذه الدالة نقية ليسهل اختبار قواعد الترحيل دون الحاجة إلى قاعدة بيانات.
+ * الصفوف الواردة مرتبة من الأحدث إلى الأقدم، وصفوف العام الحالي تمنع إنشاء
+ * نشر مكرر للعبة نفسها في الفصل والترم نفسيهما.
+ */
+function interactive_game_builder_publication_rollover_plan(array $sourceRows,array $currentRows,string $academicYear,string $semester): array
+{
+    $academicYear=trim($academicYear);
+    if($academicYear===''||!in_array($semester,['first','second'],true)) return [];
+    $current=[];
+    foreach($currentRows as $row) {
+        $gameId=(int)($row['game_id']??0);$rowSemester=(string)($row['semester']??'');
+        if($gameId>0&&$rowSemester===$semester) $current[$gameId.'|'.$rowSemester]=true;
+    }
+    $planned=[];$seen=[];
+    foreach($sourceRows as $row) {
+        $gameId=(int)($row['game_id']??0);$versionId=(int)($row['version_id']??0);$rowSemester=(string)($row['semester']??'');
+        if($gameId<1||$versionId<1||$rowSemester!==$semester) continue;
+        $key=$gameId.'|'.$rowSemester;
+        if(isset($current[$key])||isset($seen[$key])) continue;
+        $seen[$key]=true;
+        $planned[]=['gameId'=>$gameId,'versionId'=>$versionId,'semester'=>$rowSemester,'academicYear'=>$academicYear];
+    }
+    return $planned;
+}
+
+/**
+ * ينقل نشر الألعاب المستمر إلى العام الحالي للفصل نفسه. وإذا أُنشئ سجل فصل
+ * جديد بدل تحديث السجل القديم، يرث النشر من الفصل المطابق تمامًا في الاسم
+ * والمرحلة والصف. لا تُعاد الألعاب الموقوفة ولا الإصدارات غير الجاهزة.
+ */
+function interactive_game_builder_sync_class_publications(PDO $pdo,int $teacherId,int $classId,?string $semester=null): int
+{
+    if(!interactive_game_builder_schema_ready()||$teacherId<1||$classId<1) return 0;
+    if($semester!==null&&!in_array($semester,['first','second'],true)) return 0;
+    $classStatement=$pdo->prepare('SELECT id,name,stage,grade_label,academic_year FROM classes WHERE id=? AND teacher_id=? LIMIT 1');
+    $classStatement->execute([$classId,$teacherId]);$class=$classStatement->fetch();
+    if(!$class) return 0;
+    $academicYear=trim((string)($class['academic_year']??''));
+    if($academicYear==='') return 0;
+
+    $semesterSql=$semester===null?'':' AND p.semester=?';
+    $sourceParams=[$teacherId,$classId,(string)$class['name'],(string)$class['stage'],(string)$class['grade_label'],$academicYear];
+    if($semester!==null) $sourceParams[]=$semester;
+    $sourceStatement=$pdo->prepare(
+        "SELECT p.game_id,p.version_id,p.semester,p.published_at,p.id
+         FROM interactive_game_publications p
+         JOIN teacher_interactive_games g ON g.id=p.game_id AND g.teacher_id=? AND g.deleted_at IS NULL AND g.lifecycle_status='published'
+         JOIN interactive_game_versions v ON v.id=p.version_id AND v.validation_status='ready'
+         JOIN classes source_class ON source_class.id=p.class_id AND source_class.teacher_id=g.teacher_id
+         WHERE (p.class_id=? OR (source_class.name=? AND source_class.stage=? AND source_class.grade_label=?))
+           AND p.academic_year<>? AND p.status='published'{$semesterSql}
+         ORDER BY p.published_at DESC,p.id DESC"
+    );
+    $sourceStatement->execute($sourceParams);$sourceRows=$sourceStatement->fetchAll();
+    if(!$sourceRows) return 0;
+
+    $currentParams=[$classId,$academicYear];
+    if($semester!==null) $currentParams[]=$semester;
+    $currentStatement=$pdo->prepare(
+        "SELECT game_id,semester FROM interactive_game_publications
+         WHERE class_id=? AND academic_year=? AND status='published'".($semester===null?'':' AND semester=?')
+    );
+    $currentStatement->execute($currentParams);$currentRows=$currentStatement->fetchAll();
+
+    $semesters=$semester===null?['first','second']:[$semester];$plan=[];
+    foreach($semesters as $term) {
+        $plan=[...$plan,...interactive_game_builder_publication_rollover_plan($sourceRows,$currentRows,$academicYear,$term)];
+    }
+    if(!$plan) return 0;
+
+    $publishTarget=$pdo->prepare(
+        "INSERT INTO interactive_game_publications (game_id,version_id,class_id,academic_year,semester,status,published_at,disabled_at)
+         VALUES (?,?,?,?,?,'published',NOW(),NULL)
+         ON DUPLICATE KEY UPDATE status='published',published_at=NOW(),disabled_at=NULL"
+    );
+    $disablePrevious=$pdo->prepare("UPDATE interactive_game_publications SET status='disabled',disabled_at=NOW() WHERE game_id=? AND class_id IN (SELECT id FROM classes WHERE teacher_id=? AND name=? AND stage=? AND grade_label=?) AND semester=? AND academic_year<>? AND status='published'");
+    foreach($plan as $item) {
+        $publishTarget->execute([$item['gameId'],$item['versionId'],$classId,$academicYear,$item['semester']]);
+        $disablePrevious->execute([$item['gameId'],$teacherId,(string)$class['name'],(string)$class['stage'],(string)$class['grade_label'],$item['semester'],$academicYear]);
+    }
+    return count($plan);
+}
+
+function interactive_game_builder_ensure_student_publications(int $teacherId,int $classId,string $semester): int
+{
+    if(!interactive_game_builder_schema_ready()) return 0;
+    return Database::transaction(static fn(PDO $pdo):int=>interactive_game_builder_sync_class_publications($pdo,$teacherId,$classId,$semester));
+}
+
 function interactive_game_builder_student_catalog(int $teacherId,int $classId,string $semester): array
 {
     if(!interactive_game_builder_schema_ready()||$classId<1||!in_array($semester,['first','second'],true)) return [];
+    interactive_game_builder_ensure_student_publications($teacherId,$classId,$semester);
     $rows=fetch_all(
         "SELECT g.*,v.version_number,v.validation_status,v.validation_message,v.settings_json,v.source_type AS version_source_type,v.template_type AS version_template_type,p.id AS publication_id,p.version_id AS published_version_id
          FROM interactive_game_publications p
@@ -772,6 +1212,7 @@ function interactive_game_builder_run_start(int $studentId): never
     $requested=filter_var($data['questionCount']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>200]]);
     if($requested===false||$requested===null) Http::json(['error'=>'عدد الأسئلة غير صالح.'],422);
     [$student,$settings]=student_game_context($studentId);$semester=(string)($settings['current_semester']??'');
+    interactive_game_builder_ensure_student_publications((int)$student['teacher_id'],(int)$student['class_id'],$semester);
     $row=fetch_one(
         "SELECT g.*,p.id AS publication_id,p.version_id AS published_version_id,v.version_number,v.validation_status,v.validation_message,v.settings_json,v.entry_file,v.source_type AS version_source_type,v.template_type AS version_template_type
          FROM interactive_game_publications p
@@ -780,6 +1221,7 @@ function interactive_game_builder_run_start(int $studentId): never
          WHERE g.id=? AND g.teacher_id=? AND p.class_id=? AND p.semester=? AND p.academic_year=? AND p.status='published' LIMIT 1",
         [(int)$gameId,(int)$student['teacher_id'],(int)$student['class_id'],$semester,(string)$student['class_academic_year']]
     );
+    if(!$row)$row=remedial_content_game_row((int)$gameId,$studentId);
     if(!$row) Http::json(['error'=>'هذه اللعبة غير منشورة لفصلكِ في الفصل الدراسي الحالي.'],403);
     $row=interactive_game_builder_with_version($row,[
         'version_number'=>$row['version_number'],'validation_status'=>$row['validation_status'],'validation_message'=>$row['validation_message'],
@@ -799,7 +1241,7 @@ function interactive_game_builder_run_start(int $studentId): never
     $state=['questionIds'=>$questionIds,'index'=>0,'score'=>0,'correct'=>0,'streak'=>0,'bestStreak'=>0];
     execute_sql(
         'INSERT INTO game_attempts (student_id,game_key,game_id,game_version_id,publication_id,result_source,difficulty,score,max_score,question_count,correct_count,best_streak,accuracy,duration_seconds,game_snapshot_json,run_token_hash,run_status,run_state_json,started_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),DATE_ADD(NOW(),INTERVAL 2 HOUR))',
-        [$studentId,(string)$row['game_key'],(int)$row['id'],(int)$row['published_version_id'],(int)$row['publication_id'],$source==='template'?'server_verified':'package_reported',$difficulty,0,$source==='template'?$maxScore:null,$requested,0,0,0,0,interactive_game_builder_json_encode($snapshot),hash('sha256',$token),'in_progress',interactive_game_builder_json_encode($state)]
+        [$studentId,(string)$row['game_key'],(int)$row['id'],(int)$row['published_version_id'],$row['publication_id']===null?null:(int)$row['publication_id'],$source==='template'?'server_verified':'package_reported',$difficulty,0,$source==='template'?$maxScore:null,$requested,0,0,0,0,interactive_game_builder_json_encode($snapshot),hash('sha256',$token),'in_progress',interactive_game_builder_json_encode($state)]
     );
     $attemptId=(int)Database::connection()->lastInsertId();
     Http::json([
@@ -812,7 +1254,7 @@ function interactive_game_builder_run_row(int $studentId,string $token): array
 {
     if(!preg_match('/^[a-f0-9]{64}$/',$token)) Http::json(['error'=>'رمز جولة اللعبة غير صالح.'],422);
     $row=fetch_one(
-        'SELECT a.*,g.teacher_id,g.name AS game_name,g.lesson_name,g.unit_number,g.lesson_number,g.certificate_portfolio_enabled,g.points_enabled,g.points_value,g.current_version_id,v.source_type AS version_source_type,v.validation_status FROM game_attempts a JOIN teacher_interactive_games g ON g.id=a.game_id JOIN interactive_game_versions v ON v.id=a.game_version_id WHERE a.student_id=? AND a.run_token_hash=? LIMIT 1',
+        'SELECT a.*,g.teacher_id,g.name AS game_name,g.lesson_name,g.unit_number,g.lesson_number,g.certificate_portfolio_enabled,g.points_enabled,g.points_value,g.current_version_id,v.source_type AS version_source_type,v.validation_status,v.settings_json AS version_settings_json FROM game_attempts a JOIN teacher_interactive_games g ON g.id=a.game_id JOIN interactive_game_versions v ON v.id=a.game_version_id WHERE a.student_id=? AND a.run_token_hash=? LIMIT 1',
         [$studentId,hash('sha256',$token)]
     );
     if(!$row) Http::json(['error'=>'جولة اللعبة غير موجودة.'],404);
@@ -822,6 +1264,13 @@ function interactive_game_builder_run_row(int $studentId,string $token): array
         Http::json(['error'=>'انتهت مهلة الجولة. ابدئي جولة جديدة.'],410);
     }
     return $row;
+}
+
+function interactive_game_builder_run_points_per_question(array $run): int
+{
+    $settings=interactive_game_builder_json_decode($run['version_settings_json']??null,[]);
+    $value=filter_var($settings['pointsPerQuestion']??100,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>1000]]);
+    return $value===false?100:(int)$value;
 }
 
 function interactive_game_builder_answers_equal(string $type,mixed $selected,mixed $correct): bool
@@ -864,16 +1313,25 @@ function interactive_game_builder_run_answer(int $studentId,string $token): neve
         Http::json(['correct'=>$isCorrect,'explanation'=>(string)($question['explanation']??''),'score'=>(int)$state['score'],'correctCount'=>(int)$state['correct'],'streak'=>(int)$state['streak'],'bestStreak'=>(int)$state['bestStreak'],'completed'=>$state['index']>=count($ids)]);
     }
     $key=trim((string)($data['questionKey']??''));if($key===''||mb_strlen($key)>120) Http::json(['error'=>'معرّف السؤال المرسل من اللعبة غير صالح.'],422);
-    $correct=filter_var($data['correct']??null,FILTER_VALIDATE_BOOLEAN,FILTER_NULL_ON_FAILURE);$points=(float)($data['points']??0);
-    if($correct===null||$points<0||$points>10000) Http::json(['error'=>'بيانات نتيجة السؤال المرسلة من الحزمة غير صالحة.'],422);
+    $correct=filter_var($data['correct']??null,FILTER_VALIDATE_BOOLEAN,FILTER_NULL_ON_FAILURE);
+    if($correct===null) Http::json(['error'=>'بيانات نتيجة السؤال المرسلة من الحزمة غير صالحة.'],422);
+    $pointsPerQuestion=interactive_game_builder_run_points_per_question($run);$earned=$correct?$pointsPerQuestion:0;
     $skillId=filter_var($data['skillId']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]])?:null;
     if($skillId&&!fetch_one('SELECT 1 AS ok FROM interactive_game_version_skills WHERE version_id=? AND skill_id=?',[(int)$run['game_version_id'],$skillId])) $skillId=null;
     try {
         execute_sql('INSERT INTO interactive_game_attempt_answers (attempt_id,question_id,question_key,answer_json,is_correct,points_earned,duration_ms,skill_id,verification_source) VALUES (?,NULL,?,?,?,?,?,?,\'package_reported\')',[
-            (int)$run['id'],$key,interactive_game_builder_json_encode($data['answer']??null),$correct?1:0,$points,$duration,$skillId,
+            (int)$run['id'],$key,interactive_game_builder_json_encode($data['answer']??null),$correct?1:0,$earned,$duration,$skillId,
         ]);
     } catch(PDOException $error) {if((string)$error->getCode()==='23000')Http::json(['error'=>'تم تسجيل هذا السؤال مسبقًا.'],409);throw $error;}
-    Http::json(['accepted'=>true,'verificationSource'=>'package_reported']);
+    $state['index']=(int)($state['index']??0)+1;$state['score']=(int)($state['score']??0)+$earned;
+    if($correct){$state['correct']=(int)($state['correct']??0)+1;$state['streak']=(int)($state['streak']??0)+1;$state['bestStreak']=max((int)($state['bestStreak']??0),(int)$state['streak']);}else{$state['streak']=0;}
+    execute_sql('UPDATE game_attempts SET run_state_json=?,score=?,correct_count=?,best_streak=? WHERE id=? AND run_status=\'in_progress\'',[
+        interactive_game_builder_json_encode($state),(int)$state['score'],(int)$state['correct'],(int)$state['bestStreak'],(int)$run['id'],
+    ]);
+    Http::json([
+        'accepted'=>true,'correct'=>$correct,'verificationSource'=>'package_reported','pointsEarned'=>$earned,'score'=>(int)$state['score'],
+        'correctCount'=>(int)$state['correct'],'streak'=>(int)$state['streak'],'bestStreak'=>(int)$state['bestStreak'],
+    ]);
 }
 
 function interactive_game_builder_store_template_skills(int $attemptId,int $studentId): void
@@ -917,12 +1375,23 @@ function interactive_game_builder_run_complete(int $studentId,string $token): ne
         $questionCount=count((array)($state['questionIds']??[]));if((int)($state['index']??0)!==$questionCount) Http::json(['error'=>'لم تكتمل جميع أسئلة الجولة بعد.'],409);
         $score=(int)($state['score']??0);$correct=(int)($state['correct']??0);$best=(int)($state['bestStreak']??0);$maxScore=(float)($run['max_score']??0);
     } else {
-        $questionCount=filter_var($data['questionCount']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>2000]]);
-        $correct=filter_var($data['correctCount']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>0,'max_range'=>$questionCount?:0]]);
-        $score=filter_var($data['score']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>0,'max_range'=>1000000]]);
-        $best=filter_var($data['bestStreak']??0,FILTER_VALIDATE_INT,['options'=>['min_range'=>0,'max_range'=>2000]]);
-        $maxScore=(float)($data['maxScore']??0);
-        if($questionCount===false||$correct===false||$score===false||$best===false||$maxScore<0||$maxScore>1000000) Http::json(['error'=>'ملخص النتيجة المرسل من الحزمة غير صالح.'],422);
+        $answerSummary=fetch_one(
+            'SELECT COUNT(*) AS question_count,COALESCE(SUM(is_correct=1),0) AS correct_count,COALESCE(SUM(points_earned),0) AS score FROM interactive_game_attempt_answers WHERE attempt_id=?',
+            [(int)$run['id']]
+        );
+        if((int)($answerSummary['question_count']??0)>0) {
+            $questionCount=(int)$answerSummary['question_count'];$correct=(int)$answerSummary['correct_count'];$score=(int)$answerSummary['score'];
+            $best=(int)($state['bestStreak']??0);$maxScore=(float)($questionCount*interactive_game_builder_run_points_per_question($run));
+        } else {
+            $questionCount=filter_var($data['questionCount']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>2000]]);
+            $correct=filter_var($data['correctCount']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>0,'max_range'=>$questionCount?:0]]);
+            $best=filter_var($data['bestStreak']??0,FILTER_VALIDATE_INT,['options'=>['min_range'=>0,'max_range'=>2000]]);
+            if($questionCount===false||$correct===false||$best===false) Http::json(['error'=>'ملخص النتيجة المرسل من الحزمة غير صالح.'],422);
+            // الحزمة المرفوعة تبلغنا بعدد الإجابات فقط، بينما إعداد المعلمة هو المرجع النهائي للنقاط.
+            $pointsPerQuestion=interactive_game_builder_run_points_per_question($run);
+            $score=(int)$correct*$pointsPerQuestion;
+            $maxScore=(float)((int)$questionCount*$pointsPerQuestion);
+        }
     }
     $duration=filter_var($data['durationSeconds']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1,'max_range'=>86400]]);
     if($duration===false||$duration===null) $duration=max(1,min(86400,time()-strtotime((string)$run['started_at'])));

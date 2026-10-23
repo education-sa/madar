@@ -10,6 +10,7 @@ require_once __DIR__ . '/teacher_skill_attachments.php';
 require_once __DIR__ . '/paper_assessments.php';
 require_once __DIR__ . '/teacher_school_settings.php';
 require_once __DIR__ . '/parent_portal.php';
+require_once __DIR__ . '/flipped_classroom.php';
 
 function handle_teacher_routes(string $method, array $segments): never
 {
@@ -56,7 +57,10 @@ function handle_teacher_routes(string $method, array $segments): never
         'learning-styles' => in_array($method, ['GET','HEAD'], true) ? 'analytics.view' : 'analytics.manage',
         'reports' => 'export.use',
         'school-settings', 'interactive-games' => 'school_settings.manage',
+        'planning-content', 'competitions' => 'content.manage',
+        'flipped-classroom' => 'content.manage',
         'privacy' => 'dashboard.view',
+        'announcements' => 'dashboard.view',
         'enhancements' => match ($segments[1] ?? '') {
             'remedial','messages','password-requests' => 'students.manage',
             'smart-reports','alerts' => 'analytics.view',
@@ -134,7 +138,19 @@ function handle_teacher_routes(string $method, array $segments): never
         }
         teacher_interactive_games_routes($method, array_slice($segments, 1), $teacherId);
     }
+    if ($resource === 'planning-content') {
+        planning_content_teacher_routes($method, array_slice($segments, 1), $teacherId);
+    }
+    if ($resource === 'competitions') {
+        teacher_live_competition_routes($method, array_slice($segments, 1), $teacherId);
+    }
+    if ($resource === 'flipped-classroom') {
+        teacher_flipped_routes($method, array_slice($segments, 1), $teacherId);
+    }
     if ($resource === 'privacy') { platform_privacy_routes('teacher',$teacherId,$method); }
+    if ($resource === 'announcements') {
+        teacher_announcements_routes($method, array_slice($segments, 1), $teacherId);
+    }
     if ($resource === 'enhancements') {
         teacher_enhancement_routes($method, array_slice($segments, 1), $teacherId);
     }
@@ -145,7 +161,7 @@ function handle_teacher_routes(string $method, array $segments): never
 function teacher_dashboard_summary(int $teacherId): never
 {
     $studentCount = (int) (fetch_one(
-        'SELECT COUNT(*) AS n FROM students s JOIN classes c ON c.id = s.class_id WHERE c.teacher_id = ?',
+        'SELECT COUNT(*) AS n FROM students s JOIN classes c ON c.id = s.class_id WHERE c.teacher_id = ? AND s.deleted_at IS NULL',
         [$teacherId]
     )['n'] ?? 0);
     $publishedTests = (int) (fetch_one(
@@ -157,11 +173,11 @@ function teacher_dashboard_summary(int $teacherId): never
         [$teacherId]
     )['n'] ?? 0);
     $averageProgress = (float) (fetch_one(
-        'SELECT COALESCE(AVG(s.progress_percent),0) AS n FROM students s JOIN classes c ON c.id=s.class_id WHERE c.teacher_id=?',
+        'SELECT COALESCE(AVG(s.progress_percent),0) AS n FROM students s JOIN classes c ON c.id=s.class_id WHERE c.teacher_id=? AND s.deleted_at IS NULL',
         [$teacherId]
     )['n'] ?? 0);
     $needSupportCount = (int) (fetch_one(
-        'SELECT COUNT(*) AS n FROM students s JOIN classes c ON c.id=s.class_id WHERE c.teacher_id=? AND s.progress_percent < 50',
+        'SELECT COUNT(*) AS n FROM students s JOIN classes c ON c.id=s.class_id WHERE c.teacher_id=? AND s.deleted_at IS NULL AND s.progress_percent < 50',
         [$teacherId]
     )['n'] ?? 0);
     $classLevels = fetch_all(
@@ -227,8 +243,13 @@ function teacher_data_routes(string $method, array $segments, int $teacherId): n
             if (teacher_student_class_number_from_name((string)$row['name']) === $classNumber) Http::json(['error'=>'هذا الفصل موجود مسبقًا للمرحلة والصف المختارين.'],409);
         }
         $name = teacher_student_class_display_name($grade,$classNumber);
-        execute_sql('INSERT INTO classes (teacher_id,name,stage,grade_label,academic_year) VALUES (?,?,?,?,?)',[$teacherId,$name,$stage,$grade,$year]);
-        Http::json(['id'=>(int)Database::connection()->lastInsertId()],201);
+        $classId=Database::transaction(function(PDO $pdo) use($teacherId,$name,$stage,$grade,$year): int {
+            $pdo->prepare('INSERT INTO classes (teacher_id,name,stage,grade_label,academic_year) VALUES (?,?,?,?,?)')->execute([$teacherId,$name,$stage,$grade,$year]);
+            $id=(int)$pdo->lastInsertId();
+            interactive_game_builder_sync_class_publications($pdo,$teacherId,$id);
+            return $id;
+        });
+        Http::json(['id'=>$classId],201);
     }
     if ($resource === 'classes' && isset($segments[1]) && in_array($method, ['PUT','DELETE'], true)) {
         $id = route_id($segments, 1);
@@ -236,7 +257,9 @@ function teacher_data_routes(string $method, array $segments, int $teacherId): n
             Http::json(['error' => 'الفصل غير موجود.'], 404);
         }
         if ($method === 'DELETE') {
-            $studentCount=(int)(fetch_one('SELECT COUNT(*) AS n FROM students WHERE class_id=?',[$id])['n']??0);
+            // طابقي شرط الحذف مع العدد الظاهر في جدول إدارة الفصول؛
+            // السجلات المحذوفة سابقًا لا تجعل الفصل يبدو فارغًا ثم تمنع حذفه.
+            $studentCount=(int)(fetch_one('SELECT COUNT(*) AS n FROM students WHERE class_id=? AND deleted_at IS NULL',[$id])['n']??0);
             if ($studentCount>0) Http::json(['error'=>'لا يمكن حذف فصل يحتوي طالبات. انقلي الطالبات إلى فصل آخر أولًا.'],409);
             if (function_exists('teacher_attachments_schema_ready') && teacher_attachments_schema_ready()) {
                 $attachmentCount=(int)(fetch_one('SELECT COUNT(*) AS n FROM teacher_analysis_attachments WHERE class_id=? AND teacher_id=? AND deleted_at IS NULL',[$id,$teacherId])['n']??0);
@@ -261,11 +284,13 @@ function teacher_data_routes(string $method, array $segments, int $teacherId): n
             if (teacher_student_class_number_from_name((string)$row['name']) === $classNumber) Http::json(['error'=>'هذا الفصل موجود مسبقًا للمرحلة والصف المختارين.'],409);
         }
         $name = teacher_student_class_display_name($grade,$classNumber);
-        execute_sql(
-            'UPDATE classes SET name=?,stage=?,grade_label=?,academic_year=? WHERE id=? AND teacher_id=?',
-            [$name,$stage,$grade,$year,$id,$teacherId]
-        );
-        execute_sql('UPDATE students s JOIN classes c ON c.id=s.class_id SET s.stage=c.stage,s.grade_label=c.grade_label WHERE c.id=? AND c.teacher_id=?',[$id,$teacherId]);
+        Database::transaction(function(PDO $pdo) use($name,$stage,$grade,$year,$id,$teacherId): void {
+            $pdo->prepare('UPDATE classes SET name=?,stage=?,grade_label=?,academic_year=? WHERE id=? AND teacher_id=?')
+                ->execute([$name,$stage,$grade,$year,$id,$teacherId]);
+            $pdo->prepare('UPDATE students s JOIN classes c ON c.id=s.class_id SET s.stage=c.stage,s.grade_label=c.grade_label WHERE c.id=? AND c.teacher_id=?')
+                ->execute([$id,$teacherId]);
+            interactive_game_builder_sync_class_publications($pdo,$teacherId,$id);
+        });
         Http::json(['ok' => true]);
     }
     if ($resource === 'notifications' && $method === 'GET') {
@@ -514,8 +539,11 @@ function printable_report(string $title,string $body,int $teacherId,array $conte
     $leader=trim((string)($school['schoolLeaderName']??''));
     $teacher=trim((string)($school['teacherName']??''));
     $stageGrade=trim(implode(' — ',array_values(array_filter([$stageLabel,$gradeLabel],static fn($v)=>trim((string)$v)!==''))));
+    $printCssPath=dirname(__DIR__).'/teacher/print-official.css';
+    $printCss=is_file($printCssPath)?(string)file_get_contents($printCssPath):'';
     header('Content-Type: text/html; charset=utf-8');
-    echo '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.$h($title).'</title><link rel="stylesheet" href="/teacher/print-official.css?v=4"><style>@page{size:A4 '.$orientation.';margin:7mm}</style></head><body class="print-'.$orientation.'">'
+    header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'");
+    echo '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'.$h($title).'</title><style>'.$printCss.'@page{size:A4 '.$orientation.';margin:7mm}</style></head><body class="print-'.$orientation.'">'
         .'<div class="print-actions"><button onclick="window.print()">طباعة / حفظ PDF</button><button onclick="history.back()">رجوع</button></div>'
         .'<main class="official-sheet"><table class="official-document-frame"><thead><tr><td>'
         .'<header class="official-print-header">'

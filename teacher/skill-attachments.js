@@ -1,4 +1,4 @@
-import { renderTeacherPaperAssessments } from "./paper-assessments.js?v=2";
+import { renderTeacherPaperAssessments } from "./paper-assessments.js?v=10";
 
 let activeRequest = null;
 
@@ -250,10 +250,19 @@ export async function renderSkillAttachments({ root, academicSelectorHtml, bindA
     manual: { id: 0, classId: initialClassId, academicYear: initialAcademicYear, semester: initialSemester, title: "", assessmentDate: today, threshold: 80, mode: "quick", subject: "", unit: "", lesson: "", items: [], scores: {} },
   };
   const helpers = { escapeHtml, formatDate };
-  root.innerHTML = `${academicSelectorHtml("attachments")}<section class="skill-files" aria-label="تحليل المهارات والمرفقات"><header class="skill-files__page-head"><div><span>مساحة الأدلة التعليمية</span><h1>تحليل المهارات والمرفقات</h1><p>نتائج الاختبارات الإلكترونية، والاختبارات الورقية، وأرشيف المرفقات في مساحة واحدة.</p></div></header><nav class="skill-files__tabs" role="tablist" aria-label="أقسام الصفحة"><button type="button" role="tab" class="is-active" data-main-tab="analysis" aria-selected="true">نتائج الاختبارات</button><button type="button" role="tab" data-main-tab="paper" aria-selected="false">الاختبارات الورقية</button><button type="button" role="tab" data-main-tab="files" aria-selected="false">المرفقات</button></nav><div class="skill-files__content"><div class="skill-files__loading" role="status">جارٍ تحميل البيانات…</div></div></section>`;
+  root.innerHTML = `${academicSelectorHtml("attachments")}<section class="skill-files" aria-label="تحليل المهارات والمرفقات"><nav class="skill-files__tabs" role="tablist" aria-label="أقسام الصفحة"><button type="button" role="tab" class="is-active" data-main-tab="analysis" aria-selected="true">نتائج الاختبارات</button><button type="button" role="tab" data-main-tab="paper" aria-selected="false">الاختبارات الورقية</button><button type="button" role="tab" data-main-tab="files" aria-selected="false">المرفقات</button></nav><div class="skill-files__content"><div class="skill-files__loading" role="status">جارٍ تحميل البيانات…</div></div></section>`;
   bindAcademicSelector("attachments", rerender);
+  const academicFilter = root.querySelector(".academic-filter");
   const workspace = root.querySelector(".skill-files");
   const content = workspace.querySelector(".skill-files__content");
+
+  function preserveAcademicFilter() {
+    if (academicFilter?.parentElement === content) workspace.before(academicFilter);
+  }
+
+  function placeAcademicFilterAfterHero() {
+    content.querySelector(".skill-files__hero")?.after(academicFilter);
+  }
 
   function academicParams() {
     return new URLSearchParams(getAcademicQuery("attachments"));
@@ -274,6 +283,7 @@ export async function renderSkillAttachments({ root, academicSelectorHtml, bindA
   }
 
   async function loadAnalysis() {
+    preserveAcademicFilter();
     content.innerHTML = '<div class="skill-files__loading" role="status">جارٍ حساب نتائج المهارات…</div>';
     activeRequest?.abort();
     const controller = new AbortController(); activeRequest = controller;
@@ -283,6 +293,7 @@ export async function renderSkillAttachments({ root, academicSelectorHtml, bindA
       if (!workspace.isConnected || state.tab !== "analysis" || controller.signal.aborted) return;
       normalizeFilters(data.filters || {});
       renderAnalysisContent(content, state, data, helpers);
+      placeAcademicFilterAfterHero();
       bindAnalysis(data);
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -651,8 +662,11 @@ export async function renderSkillAttachments({ root, academicSelectorHtml, bindA
     state.tab = button.dataset.mainTab;
     workspace.querySelectorAll("[data-main-tab]").forEach((item) => { const active = item.dataset.mainTab === state.tab; item.classList.toggle("is-active", active); item.setAttribute("aria-selected", String(active)); });
     if (state.tab === "analysis") loadAnalysis();
-    else if (state.tab === "paper") renderTeacherPaperAssessments({ container: content, api, escapeHtml, toast, getAcademicQuery });
-    else loadFiles();
+    else {
+      preserveAcademicFilter();
+      if (state.tab === "paper") renderTeacherPaperAssessments({ container: content, api, escapeHtml, toast, getAcademicQuery, onRender: placeAcademicFilterAfterHero });
+      else loadFiles();
+    }
   }));
   await loadAnalysis();
 }

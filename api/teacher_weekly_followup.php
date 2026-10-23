@@ -124,7 +124,7 @@ function teacher_weekly_backfill_context(int $teacherId,array $context): void
     $year=$context['academic_year'];$semester=$context['semester'];$start=$context['start_date'];
     execute_sql("UPDATE weekly_follow_up_items SET academic_year=?,semester=? WHERE teacher_id=? AND academic_year=''",[$year,$semester,$teacherId]);
     execute_sql("UPDATE weekly_participation SET academic_year=?,semester=?,week_no=FLOOR(DATEDIFF(participation_date,?)/7)+1,day_index=MOD(DATEDIFF(participation_date,?),7) WHERE teacher_id=? AND academic_year='' AND participation_date>=? AND DATEDIFF(participation_date,?) BETWEEN 0 AND 419",[$year,$semester,$start,$start,$teacherId,$start,$start]);
-    execute_sql("INSERT IGNORE INTO weekly_attendance (teacher_id,class_id,student_id,academic_year,semester,week_no,day_index,attendance_date,status) SELECT a.teacher_id,s.class_id,a.student_id,?,?,FLOOR(DATEDIFF(a.attendance_date,?)/7)+1,MOD(DATEDIFF(a.attendance_date,?),7),a.attendance_date,a.status FROM attendance a JOIN students s ON s.id=a.student_id WHERE a.teacher_id=? AND a.attendance_date>=? AND DATEDIFF(a.attendance_date,?) BETWEEN 0 AND 419 AND MOD(DATEDIFF(a.attendance_date,?),7) BETWEEN 0 AND 4",[$year,$semester,$start,$start,$teacherId,$start,$start,$start]);
+    execute_sql("INSERT IGNORE INTO weekly_attendance (teacher_id,class_id,student_id,academic_year,semester,week_no,day_index,attendance_date,status) SELECT a.teacher_id,s.class_id,a.student_id,?,?,FLOOR(DATEDIFF(a.attendance_date,?)/7)+1,MOD(DATEDIFF(a.attendance_date,?),7),a.attendance_date,a.status FROM attendance a JOIN students s ON s.id=a.student_id AND s.deleted_at IS NULL WHERE a.teacher_id=? AND a.attendance_date>=? AND DATEDIFF(a.attendance_date,?) BETWEEN 0 AND 419 AND MOD(DATEDIFF(a.attendance_date,?),7) BETWEEN 0 AND 4",[$year,$semester,$start,$start,$teacherId,$start,$start,$start]);
 }
 
 function teacher_weekly_follow_up_routes(string $method,array $segments,int $teacherId): never
@@ -201,21 +201,21 @@ function teacher_weekly_follow_up_data(int $teacherId,?int $forcedClassId=null,?
     $settings=teacher_weekly_settings($teacherId);
     if (!$classId) return ['classes'=>$classes,'class'=>null,'students'=>[],'week'=>$week,'days'=>teacher_weekly_days($teacherId,$week,$settings),'settings'=>$settings,'attendance'=>[],'participation'=>[],'items'=>[]];
     $class=teacher_weekly_class($teacherId,$classId);
-    $students=fetch_all('SELECT id,name,email FROM students WHERE class_id=? ORDER BY name',[$classId]);
+    $students=fetch_all('SELECT id,name,email FROM students WHERE class_id=? AND deleted_at IS NULL ORDER BY name',[$classId]);
     $days=teacher_weekly_days($teacherId,$week,$settings);
     $attendance=[];$participation=[];
-    foreach(fetch_all('SELECT student_id,day_index,attendance_date,status FROM weekly_attendance WHERE teacher_id=? AND class_id=? AND academic_year=? AND semester=? AND week_no=?',[$teacherId,$classId,$context['academic_year'],$context['semester'],$week]) as $row) {
+    foreach(fetch_all('SELECT record.student_id,record.day_index,record.attendance_date,record.status FROM weekly_attendance record JOIN students student ON student.id=record.student_id AND student.deleted_at IS NULL WHERE record.teacher_id=? AND record.class_id=? AND record.academic_year=? AND record.semester=? AND record.week_no=?',[$teacherId,$classId,$context['academic_year'],$context['semester'],$week]) as $row) {
         $day=(int)$row['day_index'];$date=$days[$day]['date']??(string)$row['attendance_date'];
         $attendance[(string)$row['student_id']][$date]=$row['status'];
     }
-    foreach(fetch_all('SELECT student_id,day_index,participation_date,score,max_score,record_status,note FROM weekly_participation WHERE teacher_id=? AND class_id=? AND academic_year=? AND semester=? AND week_no=?',[$teacherId,$classId,$context['academic_year'],$context['semester'],$week]) as $row) {
+    foreach(fetch_all('SELECT record.student_id,record.day_index,record.participation_date,record.score,record.max_score,record.record_status,record.note FROM weekly_participation record JOIN students student ON student.id=record.student_id AND student.deleted_at IS NULL WHERE record.teacher_id=? AND record.class_id=? AND record.academic_year=? AND record.semester=? AND record.week_no=?',[$teacherId,$classId,$context['academic_year'],$context['semester'],$week]) as $row) {
         $day=(int)$row['day_index'];$date=$days[$day]['date']??(string)$row['participation_date'];
         $participation[(string)$row['student_id']][$date]=['score'=>$row['score']===null?null:(float)$row['score'],'maxScore'=>(float)$row['max_score'],'status'=>$row['record_status'],'note'=>$row['note']];
     }
     $items=fetch_all('SELECT id,item_type,title,item_date,max_score,sort_order FROM weekly_follow_up_items WHERE teacher_id=? AND class_id=? AND academic_year=? AND semester=? AND week_no=? ORDER BY item_date,sort_order,id',[$teacherId,$classId,$context['academic_year'],$context['semester'],$week]);
     if ($items) {
         $ids=array_map('intval',array_column($items,'id'));$marks=implode(',',array_fill(0,count($ids),'?'));$scores=[];
-        foreach(fetch_all("SELECT item_id,student_id,score,record_status,note FROM weekly_follow_up_item_scores WHERE item_id IN ({$marks})",$ids) as $row) $scores[(string)$row['item_id']][(string)$row['student_id']]=['score'=>$row['score']===null?null:(float)$row['score'],'status'=>$row['record_status'],'note'=>$row['note']];
+        foreach(fetch_all("SELECT score.item_id,score.student_id,score.score,score.record_status,score.note FROM weekly_follow_up_item_scores score JOIN students student ON student.id=score.student_id AND student.deleted_at IS NULL WHERE score.item_id IN ({$marks})",$ids) as $row) $scores[(string)$row['item_id']][(string)$row['student_id']]=['score'=>$row['score']===null?null:(float)$row['score'],'status'=>$row['record_status'],'note'=>$row['note']];
         foreach($items as &$item) {$item['id']=(int)$item['id'];$item['maxScore']=(float)$item['max_score'];unset($item['max_score']);$item['scores']=$scores[(string)$item['id']]??[];}unset($item);
     }
     $studentCount=count($students);
@@ -264,7 +264,7 @@ function teacher_weekly_save_settings(int $teacherId): never
 function teacher_weekly_owned_students(int $teacherId,int $classId): array
 {
     teacher_weekly_class($teacherId,$classId);
-    return array_fill_keys(array_map('intval',array_column(fetch_all('SELECT s.id FROM students s JOIN classes c ON c.id=s.class_id WHERE c.id=? AND c.teacher_id=?',[$classId,$teacherId]),'id')),true);
+    return array_fill_keys(array_map('intval',array_column(fetch_all('SELECT s.id FROM students s JOIN classes c ON c.id=s.class_id WHERE c.id=? AND c.teacher_id=? AND s.deleted_at IS NULL',[$classId,$teacherId]),'id')),true);
 }
 
 function teacher_weekly_save_attendance(int $teacherId): never
@@ -589,4 +589,3 @@ function teacher_weekly_import(int $teacherId): never
     }
     Activity::log('teacher',$teacherId,'استيراد سجل متابعة أسبوعي',"{$context['semester_label']} — الأسبوع {$week}: {$imported} سجل");Http::json(['imported'=>$imported,'errors'=>$errors]);
 }
-
