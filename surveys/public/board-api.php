@@ -159,7 +159,7 @@ try {
   mbAccess($u,(int)$file['class_id'],'can_upload');mbRequireFileSubject($u,$file);if(!$admin && !PortalManagement::can($u,'manage_content',(int)$file['class_id']) && !empty($file['uploaded_by']) && (int)$file['uploaded_by']!==(int)$u['id'])fail('لا يمكنك إدارة ملف معلمة أخرى.',403);
   sql('UPDATE mb_files SET deleted_at=UTC_TIMESTAMP() WHERE id=?',[$fid]);mbAudit($u,'delete_file','file',$fid);jsonout(['ok'=>true]);
  }
- if($op==='audit') {mbRequireBoardManager($u);jsonout(['items'=>sql('SELECT a.*,u.name AS actor FROM mb_audit a JOIN ms_users u ON a.actor_id=u.id ORDER BY a.id DESC LIMIT 100')->fetchAll()]);}
+ if($op==='audit') {mbRequireBoardManager($u);jsonout(['items'=>sql('SELECT a.*,COALESCE(p.details,a.details) AS details,u.name AS actor FROM mb_audit a LEFT JOIN mb_audit_payload p ON p.audit_id=a.id JOIN ms_users u ON a.actor_id=u.id ORDER BY a.id DESC LIMIT 100')->fetchAll()]);}
  fail('الإجراء غير موجود.',404);
 } catch(DomainException $e) {
  if(isset($cfg))try{if(db()->inTransaction())db()->rollBack();}catch(Throwable $ignored){}

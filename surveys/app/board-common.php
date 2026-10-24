@@ -79,6 +79,7 @@ function mbOwner(array $u): void {if (!mbIsPlatformOwner($u)) fail('هذه ال�
 function mbRequireBoardManager(array $u): void {if (!mbBoardManager($u)) fail('هذه الصلاحية لمعلم مساعد داخل بوابة المدرسة.',403);}
 function mbAudit(array $u,string $event,string $entity,int $id,string $details=''): void {
  sql('INSERT INTO mb_audit(actor_id,event_type,entity_type,entity_id,details) VALUES (?,?,?,?,?)',[$u['id'],$event,$entity,$id,mb_sub($details,500)]);
+ if(mb_strlen($details)>500)sql('INSERT INTO mb_audit_payload(audit_id,details) VALUES (?,?)',[(int)db()->lastInsertId(),$details]);
 }
 function mb_sub(string $s,int $limit): string {return mb_substr($s,0,$limit);}
 function mbStudentClass(int $classId,int $studentId): void {

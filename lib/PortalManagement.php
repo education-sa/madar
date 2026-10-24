@@ -4,7 +4,7 @@ final class PortalManagement {
  public const RIGHTS=['accept_students'=>'قبول الطالبات','reset_passwords'=>'تعديل كلمات مرور الطالبات','create_classes'=>'إنشاء الفصول','edit_classes'=>'تعديل الفصول','add_students'=>'إضافة الطالبات ونقلهن','edit_students'=>'تعديل بيانات الطالبات','manage_content'=>'إدارة الملفات والمنشورات'];
  public static function ensureSchema(): void {
   static $ready=false;if($ready)return;$pdo=Database::connection();
-  try{$pdo->query('SELECT teacher_id FROM mb_assistant_grants LIMIT 0');$pdo->query('SELECT class_id FROM mb_class_madar_links LIMIT 0');$pdo->query('SELECT migration_key FROM mb_management_migrations LIMIT 0');}catch(PDOException $e){if((int)($e->errorInfo[1]??0)!==1146)throw $e;$pdo->exec(file_get_contents(dirname(__DIR__).'/surveys/database/migrations/20261024_board_management.sql'));}
+  try{$pdo->query('SELECT teacher_id FROM mb_assistant_grants LIMIT 0');$pdo->query('SELECT class_id FROM mb_class_madar_links LIMIT 0');$pdo->query('SELECT migration_key FROM mb_management_migrations LIMIT 0');$pdo->query('SELECT audit_id FROM mb_audit_payload LIMIT 0');}catch(PDOException $e){if((int)($e->errorInfo[1]??0)!==1146)throw $e;$pdo->exec(file_get_contents(dirname(__DIR__).'/surveys/database/migrations/20261024_board_management.sql'));}
   if($pdo->query("SELECT 1 FROM mb_management_migrations WHERE migration_key='assistant_scope_v1'")->fetchColumn()){$ready=true;return;}
   // Convert pre-existing broad assistant roles to explicit grants for current classes once.
   $pdo->beginTransaction();

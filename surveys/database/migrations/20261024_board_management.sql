@@ -23,3 +23,9 @@ CREATE TABLE IF NOT EXISTS mb_class_madar_links (
  FOREIGN KEY(native_class_id) REFERENCES classes(id) ON DELETE SET NULL,
  FOREIGN KEY(updated_by) REFERENCES ms_users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS mb_audit_payload (
+ audit_id BIGINT UNSIGNED PRIMARY KEY,
+ details LONGTEXT NOT NULL,
+ FOREIGN KEY(audit_id) REFERENCES mb_audit(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
