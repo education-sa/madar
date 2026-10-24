@@ -13,5 +13,5 @@ if (!$user || ($user['roleCode'] ?? '') !== Rbac::OWNER || ($user['role'] ?? '')
 // Owners stay in their original dashboard; ignore stale survey return targets.
 unset($_SESSION['ms_return_after_login']);
 $html=file_get_contents(__DIR__.'/protected/dashboard.html');
-$html=str_replace('/owner/dashboard.js?v=9','/owner/dashboard.js?v=20261024-assistant-senior',$html);
+$html=str_replace('/owner/dashboard.js?v=9','/owner/dashboard.js?v=20261024-board-management',$html);
 echo str_replace('</body>','<script src="/surveys/public/assets/portal-link.js?v=20261023-owner"></script></body>',$html);

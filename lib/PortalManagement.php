@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 final class PortalManagement {
+ public const GRADES=['ابتدائي'=>['رابع ابتدائي','خامس ابتدائي','سادس ابتدائي'],'متوسط'=>['أول متوسط','ثاني متوسط','ثالث متوسط'],'ثانوي'=>['أول ثانوي','ثاني ثانوي','ثالث ثانوي']];
  public const RIGHTS=['accept_students'=>'قبول الطالبات','reset_passwords'=>'تعديل كلمات مرور الطالبات','create_classes'=>'إنشاء الفصول','edit_classes'=>'تعديل الفصول','add_students'=>'إضافة الطالبات ونقلهن','edit_students'=>'تعديل بيانات الطالبات','manage_content'=>'إدارة الملفات والمنشورات'];
  public static function ensureSchema(): void {
   static $ready=false;if($ready)return;$pdo=Database::connection();

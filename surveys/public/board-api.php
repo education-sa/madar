@@ -163,7 +163,11 @@ try {
  fail('الإجراء غير موجود.',404);
 } catch(DomainException $e) {
  if(isset($cfg))try{if(db()->inTransaction())db()->rollBack();}catch(Throwable $ignored){}
- jsonout(['error'=>$e->getMessage()],in_array($e->getCode(),[400,401,403,404,405,409,413,429,503],true)?$e->getCode():400);
+ jsonout(['error'=>$e->getMessage()],in_array($e->getCode(),[400,401,403,404,405,409,413,422,429,503],true)?$e->getCode():400);
+} catch(PDOException $e) {
+ if(isset($cfg))try{if(db()->inTransaction())db()->rollBack();}catch(Throwable $ignored){}
+ if((int)($e->errorInfo[1]??0)===1062)jsonout(['error'=>'الحساب أو الربط موجود مسبقًا؛ حدّثي القائمة واستخدمي السجل الموجود.'],409);
+ error_log('Madar board database: '.$e->getMessage());jsonout(['error'=>'تعذر إكمال العملية. راجعي سجل الخادم.'],500);
 } catch(Throwable $e) {
  if(isset($cfg))try{if(db()->inTransaction())db()->rollBack();}catch(Throwable $ignored){}
  error_log('Madar board: '.get_class($e).' '.$e->getMessage());http_response_code(500);jsonout(['error'=>'تعذر إكمال العملية. تأكدي من تثبيت جداول لوحتي ومراجعة سجل الخادم.']);
