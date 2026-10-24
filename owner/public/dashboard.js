@@ -350,7 +350,7 @@ async function renderTests() {
 async function renderActivity() {
   content.innerHTML = `<div class="empty-state">جارٍ تحميل سجل العمليات...</div>`;
   const logs = await api("/activity-log");
-  try { const portal=await api('/portal/audit'); for(const a of portal.items)logs.push({actor_role:'owner',owner_name:a.actor,action:'بوابة ظليم: '+({grant_first_teacher:'منح معلم أول',revoke_first_teacher:'سحب معلم أول',portal_access:'تغيير الوصول'}[a.event_type]||a.event_type),details:a.subject_type+' #'+a.subject_id,created_at:a.created_at,before_data:a.before_json,after_data:a.after_json});logs.sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))); } catch(error) {console.warn(error.message);}
+  try { const portal=await api('/portal/audit'); for(const a of portal.items)logs.push({actor_role:'owner',owner_name:a.actor,action:'بوابة ظليم: '+({grant_senior_teacher:'منح معلم أول — صلاحيات المالكة',revoke_senior_teacher:'سحب معلم أول',grant_first_teacher:'منح معلم مساعد',revoke_first_teacher:'سحب معلم مساعد',portal_access:'تغيير الوصول'}[a.event_type]||a.event_type),details:a.subject_type+' #'+a.subject_id,created_at:a.created_at,before_data:a.before_json,after_data:a.after_json});logs.sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))); } catch(error) {console.warn(error.message);}
   content.innerHTML = `
     <div class="card activity-intro"><h3>سجل عمليات مالك الموقع والنظام</h3><p>تُعرض هوية المنفذ الحقيقية وعنوان IP ونوع المتصفح، مع إخفاء كلمات المرور والرموز السرية تلقائيًا.</p></div>
     <div class="card table-card"><div class="table-scroll"><table>
@@ -1134,7 +1134,7 @@ function portalAccountButtons(type,id){
   const row=portalAccounts.get(type+':'+id);if(!row)return '<button class="btn btn-outline btn-sm" data-portal-install>تهيئة ربط بوابة ظليم</button>';
   if(type==='teacher')return `<button class="btn btn-outline btn-sm" data-teacher-settings="${id}">⚙ إعدادات</button>`;
   return `<button class="btn btn-outline btn-sm" data-portal-account="${type}:${id}">${esc(portalModeLabels[row.access_mode])} — تغيير</button>`+
-    (type==='teacher'?`<button class="btn btn-outline btn-sm" data-portal-first="${id}">${row.first_teacher?'معلم أول — سحب الدور':'معلمة عادية — ترقية إلى معلم أول'}</button>`:'')+
+    (type==='teacher'?`<button class="btn btn-outline btn-sm" data-portal-first="${id}">${row.first_teacher?'معلم مساعد — سحب الدور':'معلمة عادية — ترقية إلى معلم مساعد'}</button>`:'')+
     `<span class="badge ${row.portal_enabled?'badge-green':'badge-orange'}">بوابة ظليم ${row.portal_enabled?'مفعلة':'متوقفة'}</span>`;
 }
 function bindPortalAccountButtons(){
@@ -1145,17 +1145,17 @@ function bindPortalAccountButtons(){
 }
 function editPortalAccount(type,rawId,roleFocus=false){
   const id=Number(rawId),row=portalAccounts.get(type+':'+id);if(!row)return;
-  openModal(`<h3>وصول بوابة ظليم</h3><p>المعلمة العادية تتابع طالبات فصولها ومادتها دون دور معلم أول. المعلم الأول يدير الفصول والطالبات، وصلاحيات مدار تبقى مستقلة.</p>
+  openModal(`<h3>وصول بوابة ظليم</h3><p>المعلمة العادية تتابع طالبات فصولها ومادتها دون دور معلم مساعد. المعلم المساعد يدير الفصول والطالبات، وصلاحيات مدار تبقى مستقلة.</p>
     <label class="field">نوع الوصول<select id="portalMode">${Object.entries(portalModeLabels).map(([v,l])=>`<option value="${v}" ${row.access_mode===v?'selected':''}>${l}</option>`).join('')}</select></label>
     <label class="field" style="display:flex;align-items:center;gap:10px"><input style="width:auto;flex:none" type="checkbox" id="portalEnabled" ${row.portal_enabled?'checked':''}> السماح بالدخول إلى بوابة ظليم</label>
-    ${type==='teacher'?`<label class="field" style="display:flex;align-items:center;gap:10px"><input style="width:auto;flex:none" type="checkbox" id="portalFirstTeacher" ${row.first_teacher?'checked':''}> معلم أول — إنشاء الفصول وإضافة الطالبات وإعادة تعيين كلمات مرورهن</label>`:''}
+    ${type==='teacher'?`<label class="field" style="display:flex;align-items:center;gap:10px"><input style="width:auto;flex:none" type="checkbox" id="portalFirstTeacher" ${row.first_teacher?'checked':''}> معلم مساعد — حسب صلاحيات وفصول «إدارة لوحتي»</label>`:''}
     <p class="safe-note">لا يتغير حساب مدار أو كلمة المرور أو صلاحياته. إيقاف البوابة يمنع الوصول إلى ملفاتها فورًا.</p>
     <div class="modal-actions"><button class="btn btn-outline" id="cancelPortalAccount">إلغاء</button><button class="btn btn-primary" id="savePortalAccount">حفظ</button></div>`);
   if(roleFocus)document.getElementById('portalFirstTeacher').focus();
   document.getElementById('cancelPortalAccount').onclick=closeModal;
   document.getElementById('savePortalAccount').onclick=()=>{
     const change={access_mode:document.getElementById('portalMode').value,portal_enabled:document.getElementById('portalEnabled').checked,first_teacher:type==='teacher'&&document.getElementById('portalFirstTeacher').checked,confirmed:true};
-    const message=row.first_teacher&&!change.first_teacher?'تأكيد سحب دور معلم أول؟ تبقى حساباتها وبياناتها محفوظة.':(!row.first_teacher&&change.first_teacher?'تأكيد منح دور معلم أول داخل بوابة ظليم فقط؟':'تأكيد تغيير وصول هذا الحساب إلى بوابة ظليم؟');
+    const message=row.first_teacher&&!change.first_teacher?'تأكيد سحب دور معلم مساعد؟ تبقى حساباتها وبياناتها محفوظة.':(!row.first_teacher&&change.first_teacher?'تأكيد منح دور معلم مساعد داخل بوابة ظليم فقط؟':'تأكيد تغيير وصول هذا الحساب إلى بوابة ظليم؟');
     confirmAction(message,async()=>{await api('/portal/'+type+'/'+id,{method:'PUT',body:JSON.stringify(change)});toast('تم حفظ وصول بوابة ظليم');if(type==='teacher')await renderTeachers();else if(type==='student')await renderStudents();else await renderParents();});
   };
 }
@@ -1168,18 +1168,18 @@ async function editTeacherSettings(id){
     <div data-class-options ${selected?'':'hidden'} style="margin-top:9px"><label class="field">المادة في هذا الفصل<input data-subject maxlength="85" value="${esc(c.subject||'')}" placeholder="مثال: الرياضيات"></label><div style="display:flex;gap:15px;flex-wrap:wrap"><label><input type="checkbox" data-upload style="width:auto" ${selected?!Number(c.can_upload)?'':'checked':'checked'}> متابعة ورفع أعمال المادة</label><label><input type="checkbox" data-post style="width:auto" ${selected?!Number(c.can_post)?'':'checked':'checked'}> نشر أنشطة المادة</label></div></div></div>`;}).join('');
   openModal(`<h3>إعدادات ${esc(data.name)}</h3><form id="teacherUnifiedSettings">
     <section style="padding:12px;border-radius:12px;background:#f6f2fb;margin-bottom:12px"><h4>١. الدخول إلى البوابات</h4><label class="field">السماح باستخدام<select id="teacherAccessMode">${Object.entries(portalModeLabels).map(([v,l])=>`<option value="${v}" ${access.access_mode===v?'selected':''}>${l}</option>`).join('')}</select></label></section>
-    <section style="padding:12px;border:1px solid #e5dfef;border-radius:12px;margin-bottom:12px"><h4>٢. الدور والتخصص</h4><div class="form-grid"><label class="field">دور المعلمة في ظليم<select id="teacherSchoolRole"><option value="regular" ${!access.first_teacher?'selected':''}>معلمة عادية — متابعة طالباتها ومادتها</option><option value="first" ${access.first_teacher?'selected':''}>معلم أول — إدارة الفصول والطالبات وكلمات المرور</option></select></label><label class="field">التخصص<input id="teacherSpecialty" maxlength="100" value="${esc(data.specialty)}" placeholder="مثال: الرياضيات"></label></div><p class="safe-note">منح الوصول إلى مدار لا يمنح دور معلم أول. الدور يخص بوابة ظليم فقط.</p></section>
-    <section><h4>٣. الفصول والمواد المعتمدة</h4><input id="teacherClassSearch" placeholder="بحث باسم الفصل أو الصف" aria-label="بحث في الفصول" style="width:100%;margin-bottom:6px">${classRows||'<p class="safe-note">لا توجد فصول مشتركة بعد. تظهر هنا الفصول التي تنشئها الإدارة أو المعلم الأول.</p>'}</section>
+    <section style="padding:12px;border:1px solid #e5dfef;border-radius:12px;margin-bottom:12px"><h4>٢. الدور والتخصص</h4><div class="form-grid"><label class="field">الدور الإداري للمعلمة<select id="teacherSchoolRole"><option value="regular" ${!access.first_teacher&&!access.senior_teacher?'selected':''}>معلمة عادية — متابعة طالباتها ومادتها</option><option value="first" ${access.first_teacher?'selected':''}>معلم مساعد — صلاحيات محددة من إدارة لوحتي</option><option value="senior" ${access.senior_teacher?'selected':''}>معلم أول — صلاحيات لوحة مالكة مدار كاملة</option></select></label><label class="field">التخصص<input id="teacherSpecialty" maxlength="100" value="${esc(data.specialty)}" placeholder="مثال: الرياضيات"></label></div><p class="safe-note">المعلم المساعد يدير بوابة ظليم. المعلم الأول يستخدم لوحة مالكة مدار بحسابه الحالي؛ منح الدور وسحبه للمالكة فقط.</p></section>
+    <section><h4>٣. الفصول والمواد المعتمدة</h4><input id="teacherClassSearch" placeholder="بحث باسم الفصل أو الصف" aria-label="بحث في الفصول" style="width:100%;margin-bottom:6px">${classRows||'<p class="safe-note">لا توجد فصول مشتركة بعد. تظهر هنا الفصول التي تنشئها الإدارة أو المعلم المساعد.</p>'}</section>
     <div class="modal-actions"><button type="button" class="btn btn-outline" id="cancelTeacherSettings">إلغاء</button><button type="submit" class="btn btn-primary">حفظ الإعدادات واعتماد الفصول</button></div></form>`,'wide-user-modal');
   const mode=document.getElementById('teacherAccessMode'),role=document.getElementById('teacherSchoolRole');
-  function modeChanged(){const off=mode.value==='madar_only';role.disabled=off;if(off)role.value='regular';}mode.onchange=modeChanged;modeChanged();
+  function modeChanged(){const off=mode.value==='madar_only';role.disabled=off;if(off)role.value='regular';if(role.value==='senior')mode.value='both';}mode.onchange=modeChanged;role.onchange=modeChanged;modeChanged();
   modalRoot.querySelectorAll('[data-settings-class]').forEach(box=>{box.querySelector('[data-selected]').onchange=e=>{box.querySelector('[data-class-options]').hidden=!e.target.checked;};});
   document.getElementById('teacherClassSearch').oninput=e=>{const value=e.target.value.trim();modalRoot.querySelectorAll('[data-settings-class]').forEach(box=>box.hidden=!box.textContent.includes(value));};
   document.getElementById('cancelTeacherSettings').onclick=closeModal;
   document.getElementById('teacherUnifiedSettings').onsubmit=e=>{
     e.preventDefault();const specialty=document.getElementById('teacherSpecialty').value.trim(),classes=[];
     for(const box of modalRoot.querySelectorAll('[data-settings-class]'))if(box.querySelector('[data-selected]').checked){const subject=box.querySelector('[data-subject]').value.trim();if(!specialty||!subject){toast('حددي التخصص والمادة لكل فصل مختار.');return;}classes.push({id:Number(box.dataset.settingsClass),subject,can_upload:box.querySelector('[data-upload]').checked,can_post:box.querySelector('[data-post]').checked});}
-    const change={access_mode:mode.value,portal_enabled:mode.value!=='madar_only',first_teacher:role.value==='first',confirmed:true,settings:{specialty,classes}};
-    confirmAction(`حفظ إعدادات ${esc(data.name)} واعتماد ${classes.length} فصل؟ تُسحب متابعة الفصول التي ألغيتِ اختيارها، وتبقى أعمال الطالبات محفوظة.`,async()=>{await api('/portal/teacher/'+id,{method:'PUT',body:JSON.stringify(change)});toast('حُفظت الإعدادات والتخصص والفصول');await renderTeachers();});
+    const change={access_mode:mode.value,portal_enabled:mode.value!=='madar_only',first_teacher:role.value==='first',senior_teacher:role.value==='senior',confirmed:true,settings:{specialty,classes}};
+    confirmAction(`${role.value==='senior'?'منح صلاحيات لوحة مالكة مدار كاملة. ':access.senior_teacher?'سحب صلاحيات المعلم الأول. ':''}حفظ إعدادات ${esc(data.name)} واعتماد ${classes.length} فصل؟ تُسحب متابعة الفصول التي ألغيتِ اختيارها، وتبقى أعمال الطالبات محفوظة.`,async()=>{await api('/portal/teacher/'+id,{method:'PUT',body:JSON.stringify(change)});toast('حُفظت الإعدادات والتخصص والفصول');await renderTeachers();});
   };
 }

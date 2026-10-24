@@ -9,9 +9,10 @@ function handle_owner_routes(string $method,array $segments): never
     if ($resource==='logout'&&$method==='POST') logout_route('owner');
     if ($resource==='me'&&$method==='GET') owner_me_route();
 
-    $owner=Auth::requireRealOwner();
+    $owner=OwnerDelegation::context();
     if (!in_array($method,['GET','HEAD'],true)) Auth::verifyCsrf();
     $ownerId=(int)$owner['id'];
+    if(!empty($owner['delegated']) && in_array($resource,['security','ownership','privacy','me'],true)) Auth::requireRealOwner();
 
     if ($resource==='portal') owner_portal_routes($method,array_slice($segments,1),$owner);
     if ($resource==='me'&&$method==='PUT') owner_update_profile($owner);
@@ -39,12 +40,12 @@ function handle_owner_routes(string $method,array $segments): never
 
 function owner_me_route(): never
 {
-    $owner=Auth::requireRealOwner();
+    $owner=OwnerDelegation::context();
     $owner['csrfToken']=$_SESSION['csrf_token']??($_SESSION['csrf_token']=bin2hex(random_bytes(32)));
     $owner['roleCode']=Rbac::OWNER;
     $owner['permissions']=Rbac::permissionsForRole(Rbac::OWNER);
     $owner['preview']=Auth::previewContext();
-    $security=fetch_one('SELECT two_factor_enabled,two_factor_confirmed_at FROM owner_security WHERE owner_id=?',[$owner['id']]);
+    $security=empty($owner['delegated'])?fetch_one('SELECT two_factor_enabled,two_factor_confirmed_at FROM owner_security WHERE owner_id=?',[$owner['id']]):[];
     $owner['twoFactorEnabled']=(bool)($security['two_factor_enabled']??false);
     Http::json($owner);
 }

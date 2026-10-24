@@ -4,19 +4,21 @@ try {
  require dirname(__DIR__).'/app/bootstrap.php';
  require dirname(__DIR__).'/app/board-common.php';
  $op=(string)($_GET['op']??'overview');$method=$_SERVER['REQUEST_METHOD']??'GET';
- $reads=['overview','class','students','portfolio','teachers','audit','files','comments','pending_students'];
+ $reads=['overview','class','students','portfolio','teachers','audit','files','comments','pending_students','manage_context','manage_teachers','manage_teacher','manage_students','manage_assistants'];
  if (!in_array($method,['GET','POST'],true) || ($method==='GET'&&!in_array($op,$reads,true)) || ($method==='POST'&&in_array($op,$reads,true))) fail('طريقة الطلب غير مسموحة.',405);
  if($method==='POST') csrf();
  $u=mbActor();$admin=mbAdmin($u);if($method==='POST')rate('mb_board_'.$op.'_'.$u['id'],150);$b=$method==='POST'?($op==='upload'?[]:body()):[];
- if($op==='pending_students') {mbRequireBoardManager($u);jsonout(['items'=>PortalEnrollment::pending()]);}
+ mbManageRoute($op,$u,$b);
+ mbWallRoute($op,$u,$b);
+ if($op==='pending_students') {if(!mbAdmin($u)){if(!PortalManagement::assistant($u))fail('لا تملكين صلاحية قبول الطلبات.',403);$allowed=false;foreach(sql('SELECT id FROM mb_classes WHERE is_active=1')->fetchAll(PDO::FETCH_COLUMN) as $cid)if(PortalManagement::can($u,'accept_students',(int)$cid)){$allowed=true;break;}if(!$allowed)fail('لا تملكين صلاحية قبول الطلبات.',403);}jsonout(['items'=>PortalEnrollment::pending()]);}
  if($op==='approve_student') {
-  mbRequireBoardManager($u);if(empty($b['confirmed']))fail('أكدي الموافقة على الطالبة والفصل أولًا.',409);
+  mbRequireAbility($u,'accept_students',mbId($b['class_id']??null));if(empty($b['confirmed']))fail('أكدي الموافقة على الطالبة والفصل أولًا.',409);
   PortalEnrollment::approve($u,mbId($b['student_id']??null),mbId($b['class_id']??null));jsonout(['ok'=>true]);
  }
  if($op==='overview') {
-  $q=$admin?'SELECT c.*,(SELECT COUNT(*) FROM mb_class_students m WHERE m.class_id=c.id) AS students_count FROM mb_classes c ORDER BY c.is_active DESC,c.academic_year DESC,c.title':
-   'SELECT c.*,(SELECT COUNT(*) FROM mb_class_students m WHERE m.class_id=c.id) AS students_count FROM mb_classes c JOIN mb_teachers t ON t.class_id=c.id AND t.teacher_id=? AND t.can_view=1 JOIN mb_teacher_profiles p ON p.class_id=t.class_id AND p.teacher_id=t.teacher_id AND p.approved=1 AND p.subject<>\'\' WHERE c.is_active=1 ORDER BY c.title';
-  jsonout(['is_admin'=>$admin,'is_platform_owner'=>mbIsPlatformOwner($u),'is_first_teacher'=>mbIsFirstTeacher($u),'classes'=>sql($q,$admin?[]:[$u['id']])->fetchAll()]);
+  $classes=sql('SELECT c.*,(SELECT COUNT(*) FROM mb_class_students m WHERE m.class_id=c.id) AS students_count FROM mb_classes c ORDER BY c.is_active DESC,c.academic_year DESC,c.title')->fetchAll();
+  if(!$admin)$classes=array_values(array_filter($classes,function($c)use($u){if(!(int)$c['is_active'])return false;if(PortalManagement::classVisible($u,(int)$c['id']))return true;return (bool)sql("SELECT 1 FROM mb_teachers t JOIN mb_teacher_profiles p ON p.class_id=t.class_id AND p.teacher_id=t.teacher_id AND p.approved=1 AND p.subject<>'' WHERE t.class_id=? AND t.teacher_id=? AND t.can_view=1",[$c['id'],$u['id']])->fetchColumn();}));
+  jsonout(['is_admin'=>$admin,'can_manage'=>$admin,'is_platform_owner'=>mbIsPlatformOwner($u),'is_first_teacher'=>mbIsFirstTeacher($u),'is_assistant'=>PortalManagement::assistant($u),'can_create_classes'=>PortalManagement::can($u,'create_classes'),'classes'=>$classes]);
  }
  if($op==='teachers') {
   mbRequireBoardManager($u);
@@ -26,7 +28,7 @@ try {
   jsonout(['teachers'=>$people,'members'=>$members,'identity_conflicts'=>$syncConflicts]);
  }
  if($op==='create_class') {
-  mbRequireBoardManager($u);$year=required($b['academic_year']??'',25);$grade=required($b['grade']??'',80);$section=required($b['section_name']??'',40);$title=required($b['title']??'',140);
+  mbRequireAbility($u,'create_classes');$year=required($b['academic_year']??'',25);$grade=required($b['grade']??'',80);$section=required($b['section_name']??'',40);$title=required($b['title']??'',140);
   $key=hash('sha256',$year.'|'.$grade.'|'.$section);db()->beginTransaction();
   sql('INSERT IGNORE INTO mb_class_identity(identity_key) VALUES (?)',[$key]);
   $existing=sql('SELECT class_id FROM mb_class_identity WHERE identity_key=? FOR UPDATE',[$key])->fetchColumn();
@@ -52,19 +54,23 @@ try {
  }
  if($op==='class') {
   $id=mbId($_GET['id']??null);$c=mbAccess($u,$id);
-  $membership=$admin?['can_post'=>1,'can_upload'=>1,'can_manage_students'=>1,'can_manage_posts'=>1]:sql('SELECT * FROM mb_teachers WHERE class_id=? AND teacher_id=?',[$id,$u['id']])->fetch();
-  if(!$admin)$membership['can_manage_students']=0;
-  $posts=sql("SELECT p.*,COALESCE(u.name,st.display_name,'المدرسة') AS author_name,(SELECT COUNT(*) FROM mb_comments co WHERE co.post_id=p.id) AS comments_count FROM mb_posts p LEFT JOIN ms_users u ON u.id=p.author_id LEFT JOIN mb_students st ON st.id=p.student_id WHERE p.class_id=? AND (p.status='published' OR ?=1) ORDER BY p.created_at DESC,p.id DESC LIMIT 100",[$id,($admin||!empty($membership['can_manage_posts']))?1:0])->fetchAll();
-  jsonout(['class'=>$c,'permissions'=>$membership,'is_admin'=>$admin,'is_platform_owner'=>mbIsPlatformOwner($u),'posts'=>$posts]);
+  $membership=mbEffectiveRights($u,$id);
+  $posts=sql("SELECT p.*,w.folder_id,COALESCE(u.name,st.display_name,'المدرسة') AS author_name,(SELECT COUNT(*) FROM mb_comments co WHERE co.post_id=p.id) AS comments_count FROM mb_posts p LEFT JOIN mb_wall_posts w ON w.post_id=p.id LEFT JOIN ms_users u ON u.id=p.author_id LEFT JOIN mb_students st ON st.id=p.student_id WHERE p.class_id=? AND w.deleted_at IS NULL AND (p.status='published' OR ?=1) ORDER BY p.created_at DESC,p.id DESC",[$id,($admin||!empty($membership['can_manage_posts']))?1:0])->fetchAll();
+  $subject=mbSubject($u,$id);
+  $attachments=sql('SELECT f.id,f.post_id,f.file_name,f.mime,f.file_size FROM mb_files f JOIN mb_posts p ON p.id=f.post_id LEFT JOIN mb_wall_posts w ON w.post_id=p.id WHERE f.class_id=? AND f.student_id IS NULL AND f.deleted_at IS NULL AND w.deleted_at IS NULL AND (? IS NULL OR f.subject=?)',[$id,$subject,$subject])->fetchAll();
+  $byPost=[];foreach($attachments as $f)$byPost[$f['post_id']][]=$f;
+  foreach($posts as &$post)$post['attachments']=$byPost[$post['id']]??[];unset($post);
+  $folders=sql('SELECT * FROM mb_wall_folders WHERE class_id=? AND deleted_at IS NULL ORDER BY id',[$id])->fetchAll();
+  jsonout(['class'=>$c,'permissions'=>$membership,'is_admin'=>$admin,'is_platform_owner'=>mbIsPlatformOwner($u),'abilities'=>mbManageRights($u,$id),'posts'=>$posts,'folders'=>$folders]);
  }
  if($op==='students') {
   $id=mbId($_GET['class_id']??null);mbAccess($u,$id);
   $rows=sql('SELECT s.* FROM mb_students s JOIN mb_class_students x ON x.student_id=s.id WHERE x.class_id=? ORDER BY s.display_name',[$id])->fetchAll();
-  if(!$admin)foreach($rows as &$row){unset($row['madar_student_id'],$row['entry_mode'],$row['school_enabled']);} // Admin-only account controls
+  if(!$admin&&!PortalManagement::can($u,'add_students',$id)&&!PortalManagement::can($u,'edit_students',$id)&&!PortalManagement::can($u,'reset_passwords',$id))foreach($rows as &$row){unset($row['madar_student_id'],$row['entry_mode'],$row['school_enabled']);} // Admin-only account controls
   jsonout(['items'=>$rows]);
  }
  if($op==='add_student') {
-  $id=mbId($b['class_id']??null);mbRequireBoardManager($u);mbAccess($u,$id,'can_manage_students');
+  $id=mbId($b['class_id']??null);mbRequireAbility($u,'add_students',$id);mbAccess($u,$id,'can_manage_students');
   $sid=mbId($b['madar_student_id']??null);
   try{$madarStudent=sql('SELECT id,name,status FROM students WHERE id=? AND deleted_at IS NULL LIMIT 1',[$sid])->fetch();}
   catch(PDOException $e){if(($e->errorInfo[1]??0)===1146)fail('تعذر التحقق من حساب الطالبة في مدار. تأكدي من استخدام قاعدة بيانات مدار نفسها.',503);throw $e;}
@@ -77,11 +83,11 @@ try {
   sql('INSERT IGNORE INTO mb_class_students(class_id,student_id) VALUES (?,?)',[$id,$row['id']]);mbAudit($u,'add_student','class',$id,'student_id='.$row['id']);db()->commit();jsonout(['ok'=>true]);
  }
  if($op==='remove_student') {
-  $id=mbId($b['class_id']??null);mbRequireBoardManager($u);mbAccess($u,$id,'can_manage_students');$sid=mbId($b['student_id']??null);
+  $id=mbId($b['class_id']??null);mbRequireAbility($u,'add_students',$id);mbAccess($u,$id,'can_manage_students');$sid=mbId($b['student_id']??null);
   sql('DELETE FROM mb_class_students WHERE class_id=? AND student_id=?',[$id,$sid]);mbAudit($u,'remove_student','class',$id,'student_id='.$sid);jsonout(['ok'=>true]);
  }
  if($op==='create_student') {
-  mbRequireBoardManager($u);$cid=mbId($b['class_id']??null);$class=mbAccess($u,$cid);
+  $cid=mbId($b['class_id']??null);mbRequireAbility($u,'add_students',$cid);$class=mbAccess($u,$cid);
   $name=required($b['name']??'',140);$email=Http::schoolEmail(required($b['email']??'',190));
   $password=required($b['password']??'',200);Auth::validatePassword($password);
   if(strlen($password)>72)fail('كلمة المرور أطول من المسموح.');
@@ -96,7 +102,7 @@ try {
   mbAudit($u,'create_student','student',$sid,'native_id='.$native.'; class_id='.$cid);db()->commit();jsonout(['id'=>$sid,'madar_student_id'=>$native]);
  }
  if($op==='reset_student_password') {
-  mbRequireBoardManager($u);$cid=mbId($b['class_id']??null);mbAccess($u,$cid);$sid=mbId($b['student_id']??null);mbStudentClass($cid,$sid);
+  $cid=mbId($b['class_id']??null);mbRequireAbility($u,'reset_passwords',$cid);mbAccess($u,$cid);$sid=mbId($b['student_id']??null);mbStudentClass($cid,$sid);
   if(empty($b['confirmed']))fail('أكدي إعادة تعيين كلمة المرور أولًا.',409);
   $password=required($b['new_password']??'',200);Auth::validatePassword($password);if(strlen($password)>72)fail('كلمة المرور أطول من المسموح.');
   $native=sql('SELECT madar_student_id FROM mb_students WHERE id=?',[$sid])->fetchColumn();
@@ -104,23 +110,13 @@ try {
   db()->beginTransaction();sql('UPDATE students SET password_hash=?,must_change_password=1 WHERE id=?',[password_hash($password,PASSWORD_DEFAULT),$native]);
   mbAudit($u,'reset_student_password','student',$sid,'native_id='.$native.'; class_id='.$cid);db()->commit();jsonout(['ok'=>true]);
  }
- if($op==='new_post') {
-  $id=mbId($b['class_id']??null);mbAccess($u,$id,'can_post');$title=required($b['title']??'',170);$content=required($b['content']??'',7000);
-  sql("INSERT INTO mb_posts(class_id,author_id,title,content,status) VALUES (?,?,?,?,'published')",[$id,$u['id'],$title,$content]);$pid=(int)db()->lastInsertId();mbAudit($u,'new_post','post',$pid);jsonout(['id'=>$pid]);
- }
- if($op==='edit_post') {
-  $pid=mbId($b['post_id']??null);$p=sql('SELECT * FROM mb_posts WHERE id=?',[$pid])->fetch();if(!$p)fail('المنشور غير موجود.',404);
-  mbAccess($u,(int)$p['class_id'],'can_post');$rights=$admin?true:sql('SELECT can_manage_posts FROM mb_teachers WHERE class_id=? AND teacher_id=?',[$p['class_id'],$u['id']])->fetchColumn();
-  if(!$admin&&(int)$p['author_id']!==(int)$u['id']&&!(int)$rights)fail('لا يمكنك تعديل منشور معلمة أخرى.',403);
-  sql('UPDATE mb_posts SET title=?,content=? WHERE id=?',[required($b['title']??'',170),required($b['content']??'',7000),$pid]);mbAudit($u,'edit_post','post',$pid);jsonout(['ok'=>true]);
- }
  if($op==='set_post_status') {
-  $pid=mbId($b['post_id']??null);$p=sql('SELECT class_id FROM mb_posts WHERE id=?',[$pid])->fetch();if(!$p)fail('المنشور غير موجود.',404);
+  $pid=mbId($b['post_id']??null);$p=mbWallPost($u,$pid,true);
   mbAccess($u,(int)$p['class_id'],'can_manage_posts');$status=$b['status']??'';if(!in_array($status,['published','hidden'],true))fail('حالة غير صالحة.');
   sql('UPDATE mb_posts SET status=? WHERE id=?',[$status,$pid]);mbAudit($u,'post_status','post',$pid,$status);jsonout(['ok'=>true]);
  }
  if($op==='comment') {
-  $pid=mbId($b['post_id']??null);$p=sql("SELECT * FROM mb_posts WHERE id=? AND status='published'",[$pid])->fetch();if(!$p)fail('المنشور غير موجود.',404);mbAccess($u,(int)$p['class_id']);
+  $pid=mbId($b['post_id']??null);$p=mbWallPost($u,$pid);if($p['status']!=='published')fail('المنشور غير منشور.',403);mbAccess($u,(int)$p['class_id']);
   sql('INSERT INTO mb_comments(post_id,author_id,body) VALUES (?,?,?)',[$pid,$u['id'],required($b['body']??'',1500)]);jsonout(['ok'=>true]);
  }
  if($op==='portfolio') {
@@ -133,17 +129,19 @@ try {
  if($op==='files') {
   $cid=mbId($_GET['class_id']??null);mbAccess($u,$cid);
   $subject=mbSubject($u,$cid);
-  $rows=sql('SELECT f.id,f.uploaded_by,f.file_name,f.subject,f.file_size,f.created_at,u.name AS author FROM mb_files f LEFT JOIN ms_users u ON u.id=f.uploaded_by WHERE f.class_id=? AND f.student_id IS NULL AND f.deleted_at IS NULL AND (? IS NULL OR f.subject=?) ORDER BY f.id DESC',[$cid,$subject,$subject])->fetchAll();
+  $rows=sql('SELECT f.id,f.uploaded_by,f.file_name,f.subject,f.file_size,f.created_at,u.name AS author FROM mb_files f LEFT JOIN ms_users u ON u.id=f.uploaded_by WHERE f.class_id=? AND f.student_id IS NULL AND f.post_id IS NULL AND f.deleted_at IS NULL AND (? IS NULL OR f.subject=?) ORDER BY f.id DESC',[$cid,$subject,$subject])->fetchAll();
   jsonout(['items'=>$rows]);
  }
  if($op==='comments') {
-  $pid=mbId($_GET['post_id']??null);$post=sql('SELECT * FROM mb_posts WHERE id=?',[$pid])->fetch();if(!$post)fail('المنشور غير موجود.',404);
-  mbAccess($u,(int)$post['class_id']);if($post['status']!=='published'&&!$admin)fail('المنشور غير منشور.',403);
+  $pid=mbId($_GET['post_id']??null);$post=mbWallPost($u,$pid);
+  mbAccess($u,(int)$post['class_id']);
   $items=sql('SELECT c.id,c.body,c.created_at,u.name AS author FROM mb_comments c JOIN ms_users u ON u.id=c.author_id WHERE c.post_id=? ORDER BY c.id LIMIT 100',[$pid])->fetchAll();jsonout(['items'=>$items]);
  }
  if($op==='upload') {
   $cid=mbId($_POST['class_id']??null);mbAccess($u,$cid,'can_upload');$studentId=!empty($_POST['student_id'])?mbId($_POST['student_id']):null;
   if($studentId)mbStudentClass($cid,$studentId);
+  $postId=!empty($_POST['post_id'])?mbId($_POST['post_id']):null;
+  if($postId){$post=mbWallPost($u,$postId,true);if($studentId||(int)$post['class_id']!==$cid)fail('لا يمكن إرفاق ملفات الطالبات الخاصة أو ملفات فصل آخر بالمنشور.',403);}
   $f=$_FILES['file']??null;if(!$f||!is_array($f)||$f['error']!==UPLOAD_ERR_OK||$f['size']<1||$f['size']>10485760)fail('اختاري ملفًا لا يتجاوز 10 ميغابايت.');
   $mime=(new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']);
   $types=['application/pdf'=>'pdf','image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
@@ -152,13 +150,13 @@ try {
   $dir=mbFileDirectory();if(!is_dir($dir)&&!mkdir($dir,0700,true))fail('فشل تجهيز التخزين.',503);
   $key=bin2hex(random_bytes(24));$path=$dir.'/'.$key;
   if(!move_uploaded_file($f['tmp_name'],$path))fail('تعذر حفظ الملف.',503);chmod($path,0600);
-  try {sql('INSERT INTO mb_files(class_id,student_id,subject,file_name,storage_name,mime,file_size,uploaded_by) VALUES (?,?,?,?,?,?,?,?)',[$cid,$studentId,$subject,$display,$key,$mime,$f['size'],$u['id']]);}
+  try {sql('INSERT INTO mb_files(class_id,student_id,post_id,subject,file_name,storage_name,mime,file_size,uploaded_by) VALUES (?,?,?,?,?,?,?,?,?)',[$cid,$studentId,$postId,$subject,$display,$key,$mime,$f['size'],$u['id']]);}
   catch(Throwable $e){unlink($path);throw $e;}
-  mbAudit($u,'upload','file',(int)db()->lastInsertId(),$display);jsonout(['ok'=>true]);
+  $fid=(int)db()->lastInsertId();mbAudit($u,'upload','file',$fid,$display);jsonout(['ok'=>true,'id'=>$fid]);
  }
  if($op==='delete_file') {
   $fid=mbId($b['file_id']??null);$file=sql('SELECT * FROM mb_files WHERE id=? AND deleted_at IS NULL',[$fid])->fetch();if(!$file)fail('الملف غير موجود.',404);
-  mbAccess($u,(int)$file['class_id'],'can_upload');mbRequireFileSubject($u,$file);if(!$admin && !empty($file['uploaded_by']) && (int)$file['uploaded_by']!==(int)$u['id'])fail('لا يمكنك إدارة ملف معلمة أخرى.',403);
+  mbAccess($u,(int)$file['class_id'],'can_upload');mbRequireFileSubject($u,$file);if(!$admin && !PortalManagement::can($u,'manage_content',(int)$file['class_id']) && !empty($file['uploaded_by']) && (int)$file['uploaded_by']!==(int)$u['id'])fail('لا يمكنك إدارة ملف معلمة أخرى.',403);
   sql('UPDATE mb_files SET deleted_at=UTC_TIMESTAMP() WHERE id=?',[$fid]);mbAudit($u,'delete_file','file',$fid);jsonout(['ok'=>true]);
  }
  if($op==='audit') {mbRequireBoardManager($u);jsonout(['items'=>sql('SELECT a.*,u.name AS actor FROM mb_audit a JOIN ms_users u ON a.actor_id=u.id ORDER BY a.id DESC LIMIT 100')->fetchAll()]);}

@@ -57,6 +57,10 @@ final class Activity
                 $realActorId=(int)$_SESSION['preview_owner_id'];
                 $details='[وضع المعاينة كدور '.($previewRole).']'.($details?' '.$details:'');
             }
+            if(($_SESSION['role']??'')==='teacher' && ($role==='owner'||$previewRole!==null)){
+                $realRole='teacher';$realActorId=(int)($_SESSION['user_id']??0);
+                $details='[معلم أول — لوحة المالكة] '.($details??'');
+            }
             $beforeJson=self::encodeSafe($before);
             $afterJson=self::encodeSafe($after);
             $pdo=Database::connection();

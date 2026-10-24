@@ -46,7 +46,7 @@ function teacher_resolve_student_class(int $teacherId, array $data): array
     $classId = (int)($data['classId'] ?? 0);
     if ($classId > 0) {
         $class = fetch_one('SELECT id,name,stage,grade_label,academic_year FROM classes WHERE id=? AND teacher_id=?',[$classId,$teacherId]);
-        if (!$class) Http::json(['error'=>'الفصل غير صالح.'],422);
+        if (!$class || !PortalManagement::nativeClassEnabled((int)$class['id'])) Http::json(['error'=>'الفصل غير صالح أو متاح في ظليم فقط.'],422);
         return $class;
     }
 
@@ -63,7 +63,7 @@ function teacher_resolve_student_class(int $teacherId, array $data): array
         [$teacherId,$stage,$gradeLabel,$academicYear]
     );
     foreach ($candidates as $candidate) {
-        if (teacher_student_class_number_from_name((string)$candidate['name']) === $classNumber) return $candidate;
+        if (teacher_student_class_number_from_name((string)$candidate['name']) === $classNumber) {if(!PortalManagement::nativeClassEnabled((int)$candidate['id']))Http::json(['error'=>'الفصل متاح في بوابة ظليم فقط.'],403);return $candidate;}
     }
     $name = teacher_student_class_display_name($gradeLabel,$classNumber);
     execute_sql('INSERT INTO classes(teacher_id,name,stage,grade_label,academic_year) VALUES(?,?,?,?,?)',[$teacherId,$name,$stage,$gradeLabel,$academicYear]);
@@ -73,7 +73,7 @@ function teacher_resolve_student_class(int $teacherId, array $data): array
 function teacher_students_routes(string $method, array $segments, int $teacherId): never
 {
     if (($segments[0] ?? '') === 'classes' && $method === 'GET') {
-        Http::json(fetch_all('SELECT id,name,stage AS level,grade_label,academic_year FROM classes WHERE teacher_id=? ORDER BY name', [$teacherId]));
+        Http::json(fetch_all('SELECT c.id,c.name,c.stage AS level,c.grade_label,c.academic_year FROM classes c WHERE c.teacher_id=? AND '.PortalManagement::nativeFilter('c').' ORDER BY c.name', [$teacherId]));
     }
     if (($segments[0] ?? '') === 'import' && $method === 'POST') {
         teacher_import_students($teacherId);
@@ -174,7 +174,7 @@ function teacher_list_students(int $teacherId): never
     $classId = (int)($_GET['classId'] ?? 0);
     $level = trim((string)($_GET['level'] ?? ''));
     $style = trim((string)($_GET['learningStyle'] ?? ''));
-    $where = ['c.teacher_id = ?', 's.deleted_at IS NULL'];
+    $where = ['c.teacher_id = ?', 's.deleted_at IS NULL',PortalManagement::nativeFilter('c')];
     $params = [$teacherId];
     if ($search !== '') { $where[]='(s.name LIKE ? OR s.email LIKE ?)'; $params[]="%{$search}%"; $params[]="%{$search}%"; }
     if ($classId) { $where[]='s.class_id=?'; $params[]=$classId; }

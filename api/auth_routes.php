@@ -60,6 +60,7 @@ function public_login(string $role): never
     }
     $user = Auth::attempt($role, $email, (string) $data['password'], isset($data['otp']) ? (string)$data['otp'] : null);
     $identity=Auth::realUser();
+    if(OwnerDelegation::allowed($identity))$user['redirect']='/dhalim/?board=1';
     if($identity){$user['portal']=PortalAccess::state($identity);if(!PortalAccess::canMadar($identity))$user['redirect']=PortalAccess::destination($identity);}
     Http::json($user);
 }
@@ -93,7 +94,7 @@ function teacher_register(): never
 
 function logout_route(string $role): never
 {
-    $user = $role === 'owner' ? Auth::requireRealOwner() : Auth::requireRole($role);
+    $user = $role === 'owner' ? OwnerDelegation::context() : Auth::requireRole($role);
     Auth::verifyCsrf();
     if ($role !== 'owner' && Auth::isOwnerPreview()) {
         $owner = Auth::realUser();

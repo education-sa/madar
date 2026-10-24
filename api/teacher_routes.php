@@ -161,7 +161,7 @@ function handle_teacher_routes(string $method, array $segments): never
 function teacher_dashboard_summary(int $teacherId): never
 {
     $studentCount = (int) (fetch_one(
-        'SELECT COUNT(*) AS n FROM students s JOIN classes c ON c.id = s.class_id WHERE c.teacher_id = ? AND s.deleted_at IS NULL',
+        'SELECT COUNT(*) AS n FROM students s JOIN classes c ON c.id = s.class_id WHERE c.teacher_id = ? AND s.deleted_at IS NULL AND '.PortalManagement::nativeFilter('c'),
         [$teacherId]
     )['n'] ?? 0);
     $publishedTests = (int) (fetch_one(
@@ -173,16 +173,16 @@ function teacher_dashboard_summary(int $teacherId): never
         [$teacherId]
     )['n'] ?? 0);
     $averageProgress = (float) (fetch_one(
-        'SELECT COALESCE(AVG(s.progress_percent),0) AS n FROM students s JOIN classes c ON c.id=s.class_id WHERE c.teacher_id=? AND s.deleted_at IS NULL',
+        'SELECT COALESCE(AVG(s.progress_percent),0) AS n FROM students s JOIN classes c ON c.id=s.class_id WHERE c.teacher_id=? AND s.deleted_at IS NULL AND '.PortalManagement::nativeFilter('c'),
         [$teacherId]
     )['n'] ?? 0);
     $needSupportCount = (int) (fetch_one(
-        'SELECT COUNT(*) AS n FROM students s JOIN classes c ON c.id=s.class_id WHERE c.teacher_id=? AND s.deleted_at IS NULL AND s.progress_percent < 50',
+        'SELECT COUNT(*) AS n FROM students s JOIN classes c ON c.id=s.class_id WHERE c.teacher_id=? AND s.deleted_at IS NULL AND s.progress_percent < 50 AND '.PortalManagement::nativeFilter('c'),
         [$teacherId]
     )['n'] ?? 0);
     $classLevels = fetch_all(
         'SELECT c.id, c.name, COUNT(s.id) AS student_count, ROUND(COALESCE(AVG(s.progress_percent),0),1) AS avg_progress
-         FROM classes c LEFT JOIN students s ON s.class_id=c.id AND s.deleted_at IS NULL WHERE c.teacher_id=? GROUP BY c.id,c.name ORDER BY c.name',
+         FROM classes c LEFT JOIN students s ON s.class_id=c.id AND s.deleted_at IS NULL WHERE c.teacher_id=? AND '.PortalManagement::nativeFilter('c').' GROUP BY c.id,c.name ORDER BY c.name',
         [$teacherId]
     );
     $recentActivity = fetch_all(
@@ -227,7 +227,7 @@ function teacher_data_routes(string $method, array $segments, int $teacherId): n
         Http::json($rows);
     }
     if ($resource === 'classes' && $method === 'GET') {
-        Http::json(fetch_all("SELECT c.id,c.name,c.stage AS level,c.grade_label,c.academic_year,COUNT(s.id) AS student_count FROM classes c LEFT JOIN students s ON s.class_id=c.id AND s.deleted_at IS NULL WHERE c.teacher_id=? GROUP BY c.id,c.name,c.stage,c.grade_label,c.academic_year ORDER BY FIELD(c.stage,'ابتدائي','متوسط','ثانوي'),c.grade_label,c.name", [$teacherId]));
+        Http::json(fetch_all("SELECT c.id,c.name,c.stage AS level,c.grade_label,c.academic_year,COUNT(s.id) AS student_count FROM classes c LEFT JOIN students s ON s.class_id=c.id AND s.deleted_at IS NULL WHERE c.teacher_id=? AND ".PortalManagement::nativeFilter('c')." GROUP BY c.id,c.name,c.stage,c.grade_label,c.academic_year ORDER BY FIELD(c.stage,'ابتدائي','متوسط','ثانوي'),c.grade_label,c.name", [$teacherId]));
     }
     if ($resource === 'classes' && count($segments) === 1 && $method === 'POST') {
         $data = Http::input();

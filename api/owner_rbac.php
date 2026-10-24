@@ -263,7 +263,8 @@ function owner_rbac_email_exists(string $email, ?string $exceptType=null, ?int $
 
 function owner_rbac_verify_owner_password(int $ownerId, string $password): void
 {
-    $row=fetch_one('SELECT password_hash FROM owners WHERE id=?',[$ownerId]);
+    $actor=Auth::realUser();
+    $row=OwnerDelegation::allowed($actor)?fetch_one('SELECT password_hash FROM teachers WHERE id=?',[$actor['id']]):fetch_one('SELECT password_hash FROM owners WHERE id=?',[$ownerId]);
     if (!$row || !password_verify($password,(string)$row['password_hash'])) Http::json(['error'=>'كلمة مرور مالك الموقع غير صحيحة.'],422);
 }
 

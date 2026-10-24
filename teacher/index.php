@@ -6,6 +6,7 @@ if (!$user || $user['role'] !== 'teacher') {
     header('Location: /teacher/login.html');
     exit;
 }
+if (!Auth::isOwnerPreview() && OwnerDelegation::allowed($user)) {header('Location: /dhalim/?board=1');exit;}
 if (!empty($_SESSION['ms_return_after_login'])) {
     $next=(string)$_SESSION['ms_return_after_login'];unset($_SESSION['ms_return_after_login']);
     if (str_starts_with($next,'/surveys/public/')&&!str_contains($next,"\r")&&!str_contains($next,"\n")) {header('Location: '.$next);exit;}

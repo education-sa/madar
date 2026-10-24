@@ -37,7 +37,7 @@ function student_registration_options(): never
     $rows = fetch_all(
         "SELECT t.id AS teacher_id,t.name AS teacher_name,c.id AS class_id,c.name AS class_name,c.stage,c.grade_label
          FROM teachers t JOIN classes c ON c.teacher_id=t.id
-         WHERE t.status='active' ORDER BY t.name,c.stage,c.grade_label,c.name"
+         WHERE t.status='active' AND ".PortalManagement::nativeFilter('c')." ORDER BY t.name,c.stage,c.grade_label,c.name"
     );
     $teachers = [];
     foreach ($rows as $row) {
@@ -83,7 +83,7 @@ function student_register_request(): never
          JOIN teachers t ON t.id=c.teacher_id WHERE c.id=? AND t.status='active'",
         [$classId]
     );
-    if (!$class) Http::json(['error' => 'اختاري المعلمة والفصل بشكل صحيح.'], 422);
+    if (!$class || !PortalManagement::nativeClassEnabled($classId)) Http::json(['error' => 'اختاري المعلمة والفصل المتاح في مدار بشكل صحيح.'], 422);
 
     if (fetch_one("SELECT id FROM student_registration_requests WHERE email=? AND status='pending'", [$email])) {
         Http::json(['error' => 'يوجد طلب سابق لهذا البريد بانتظار موافقة المعلمة.'], 409);

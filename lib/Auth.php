@@ -16,7 +16,7 @@ final class Auth
         $real = self::realUser();
         if (!$real) return null;
 
-        if (($real['roleCode'] ?? '') === Rbac::OWNER && self::isOwnerPreview()) {
+        if ((($real['roleCode'] ?? '') === Rbac::OWNER || OwnerDelegation::allowed($real)) && self::isOwnerPreview()) {
             $preview = self::previewContext();
             $roleCode = (string)($preview['roleCode'] ?? '');
             $legacy = Rbac::legacyRole($roleCode);
@@ -138,7 +138,7 @@ final class Auth
     {
         $user=$realActor?self::realUser():self::user();
         if (!$user) Http::json(['error'=>'يرجى تسجيل الدخول أولًا.'],401);
-        if (!Rbac::allows((string)$user['roleCode'],$permission)) Http::json(['error'=>'لا تملكين الصلاحية المطلوبة لتنفيذ هذا الإجراء.'],403);
+        if (!OwnerDelegation::allowed($user) && !Rbac::allows((string)$user['roleCode'],$permission)) Http::json(['error'=>'لا تملكين الصلاحية المطلوبة لتنفيذ هذا الإجراء.'],403);
         return $user;
     }
 

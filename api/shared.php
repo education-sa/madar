@@ -67,15 +67,13 @@ function teacher_owns_class(int $teacherId, ?int $classId): bool
     if (!$classId) {
         return true;
     }
-    return (bool) fetch_one('SELECT id FROM classes WHERE id = ? AND teacher_id = ?', [$classId, $teacherId]);
+    return PortalManagement::nativeClassEnabled($classId) && (bool) fetch_one('SELECT id FROM classes WHERE id = ? AND teacher_id = ?', [$classId, $teacherId]);
 }
 
 function teacher_owns_student(int $teacherId, int $studentId): bool
 {
-    return (bool) fetch_one(
-        'SELECT s.id FROM students s JOIN classes c ON c.id = s.class_id WHERE s.id = ? AND c.teacher_id = ? AND s.deleted_at IS NULL',
-        [$studentId, $teacherId]
-    );
+    $row=fetch_one('SELECT s.class_id FROM students s JOIN classes c ON c.id=s.class_id WHERE s.id=? AND c.teacher_id=? AND s.deleted_at IS NULL',[$studentId,$teacherId]);
+    return $row && PortalManagement::nativeClassEnabled((int)$row['class_id']);
 }
 
 function teacher_owns_test(int $teacherId, int $testId): bool
