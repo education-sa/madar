@@ -18,6 +18,7 @@ try {
  if($op==='overview') {
   $classes=sql('SELECT c.*,(SELECT COUNT(*) FROM mb_class_students m WHERE m.class_id=c.id) AS students_count FROM mb_classes c ORDER BY c.is_active DESC,c.academic_year DESC,c.title')->fetchAll();
   if(!$admin)$classes=array_values(array_filter($classes,function($c)use($u){if(!(int)$c['is_active'])return false;if(PortalManagement::classVisible($u,(int)$c['id']))return true;return (bool)sql("SELECT 1 FROM mb_teachers t JOIN mb_teacher_profiles p ON p.class_id=t.class_id AND p.teacher_id=t.teacher_id AND p.approved=1 AND p.subject<>'' WHERE t.class_id=? AND t.teacher_id=? AND t.can_view=1",[$c['id'],$u['id']])->fetchColumn();}));
+  foreach($classes as &$class){$subject=mbSubject($u,(int)$class['id']);$class['subject']=$subject==='__no_assigned_subject__'?null:$subject;$class['files_count']=(int)sql('SELECT COUNT(*) FROM mb_files WHERE class_id=? AND post_id IS NULL AND deleted_at IS NULL AND (? IS NULL OR subject=?)',[$class['id'],$subject,$subject])->fetchColumn();$class['posts_count']=(int)sql("SELECT COUNT(*) FROM mb_posts p LEFT JOIN mb_wall_posts w ON w.post_id=p.id WHERE p.class_id=? AND p.status='published' AND w.deleted_at IS NULL",[$class['id']])->fetchColumn();}unset($class);
   jsonout(['is_admin'=>$admin,'can_manage'=>$admin,'is_platform_owner'=>mbIsPlatformOwner($u),'is_first_teacher'=>mbIsFirstTeacher($u),'is_assistant'=>PortalManagement::assistant($u),'can_create_classes'=>PortalManagement::can($u,'create_classes'),'classes'=>$classes]);
  }
  if($op==='teachers') {
@@ -57,10 +58,10 @@ try {
   $membership=mbEffectiveRights($u,$id);
   $posts=sql("SELECT p.*,w.folder_id,COALESCE(u.name,st.display_name,'المدرسة') AS author_name,(SELECT COUNT(*) FROM mb_comments co WHERE co.post_id=p.id) AS comments_count FROM mb_posts p LEFT JOIN mb_wall_posts w ON w.post_id=p.id LEFT JOIN ms_users u ON u.id=p.author_id LEFT JOIN mb_students st ON st.id=p.student_id WHERE p.class_id=? AND w.deleted_at IS NULL AND (p.status='published' OR ?=1) ORDER BY p.created_at DESC,p.id DESC",[$id,($admin||!empty($membership['can_manage_posts']))?1:0])->fetchAll();
   $subject=mbSubject($u,$id);
-  $attachments=sql('SELECT f.id,f.post_id,f.file_name,f.mime,f.file_size FROM mb_files f JOIN mb_posts p ON p.id=f.post_id LEFT JOIN mb_wall_posts w ON w.post_id=p.id WHERE f.class_id=? AND f.student_id IS NULL AND f.deleted_at IS NULL AND w.deleted_at IS NULL AND (? IS NULL OR f.subject=?)',[$id,$subject,$subject])->fetchAll();
+  $attachments=sql('SELECT f.id,f.post_id,f.file_name,f.mime,f.file_size FROM mb_files f JOIN mb_posts p ON p.id=f.post_id LEFT JOIN mb_wall_posts w ON w.post_id=p.id WHERE f.class_id=? AND f.deleted_at IS NULL AND w.deleted_at IS NULL AND (? IS NULL OR f.subject=? OR (f.subject=\'\' AND p.student_id=f.student_id))',[$id,$subject,$subject])->fetchAll();
   $byPost=[];foreach($attachments as $f)$byPost[$f['post_id']][]=$f;
   foreach($posts as &$post)$post['attachments']=$byPost[$post['id']]??[];unset($post);
-  $folders=sql('SELECT * FROM mb_wall_folders WHERE class_id=? AND deleted_at IS NULL ORDER BY id',[$id])->fetchAll();
+  $folders=sql('SELECT f.*,COALESCE(st.is_open,1) AS is_open FROM mb_wall_folders f LEFT JOIN mb_wall_folder_state st ON st.folder_id=f.id WHERE f.class_id=? AND f.deleted_at IS NULL ORDER BY id',[$id])->fetchAll();
   jsonout(['class'=>$c,'permissions'=>$membership,'is_admin'=>$admin,'is_platform_owner'=>mbIsPlatformOwner($u),'abilities'=>mbManageRights($u,$id),'posts'=>$posts,'folders'=>$folders]);
  }
  if($op==='students') {
@@ -123,7 +124,7 @@ try {
   $cid=mbId($_GET['class_id']??null);mbAccess($u,$cid);$sid=mbId($_GET['student_id']??null);mbStudentClass($cid,$sid);
   $student=sql('SELECT id,display_name FROM mb_students WHERE id=?',[$sid])->fetch();
   $subject=mbSubject($u,$cid);
-  $files=sql("SELECT f.id,f.uploaded_by,f.file_name,f.file_size,f.subject,f.created_at,COALESCE(u.name,'الطالبة') AS author FROM mb_files f LEFT JOIN ms_users u ON u.id=f.uploaded_by WHERE f.class_id=? AND f.student_id=? AND f.deleted_at IS NULL AND (? IS NULL OR f.subject=?) ORDER BY f.created_at DESC",[$cid,$sid,$subject,$subject])->fetchAll();
+  $files=sql("SELECT f.id,f.uploaded_by,f.file_name,ft.title,f.file_size,f.subject,f.created_at,COALESCE(u.name,'الطالبة') AS author FROM mb_files f LEFT JOIN ms_users u ON u.id=f.uploaded_by LEFT JOIN mb_file_titles ft ON ft.file_id=f.id WHERE f.class_id=? AND f.student_id=? AND f.post_id IS NULL AND f.deleted_at IS NULL AND (? IS NULL OR f.subject=?) ORDER BY f.created_at DESC",[$cid,$sid,$subject,$subject])->fetchAll();
   jsonout(['student'=>$student,'files'=>$files]);
  }
  if($op==='files') {

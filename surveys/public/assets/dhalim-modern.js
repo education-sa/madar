@@ -1,0 +1,8 @@
+(()=>{'use strict';
+const paths={home:'<path d="m3 10 9-7 9 7M5 9v12h5v-7h4v7h5V9"/>',survey:'<rect x="6" y="3" width="13" height="18" rx="2"/><path d="M9 7h7M9 11h7M9 15h5"/>',board:'<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',analysis:'<path d="M5 20V13M12 20V8M19 20V3"/>',settings:'<circle cx="12" cy="12" r="3"/><path d="m9 3 6 0 1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1z"/>'};
+let selected='home';
+function key(b){const action=b.getAttribute('onclick')||'';return action.includes('buildHomeScreen')?'home':action.includes('surveysHub')?'survey':action.includes('myBoardScreen')?'board':action.includes('analysisHub')?'analysis':action.includes('mySettingsScreen')?'settings':null;}
+function decorate(){document.querySelectorAll('#accountBar .madar-nav button').forEach(b=>{const k=key(b);if(!k)return;if(!b.querySelector('.dm-nav-icon')){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('class','dm-nav-icon');svg.setAttribute('aria-hidden','true');svg.innerHTML=paths[k];b.prepend(svg);}if(k===selected)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});}
+document.addEventListener('click',e=>{const b=e.target.closest?.('#accountBar .madar-nav button');if(b&&key(b)){selected=key(b);decorate();}});
+const start=()=>{const account=document.getElementById('accountBar');if(account)new MutationObserver(decorate).observe(account,{childList:true});decorate();};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
+})();

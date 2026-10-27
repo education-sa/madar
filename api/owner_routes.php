@@ -9,10 +9,9 @@ function handle_owner_routes(string $method,array $segments): never
     if ($resource==='logout'&&$method==='POST') logout_route('owner');
     if ($resource==='me'&&$method==='GET') owner_me_route();
 
-    $owner=OwnerDelegation::context();
+    $owner=Auth::requireRealOwner();
     if (!in_array($method,['GET','HEAD'],true)) Auth::verifyCsrf();
     $ownerId=(int)$owner['id'];
-    if(!empty($owner['delegated']) && in_array($resource,['security','ownership','privacy','me'],true)) Auth::requireRealOwner();
 
     if ($resource==='portal') owner_portal_routes($method,array_slice($segments,1),$owner);
     if ($resource==='me'&&$method==='PUT') owner_update_profile($owner);
@@ -40,7 +39,7 @@ function handle_owner_routes(string $method,array $segments): never
 
 function owner_me_route(): never
 {
-    $owner=OwnerDelegation::context();
+    $owner=Auth::requireRealOwner();
     $owner['csrfToken']=$_SESSION['csrf_token']??($_SESSION['csrf_token']=bin2hex(random_bytes(32)));
     $owner['roleCode']=Rbac::OWNER;
     $owner['permissions']=Rbac::permissionsForRole(Rbac::OWNER);

@@ -8,7 +8,7 @@ try {
  if (!in_array($op,$read,true)&&$method!=='POST') fail('استخدمي POST لهذه العملية.',405);
  if ($method==='POST') csrf();
  if ($op==='session') {
-  $u=user(false);if ($u) $u['school_name']=$cfg['default_school_name'];jsonout(['user'=>$u?publicUser($u):null,'csrf'=>$_SESSION['ms_csrf'],'auth_mode'=>$cfg['auth_mode'],'login_url'=>$cfg['madar_login_url'],'base_url'=>$cfg['base_url']]);
+  $u=user(false);if ($u) $u['school_name']=$cfg['default_school_name'];jsonout(['user'=>$u?publicUser($u):null,'csrf'=>$_SESSION['ms_csrf'],'auth_mode'=>$cfg['auth_mode'],'login_url'=>'/dhalim/login/','base_url'=>$cfg['base_url'],'native_role'=>$embedded?(Auth::realUser()['role']??null):null,'can_madar'=>$embedded?PortalAccess::canMadar(Auth::realUser()??[]):false]);
  }
  if (in_array($op,['request_confirmation','resend','verify'],true)) jsonout(['message'=>'لا يتطلب نظام الاستبيانات تأكيد البريد. يمكنك استخدام حسابك بعد موافقة الإدارة إن كانت مطلوبة.']);
  if (in_array($op,['register','login','verify','resend','forgot','reset'],true)) {

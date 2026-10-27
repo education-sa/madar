@@ -16,7 +16,7 @@ final class Auth
         $real = self::realUser();
         if (!$real) return null;
 
-        if ((($real['roleCode'] ?? '') === Rbac::OWNER || OwnerDelegation::allowed($real)) && self::isOwnerPreview()) {
+        if ((($real['roleCode'] ?? '') === Rbac::OWNER) && self::isOwnerPreview()) {
             $preview = self::previewContext();
             $roleCode = (string)($preview['roleCode'] ?? '');
             $legacy = Rbac::legacyRole($roleCode);
@@ -50,6 +50,8 @@ final class Auth
             self::logout();
             return null;
         }
+        $_SESSION['session_created_at'] ??= time();
+        $_SESSION['last_activity_at'] ??= time();
         $user = self::loadUserRecord($role,$id,null,null,false);
         if (!$user) {
             self::logout();
@@ -138,7 +140,7 @@ final class Auth
     {
         $user=$realActor?self::realUser():self::user();
         if (!$user) Http::json(['error'=>'يرجى تسجيل الدخول أولًا.'],401);
-        if (!OwnerDelegation::allowed($user) && !Rbac::allows((string)$user['roleCode'],$permission)) Http::json(['error'=>'لا تملكين الصلاحية المطلوبة لتنفيذ هذا الإجراء.'],403);
+        if (!Rbac::allows((string)$user['roleCode'],$permission)) Http::json(['error'=>'لا تملكين الصلاحية المطلوبة لتنفيذ هذا الإجراء.'],403);
         return $user;
     }
 
@@ -199,6 +201,7 @@ final class Auth
         $_SESSION['role']=$role;
         $_SESSION['user_id']=(int)$record['id'];
         $_SESSION['csrf_token']=bin2hex(random_bytes(32));
+        $_SESSION['ms_csrf']=bin2hex(random_bytes(32));
         $_SESSION['session_created_at']=time();
         $_SESSION['last_activity_at']=time();
         self::stopPreview(false);

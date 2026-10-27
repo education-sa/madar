@@ -19,6 +19,9 @@ function handle_teacher_routes(string $method, array $segments): never
     if ($resource === 'login' && $method === 'POST') {
         public_login('teacher');
     }
+    if ($resource === 'portal-register' && $method === 'POST') {
+        teacher_register(true);
+    }
     if ($resource === 'register' && $method === 'POST') {
         teacher_register();
     }

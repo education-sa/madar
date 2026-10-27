@@ -91,6 +91,8 @@ function mbSubject(array $u,int $classId): ?string {
  return $q===false?'__no_assigned_subject__':(string)$q;
 }
 function mbRequireFileSubject(array $u,array $file): void {
+ // Student wall attachments are intentionally shared with their class; portfolio files remain subject-private.
+ if(!empty($file['post_id'])&&!empty($file['student_id'])&&($file['subject']??'')===''&&sql('SELECT 1 FROM mb_posts WHERE id=? AND class_id=? AND student_id=?',[$file['post_id'],$file['class_id'],$file['student_id']])->fetchColumn())return;
  $subject=mbSubject($u,(int)$file['class_id']);
  if($subject!==null && !hash_equals(mb_sub(trim((string)$file['subject']),85),mb_sub(trim($subject),85))) fail('هذه الملفات مخصصة لمعلمة مادة أخرى.',403);
 }

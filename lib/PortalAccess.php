@@ -33,11 +33,13 @@ final class PortalAccess
         if(!in_array($u['role']??'',['teacher','student','parent'],true))return false;
         $s=self::state($u);return $s['portal_enabled'] && in_array($s['access_mode'],['both','portal_only'],true);
     }
-    public static function canMadar(array $u): bool {return self::owner($u)||OwnerDelegation::allowed($u)||self::state($u)['access_mode']!=='portal_only';}
-    public static function destination(array $u): string {return self::owner($u)?'/owner/dashboard?section=teachers':(OwnerDelegation::allowed($u)?'/dhalim/?board=1':'/surveys/public/portal.php');}
+    public static function canMadar(array $u): bool {return ($u['status']??'')==='active' && (self::owner($u)||OwnerDelegation::allowed($u)||in_array(self::state($u)['access_mode'],['madar_only','both'],true));}
+    public static function destination(array $u): string {if(self::owner($u))return '/owner/dashboard?section=teachers';if(OwnerDelegation::allowed($u))return '/dhalim/?board=1';return match($u['role']??''){'student'=>'/dhalim/student/','parent'=>'/dhalim/parent/',default=>'/dhalim/'};}
     public static function guardServicePage(): void {
         $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH);
-        if(!preg_match('#^/(games|planning|meetings)/#',(string)$path))return;
+        if(!preg_match('#^/(games|planning|meetings|teacher|student|parent|admin)(?:/|$)#',(string)$path))return;
+        // Login/registration pages remain public; account service pages enforce native access.
+        if(preg_match('#/(?:login|register)(?:\.html|\.php)?/?$#',(string)$path))return;
         $u=Auth::user();if($u)self::pageGuard($u);
     }
     public static function requirePortal(array $u): void {
@@ -50,8 +52,17 @@ final class PortalAccess
         if(!in_array($scope,['teacher','student','parent'],true))return;
         // Login, logout, current identity, and password changes remain available.
         if(in_array($segments[0]??'',['login','logout','me','profile','change-password','password-reset-request'],true))return;
-        $u=Auth::user();if($u&&$scope==='student'){$q=Database::connection()->prepare('SELECT class_id FROM students WHERE id=?');$q->execute([$u['id']]);$cid=(int)$q->fetchColumn();if($cid&&!PortalManagement::nativeClassEnabled($cid))Http::json(['error'=>'هذا الفصل متاح في بوابة ظليم فقط.','redirect'=>'/dhalim/?role=student'],403);}
+        $u=Auth::user();if($u&&$scope==='student'&&($u['role']??'')==='student'){$q=Database::connection()->prepare('SELECT class_id FROM students WHERE id=?');$q->execute([$u['id']]);$cid=(int)$q->fetchColumn();if($cid&&!PortalManagement::nativeClassEnabled($cid))Http::json(['error'=>'هذا الفصل متاح في بوابة ظليم فقط.','redirect'=>'/dhalim/?role=student'],403);}
         if($u && !self::canMadar($u))Http::json(['error'=>'هذا الحساب مخصص لبوابة ظليم فقط.','redirect'=>self::destination($u)],403);
+    }
+    public static function returnTarget(string $target): string {
+        $decoded=rawurldecode($target);
+        if(preg_match('/[\x00-\x20\x7f\\\\]/',$decoded)||str_contains($decoded,'%'))return '/dhalim/';
+        $path=parse_url($decoded,PHP_URL_PATH);
+        $map=['/dhalim/'=>'/dhalim/','/dhalim/student/'=>'/dhalim/student/','/dhalim/parent/'=>'/dhalim/parent/','/dhalim/entry/'=>'/dhalim/entry/','/surveys/public/'=>'/dhalim/','/surveys/public/index.php'=>'/dhalim/','/surveys/public/board-student.php'=>'/dhalim/student/'];
+        if(!is_string($path)||!isset($map[$path]))return '/dhalim/';
+        $query=parse_url($target,PHP_URL_QUERY);
+        return $map[$path].($query!==null?'?'.$query:'');
     }
     public static function target(string $type,int $id): array {
         $tables=['teacher'=>'teachers','student'=>'students','platform'=>'platform_users'];

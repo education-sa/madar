@@ -3,6 +3,7 @@ declare(strict_types=1);
 function mbWallSchema(): void {
  try {sql('SELECT id FROM mb_wall_folders LIMIT 0');sql('SELECT post_id FROM mb_wall_posts LIMIT 0');}
  catch(PDOException $e){if((int)($e->errorInfo[1]??0)!==1146)throw $e;mbRunMigration(dirname(__DIR__).'/database/migrations/20261024_class_wall.sql');}
+ try{sql('SELECT folder_id FROM mb_wall_folder_state LIMIT 0');sql('SELECT file_id FROM mb_file_titles LIMIT 0');}catch(PDOException $e){if((int)($e->errorInfo[1]??0)!==1146)throw $e;mbRunMigration(dirname(__DIR__).'/database/migrations/20261024_wall_completion.sql');}
 }
 function mbWallFolder(array $u,int $id,?int $cid=null,bool $edit=false): array {
  $f=sql('SELECT * FROM mb_wall_folders WHERE id=? AND deleted_at IS NULL',[$id])->fetch();
@@ -30,6 +31,10 @@ function mbWallFolderId(array $u,$raw,int $cid): ?int {
  $id=mbId($raw);mbWallFolder($u,$id,$cid);return $id;
 }
 function mbWallRoute(string $op,array $u,array $b): void {
+ if($op==='set_folder_state'){
+  $id=mbId($b['folder_id']??null);mbWallFolder($u,$id,null,true);if(!isset($b['is_open'])||!is_bool($b['is_open']))fail('حالة الجدارية غير صالحة.');
+  sql('INSERT INTO mb_wall_folder_state(folder_id,is_open) VALUES (?,?) ON DUPLICATE KEY UPDATE is_open=VALUES(is_open)',[$id,$b['is_open']?1:0]);mbAudit($u,$op,'folder',$id,$b['is_open']?'open':'closed');jsonout(['ok'=>true]);
+ }
  if(in_array($op,['create_folder','edit_folder','delete_folder'],true)){
   $id=$op==='create_folder'?null:mbId($b['folder_id']??null);
   $cid=$id?(int)mbWallFolder($u,$id,null,true)['class_id']:mbId($b['class_id']??null);

@@ -14,7 +14,8 @@ const empty=message=>`<p class="mb-empty">${esc(message)}</p>`;
 const loading=()=>'<div class="mb-loading" role="status">جارٍ التحميل…</div>';
 const beginView=()=>++epoch;
 const isLive=t=>t===epoch;
-function render(html){portal(`<div class="mb-board">${activeClass&&classTitle?`<div class="mb-class-context"><span aria-hidden="true">▦</span><strong>${esc(classTitle)}</strong><small>جدار الفصل</small></div>`:''}${html}</div>`);}
+function render(html){portal(`<div id="dhalimExact"><div class="mb-board">${html}</div></div>`);}
+
 async function request(op,data=null,query={}){
  const url='board-api.php?'+new URLSearchParams({op,...query});
  const config={credentials:'same-origin',headers:{}};
@@ -51,29 +52,19 @@ function applyClass(data,{syncHeader=true}={}){
  }
 }
 function tabsFor(data){
- const tabs=[{key:'wall',label:'الجدار',icon:'post'},{key:'students',label:'الطالبات',icon:'users'},{key:'files',label:'ملفات الفصل',icon:'folder'}];
+ const tabs=[{key:'wall',label:'الجدارية',icon:'post'},{key:'students',label:'الطالبات',icon:'users'},{key:'files',label:'ملفات الإنجاز',icon:'folder'}];
  if(data?.is_admin)tabs.push({key:'teachers',label:'المعلمات',icon:'teacher'});
  return tabs;
 }
 function shellHtml(tabs){
- const manage=wallData?.is_admin?btn(icon('gear')+' إدارة','mbManageHome()','outline'):'';
- return `<div class="mb-class-shell">
- <div class="mb-class-sticky">
-  <div class="mb-class-bar">
-   <div class="mb-class-id"><span class="mb-class-badge" aria-hidden="true">▦</span><div><strong>${esc(classTitle)}</strong><small>${esc(classMeta)}</small></div></div>
-   <div class="mb-class-bar-actions">${btn('جميع الفصول','mbHome()','outline')}${manage}</div>
-  </div>
-  <nav class="mb-class-tabs" id="mbClassTabs" role="tablist" aria-label="أقسام الفصل">
-   ${tabs.map(t=>`<button type="button" class="mb-tab" role="tab" id="mbTab-${t.key}" data-mb-tab="${t.key}" aria-selected="false" aria-controls="mbClassBody">${icon(t.icon)}<span>${esc(t.label)}</span></button>`).join('')}
-  </nav>
- </div>
- <div class="mb-class-body" id="mbClassBody" role="tabpanel" aria-live="polite"></div>
-</div>`;
+ const manage=wallData?.is_admin?btn('⚙️ إدارة','mbManageHome()','outline'):'';
+ return DhalimTemplates.classroom.replaceAll('__TITLE__',esc(classTitle)).replaceAll('__META__',esc(classMeta)).replace('__MANAGE__',manage).replace('__TEACHERTAB__',tabs.some(t=>t.key==='teachers')?`<button type="button" class="tab-btn" data-mb-tab="teachers" id="mbTab-teachers" onclick="mbTab('teachers')">المعلمات</button>`:'');
 }
+
 function markTab(tab=activeTab){
  document.querySelectorAll('[data-mb-tab]').forEach(b=>{
   const on=b.dataset.mbTab===tab;
-  b.classList.toggle('is-active',on);
+  b.classList.toggle('is-active',on);b.classList.toggle('active',on);
   b.setAttribute('aria-selected',on?'true':'false');
  });
 }
@@ -99,10 +90,12 @@ const folderName=(data,id)=>data.folders.find(f=>num(f.id)===num(id))?.name||'ا
 /* ============ نظرة عامة على الفصول ============ */
 window.boardStart=()=>run(showOverview);
 async function showOverview(){const t=beginView();clearClassState();boardInfo=await request('overview');if(!isLive(t))return;
- const cards=boardInfo.classes.map(c=>`<button type="button" class="mb-class" onclick="mbOpenClass(${num(c.id)})"><span class="mb-class-icon">🏫</span><strong>${esc(c.title)}</strong><small>${esc(c.grade)} / ${esc(c.section_name)}</small><span>${numberFmt(c.students_count)} طالبة · ${esc(c.academic_year)}</span>${num(c.is_active)?'':'<em>مؤرشف</em>'}</button>`).join('');
- render(head('لوحتي','الفصول المشتركة بين معلمات مجمع مدارس ظليم',(boardInfo.can_manage?btn('⚙️ إدارة','mbManageHome()','outline'):boardInfo.can_create_classes?btn('إضافة فصل','mbManageClassForm()','outline'):''))+
- `<div class="mb-summary">${box(`<strong>${numberFmt(boardInfo.classes.length)}</strong><span>فصل متاح</span>`)}${box('<strong>مدار</strong><span>حسابات موحّدة</span>')}${box('<strong>مشاركة</strong><span>ملفات إنجاز وأنشطة</span>')}</div>`+
- `<div class="mb-section-title"><h2>الفصول الدراسية</h2></div><div class="mb-grid">${cards||empty('لا توجد فصول متاحة لك حاليًا. تستطيع مديرة النظام إنشاء الفصول وتحديد المعلمات المخوّلات.')}</div>`);
+ const cards=boardInfo.classes.map(c=>`<article class="db-class-card"><div class="db-class-top"><span class="db-student-count">${icon('users')}<b>${numberFmt(c.students_count)}</b><small>طالبة</small></span><div class="db-class-info"><h3>${esc(c.title)}</h3>${c.subject?`<p>مادة: ${esc(c.subject)}</p>`:''}<small>${esc(c.grade)} / ${esc(c.section_name)} · ${esc(c.academic_year)}</small></div><span class="db-school-art" aria-hidden="true">🏫</span>${boardInfo.can_manage?`<details class="db-class-menu"><summary aria-label="خيارات فصل ${esc(c.title)}">⋮</summary><div><button type="button" onclick="mbManageClassForm(${num(c.id)})">تعديل الفصل</button><button type="button" onclick="mbManageStudents(${num(c.id)})">إدارة الطالبات</button></div></details>`:''}</div><button type="button" class="db-class-open" onclick="mbOpenClass(${num(c.id)})">عرض الفصل <span aria-hidden="true">←</span></button></article>`).join('');
+ const manage=boardInfo.can_manage?btn('⚙️ إدارة','mbManageHome()','outline'):'';
+ const create=boardInfo.can_create_classes||boardInfo.can_manage?btn('＋ إضافة فصل جديد','mbManageClassForm()'):'';
+ const files=boardInfo.classes.reduce((n,c)=>n+num(c.files_count),0),posts=boardInfo.classes.reduce((n,c)=>n+num(c.posts_count),0);
+ render(`<section class="db-overview"><header class="db-hero"><div><small>بوابة مجمع مدارس ظليم</small><h1>لوحتي</h1><p>الفصول المشتركة بين معلمات مجمع مدارس ظليم</p></div><div class="db-hero-art" aria-hidden="true"><span>📁</span><span>📚</span><i>🌿</i></div></header><div class="db-stats"><article class="db-stat db-stat-blue"><strong>${numberFmt(boardInfo.classes.length)}</strong><p>فصل متاح</p><span aria-hidden="true">📂</span><i aria-hidden="true">←</i></article><article class="db-stat db-stat-mint"><strong>${numberFmt(files)}</strong><p>ملف إنجاز مرفوع</p><span aria-hidden="true">📄</span><i aria-hidden="true">←</i></article><article class="db-stat db-stat-purple"><strong>${numberFmt(posts)}</strong><p><b>مشاركة</b><small>أنشطة تفاعلية</small></p><span aria-hidden="true">🎉</span><i aria-hidden="true">←</i></article></div><div class="db-classes-heading"><div><h2>${icon('folder')} الفصول الدراسية</h2><p>اختاري الفصل لعرض الملفات والأنشطة</p></div><div class="db-heading-actions">${manage}${create}</div></div><div class="db-class-grid">${cards||empty('لا توجد فصول متاحة لكِ حاليًا.')}</div></section>`);
+
 }
 window.mbHome=()=>run(showOverview);
 
@@ -116,7 +109,7 @@ async function enterClass(id,tab='wall'){
  wallData=data;applyClass(data);
  const tabs=tabsFor(data);
  activeTab=tabs.some(t=>t.key===tab)?tab:'wall';
- portal(`<div class="mb-board">${shellHtml(tabs)}</div>`);
+ portal(`<div id="dhalimExact"><div class="mb-board">${shellHtml(tabs)}</div>`);
  const nav=document.getElementById('mbClassTabs');
  if(nav)nav.addEventListener('click',e=>{const b=e.target.closest('[data-mb-tab]');if(!b)return;run(()=>openTab(b.dataset.mbTab));});
  markTab();
@@ -146,7 +139,7 @@ function folderOptions(selected=null){return `<option value="">الجدار ال
 function attachments(p){return (p.attachments||[]).map(f=>`<a class="mb-attachment" href="board-download.php?id=${num(f.id)}&view=1" target="_blank" rel="noopener">${f.mime.startsWith('image/')?`<img loading="lazy" src="board-download.php?id=${num(f.id)}&view=1" alt="${esc(f.file_name)}">`:`<span class="mb-file-icon" aria-hidden="true">PDF</span>`}<span>${esc(f.file_name)}</span></a>`).join('');}
 function folderCard(f,data,canPost,canManage){
  const canEdit=canPost&&(data.is_admin||canManage||num(f.created_by)===num(me?.id));
- return `<article class="mb-folder" style="--folder-color:${/^#[0-9a-f]{6}$/i.test(f.color)?f.color:'#9b87c4'}"><button type="button" class="mb-folder-open" onclick="mbOpenFolder(${num(f.id)})">${icon('folder')}<strong>${esc(f.name)}</strong><p>${esc(f.description)}</p><small>${countLabel(data.posts.filter(p=>num(p.folder_id)===num(f.id)).length,'منشور','منشوران','منشورات')}</small></button>${canEdit?`<div class="mb-actions">${btn('تعديل',`mbFolderForm(${num(f.id)})`,'outline')}${btn('حذف',`mbDeleteFolder(${num(f.id)})`,'quiet')}</div>`:''}</article>`;
+ return `<article class="mb-folder" style="--folder-color:${/^#[0-9a-f]{6}$/i.test(f.color)?f.color:'#9b87c4'}"><button type="button" class="mb-folder-open" onclick="mbOpenFolder(${num(f.id)})">${icon('folder')}<strong>${esc(f.name)}</strong><p>${esc(f.description)}</p><small>${countLabel(data.posts.filter(p=>num(p.folder_id)===num(f.id)).length,'منشور','منشوران','منشورات')}</small></button>${canEdit?`<div class="mb-actions">${btn(num(f.is_open)===0?'فتح الجدارية':'غلق الجدارية',`mbFolderState(${num(f.id)},${num(f.is_open)===0?1:0})`,'outline')}${btn('تعديل',`mbFolderForm(${num(f.id)})`,'outline')}${btn('حذف',`mbDeleteFolder(${num(f.id)})`,'quiet')}</div>`:''}</article>`;
 }
 function postCard(p,data,canPost,canManage){
  const editable=canPost&&(data.is_admin||canManage||num(p.author_id)===num(me?.id));
@@ -160,13 +153,12 @@ async function renderWallBody(force=false,token=null){
  const folder=activeFolder?data.folders.find(f=>num(f.id)===num(activeFolder)):null;
  if(activeFolder&&!folder)activeFolder=null;
  const visible=data.posts.filter(p=>(num(p.folder_id)||null)===(folder?num(folder.id):null));
- const toolbar=`<div class="mb-wall-toolbar"><span>${icon(folder?'folder':'post')} ${folder?'داخل المجلد':'مساحة الفصل المشتركة'}</span><div class="mb-actions">${canPost?btn(icon('plus')+' إضافة منشور','mbCompose()')+btn(icon('folder')+' إنشاء مجلد','mbFolderForm()','outline'):''}</div></div>`;
- const crumbs=folder?`<div class="mb-breadcrumb"><button type="button" onclick="mbWallHome()">${icon('arrow')} الجدار العام</button><span class="mb-crumb-sep">›</span><strong>${esc(folder.name)}</strong></div>`:'';
- const folders=folder?'':(data.folders.length?`<div class="mb-folder-grid">${data.folders.map(f=>folderCard(f,data,canPost,canManage)).join('')}</div>`:empty('لا توجد مجلدات بعد.'));
- const cards=visible.map(p=>postCard(p,data,canPost,canManage)).join('');
- const postsBlock=cards?`<div class="mb-wall-grid">${cards}</div>`:empty(folder?'لا توجد منشورات داخل هذا المجلد بعد.':'لا توجد منشورات هنا بعد.');
- setBody(crumbs+toolbar+folders+postsBlock+
-  (data.is_admin?box(btn(num(data.class.is_active)?'أرشفة الفصل':'إعادة فتح الفصل',`mbArchive(${num(activeClass)},${num(data.class.is_active)?0:1})`,'quiet')):''),{focus:force});
+ const list=`<button type="button" class="wall-item active w-full ${folder?'':'selected'}" onclick="mbWallHome()">الجدار العام</button>`+data.folders.map(f=>{const editable=data.is_admin||num(f.created_by)===num(me?.id)||canManage;return `<div class="wall-item ${num(f.is_open)===0?'closed':'active'} ${num(f.id)===num(activeFolder)?'selected':''}"><button type="button" class="wall-name font-bold text-[#3b0764] text-sm text-right" onclick="mbOpenFolder(${num(f.id)})">${esc(f.name)}</button>${editable?`<details class="relative"><summary class="bg-[#a78bfa] text-white px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer">إعداد ⚙️</summary><div class="settings-dropdown"><button onclick="mbFolderState(${num(f.id)},1)">✔️ نشطة</button><button onclick="mbFolderState(${num(f.id)},0)">🔒 مغلقة</button><button onclick="mbFolderForm(${num(f.id)})">تعديل</button><button onclick="mbDeleteFolder(${num(f.id)})">🗑️ حذف</button></div></details>`:''}</div>`;}).join('');
+ const composer=canPost?`<form id="mbExactPost" class="flex flex-col sm:flex-row items-center gap-3 mb-4 border border-gray-200 rounded-2xl p-2 bg-gray-50"><label class="cursor-pointer bg-white border border-gray-200 text-gray-600 px-4 py-2.5 rounded-xl text-sm">📎 رفع ملف<input name="file" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" class="text-xs max-w-[130px]" ${num(data.permissions.can_upload)?'':'disabled'}></label><input name="content" required maxlength="7000" placeholder="اكتبي ملاحظة أو توجيهاً..." class="flex-1 w-full bg-transparent outline-none px-2 py-2"><button class="bg-[#4a9b8e] text-white px-8 py-2.5 rounded-xl font-bold">نشر</button></form>`:'';
+ const cards=visible.map(p=>`<article class="sticky-note ${['note-yellow','note-pink','note-blue','note-green'][num(p.id)%4]}"><button type="button" class="text-right" onclick="mbOpenPost(${num(p.id)})"><h3 class="font-bold text-gray-800 mb-2">${esc(p.title)}</h3><p class="text-gray-700 whitespace-pre-wrap">${esc(p.content)}</p></button><div class="mb-attachments">${attachments(p)}</div><small class="text-gray-500 mt-4">${esc(p.author_name)} · ${esc(p.created_at)}</small></article>`).join('')||'<p class="text-gray-400 text-center col-span-full py-12">لا توجد مشاركات في هذه الجدارية بعد.</p>';
+ setBody(DhalimTemplates.wall.replace('__WALLS__',list).replace('__POSTS__',cards).replace('__COMPOSER__',composer).replace('__TITLE__',esc(folder?.name||'الجدار العام')).replace('__CREATE_DISABLED__',canPost?'':'disabled'),{focus:force});
+ if(canPost)document.getElementById('mbExactPost').onsubmit=e=>{e.preventDefault();const f=e.target,button=f.querySelector('button');button.disabled=true;run(async()=>{let saved=false;try{const text=f.elements.content.value.trim();if(!text)throw Error('اكتبي نص المشاركة.');const result=await request('new_post',{class_id:activeClass,folder_id:activeFolder,title:text.slice(0,100),content:text});saved=true;if(f.elements.file.files.length){const upload=new FormData();upload.append('class_id',activeClass);upload.append('post_id',result.id);upload.append('file',f.elements.file.files[0]);await request('upload',upload);}await openTab('wall',{force:true});}catch(err){if(saved){await openTab('wall',{force:true});throw Error('حُفظ المنشور، لكن لم يكتمل المرفق. افتحي المنشور لإعادة إرفاقه. '+err.message);}throw err;}finally{button.disabled=false;}});};
+
 }
 
 /* ============ فتح منشور + التعليقات داخل نفس الواجهة ============ */
@@ -212,6 +204,7 @@ async function composePost(id){
   });};
 }
 window.mbEditPost=id=>window.mbCompose(id);
+window.mbFolderState=(id,on)=>run(async()=>{await request('set_folder_state',{folder_id:id,is_open:!!on});await openTab('wall',{force:true});});
 window.mbFolderForm=id=>run(()=>folderForm(id));
 async function folderForm(id){
  const token=beginView();
@@ -286,7 +279,7 @@ async function openPortfolio(cid,sid){
  const [d,data]=await Promise.all([request('portfolio',null,{class_id:cid,student_id:sid}),loadClass(true)]);
  if(!isLive(token))return;
  const canUpload=!!num(data.permissions.can_upload);
- const rows=d.files.map(f=>`<div class="mb-person"><div><strong>${esc(f.file_name)}</strong><small>${esc(f.subject||'عام')} · ${esc(f.author)} · ${Math.ceil(num(f.file_size)/1024)} كيلوبايت</small></div><div class="mb-actions"><a class="mb-btn mb-outline" href="board-download.php?id=${num(f.id)}">تنزيل آمن</a>${data.is_admin||num(f.uploaded_by)===num(me?.id)?btn('حذف',`mbDeleteFile(${cid},${sid},${num(f.id)})`,'quiet'):''}</div></div>`).join('');
+ const rows=d.files.map(f=>`<div class="mb-person"><div><strong>${esc(f.title||f.file_name)}</strong><small>${esc(f.subject||'عام')} · ${esc(f.author)} · ${Math.ceil(num(f.file_size)/1024)} كيلوبايت</small></div><div class="mb-actions"><a class="mb-btn mb-outline" href="board-download.php?id=${num(f.id)}&view=1" target="_blank" rel="noopener">معاينة</a><a class="mb-btn mb-outline" href="board-download.php?id=${num(f.id)}">تنزيل</a>${data.is_admin||num(f.uploaded_by)===num(me?.id)?btn('حذف',`mbDeleteFile(${cid},${sid},${num(f.id)})`,'quiet'):''}</div></div>`).join('');
  setBody(`<div class="mb-breadcrumb"><button type="button" onclick="mbStudents(${cid})">${icon('arrow')} قائمة الطالبات</button><span class="mb-crumb-sep">›</span><strong>ملف إنجاز ${esc(d.student.display_name)}</strong></div>`+
   box(`<div class="mb-subhead"><h2>${esc(d.student.display_name)}</h2><span class="mb-count">${countLabel(d.files.length,'ملف','ملفان','ملفات')}</span></div><p class="mb-help">مجلد واحد للطالبة تشارك فيه المعلمات حسب الصلاحيات.</p>${rows||empty('لا توجد ملفات للطالبة حتى الآن.')}`)+
   (canUpload?box(`<h2>رفع ملف إلى إنجاز الطالبة</h2><p class="mb-help">يسمح بصور PNG/JPG/WebP وPDF حتى 10 ميغابايت. تحفظ الملفات بعيدًا عن المجلد العام.</p><form id="mbFileForm" class="mb-form"><label>المادة الدراسية<input name="subject" placeholder="الرياضيات" maxlength="85"></label><label>الملف<input type="file" name="file" accept=".png,.jpg,.jpeg,.webp,.pdf" required></label><div class="mb-full"><button class="mb-btn">رفع الملف</button></div></form>`):''),{focus:true});
@@ -309,7 +302,7 @@ async function renderFilesBody(force=false,token=null){
  const [files,data]=await Promise.all([request('files',null,{class_id:activeClass}),loadClass(force)]);
  if(!isLive(token))return;
  const canUpload=!!num(data.permissions.can_upload);
- const rows=files.items.map(f=>`<div class="mb-person"><div><strong>${esc(f.file_name)}</strong><small>${esc(f.subject||'عام')} · ${esc(f.author||'إدارة المدرسة')} · ${Math.ceil(num(f.file_size)/1024)} كيلوبايت</small></div><div class="mb-actions"><a class="mb-btn mb-outline" href="board-download.php?id=${num(f.id)}">تنزيل آمن</a>${data.is_admin||num(f.uploaded_by)===num(me?.id)?btn('حذف',`mbDeleteSharedFile(${activeClass},${num(f.id)})`,'quiet'):''}</div></div>`).join('');
+ const rows=files.items.map(f=>`<div class="mb-person"><div><strong>${esc(f.title||f.file_name)}</strong><small>${esc(f.subject||'عام')} · ${esc(f.author||'إدارة المدرسة')} · ${Math.ceil(num(f.file_size)/1024)} كيلوبايت</small></div><div class="mb-actions"><a class="mb-btn mb-outline" href="board-download.php?id=${num(f.id)}&view=1" target="_blank" rel="noopener">معاينة</a><a class="mb-btn mb-outline" href="board-download.php?id=${num(f.id)}">تنزيل</a>${data.is_admin||num(f.uploaded_by)===num(me?.id)?btn('حذف',`mbDeleteSharedFile(${activeClass},${num(f.id)})`,'quiet'):''}</div></div>`).join('');
  setBody(`<div class="mb-subhead"><h2>ملفات الفصل المشتركة</h2><span class="mb-count">${countLabel(files.items.length,'ملف','ملفان','ملفات')}</span></div><p class="mb-help">مكتبة الفصل العامة؛ ملفات الطالبات الخاصة توجد في ملف إنجاز كل طالبة.</p>`+
   box(rows||empty('لم تُضف ملفات عامة للفصل حتى الآن.'))+
   (canUpload?box(`<h2>رفع ملف عام للفصل</h2><form id="mbGeneralUpload" class="mb-form"><label>المادة<input name="subject" maxlength="85"></label><label>الملف<input name="file" type="file" accept=".png,.jpg,.jpeg,.webp,.pdf" required></label><div class="mb-full"><button class="mb-btn">رفع للفصل</button></div></form>`):''));
@@ -351,3 +344,5 @@ window.mbUI={esc,num,box,btn,head,request,run,form,input,render,home:showOvervie
 myBoardScreen=function(){window.boardStart();};
 
 window.mbPendingStudents=()=>window.mbManagePending();
+
+window.dhalimNav=el=>{const label=el.textContent.trim();const target=Array.from(document.querySelectorAll('#accountBar button')).find(b=>b.textContent.trim().replace(/^⌂\s*/, '')===label);if(target)target.click();return false;};

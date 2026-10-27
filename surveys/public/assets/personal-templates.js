@@ -206,7 +206,7 @@ surveysHub = async function (...args) {
     button.type = 'button';
     button.className = 'survey-tool';
     button.onclick = () => personalTemplateLibrary();
-    button.innerHTML = `<span class="tool-art" aria-hidden="true">▦</span><strong>مكتبة قوالبي</strong><span>استخدمي استبياناتك مرة أخرى وشاركيها مع زميلاتك</span><i>فتح مكتبتي ←</i>`;
+    button.innerHTML = `<span class="tool-art" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="7" height="24" rx="1.5"/><path d="M3 12h7M3 24h7"/><rect x="12" y="3" width="7" height="26" rx="1.5"/><path d="m22 9 5-1 4 20-5 1z"/></svg></span><strong>مكتبة قوالبي</strong><span>استخدمي استبياناتك مرة أخرى وشاركيها مع زميلاتك</span><i>استعراض المكتبة ←</i>`;
     grid.append(button);
   }
   await pendingHub;

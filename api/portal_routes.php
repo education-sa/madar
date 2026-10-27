@@ -2,6 +2,7 @@
 declare(strict_types=1);
 function owner_portal_routes(string $method,array $segments,array $owner): never {
     if(($segments[0]??'')==='install' && $method==='POST'){
+        Auth::requireRealOwner();
         if(empty(Http::input()['confirmed']))Http::json(['error'=>'يلزم تأكيد تهيئة الربط.'],409);
         $pdo=Database::connection();
         foreach(['surveys/database/migrations/20261022_my_board.sql','surveys/database/migrations/20261023_school_permissions.sql','database/migration_20261023_zulaim_unified.sql'] as $file)$pdo->exec(file_get_contents(MADAR_ROOT.'/'.$file));
@@ -29,7 +30,7 @@ function owner_portal_routes(string $method,array $segments,array $owner): never
 }
 function handle_portal_routes(string $method,array $segments): never {
     $u=Auth::user();if(!$u)Http::json(['error'=>'يلزم تسجيل الدخول.'],401);
-    if($method==='GET'&&($segments[0]??'')==='access')Http::json(['access'=>PortalAccess::state($u),'allowed'=>PortalAccess::canPortal($u),'is_owner'=>PortalAccess::owner($u),'url'=>PortalAccess::destination($u)]);
+    if($method==='GET'&&($segments[0]??'')==='access')Http::json(['access'=>PortalAccess::state($u),'allowed'=>PortalAccess::canPortal($u),'can_madar'=>PortalAccess::canMadar($u),'is_owner'=>PortalAccess::owner($u),'url'=>PortalAccess::destination($u)]);
     PortalAccess::requirePortal($u);
     if($method==='GET'&&($segments[0]??'')==='children'&&($u['role']??'')==='parent'){
         $rows=fetch_all("SELECT s.id,s.name,c.title AS class_name FROM parent_student_links l JOIN students s ON s.id=l.student_id AND s.status='active' AND s.deleted_at IS NULL LEFT JOIN mb_students bs ON bs.madar_student_id=s.id LEFT JOIN mb_class_students cs ON cs.student_id=bs.id LEFT JOIN mb_classes c ON c.id=cs.class_id AND c.is_active=1 WHERE l.parent_id=? AND l.status='active' ORDER BY s.name,c.title",[$u['id']]);

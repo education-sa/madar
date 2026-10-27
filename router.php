@@ -59,6 +59,12 @@ if (isset($protected[$path])) {
     return true;
 }
 
+$portalPages=['/dhalim/'=>'index.php','/dhalim/login/'=>'login.php','/dhalim/student/'=>'board-student.php','/dhalim/parent/'=>'portal.php','/dhalim/entry/'=>'portal.php'];
+if(isset($portalPages[$path])){require $root.'/surveys/public/'.$portalPages[$path];return true;}
+if($path==='/dhalim'||preg_match('#^/dhalim/(login|student|parent|entry)$#',$path)){header('Location: '.$path.'/'.(isset($_SERVER['QUERY_STRING'])&&$_SERVER['QUERY_STRING']!==''?'?'.$_SERVER['QUERY_STRING']:''));return true;}
+
+if(preg_match('#^/(games|planning|meetings)/.+\.html$#D',$path)){require $root.'/service-page.php';return true;}
+
 $file = realpath($root . $path);
 if ($file && str_starts_with($file, realpath($root)) && is_file($file)) {
     return false;

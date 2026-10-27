@@ -65,12 +65,14 @@ function public_login(string $role): never
     Http::json($user);
 }
 
-function teacher_register(): never
+function teacher_register(bool $portal = false): never
 {
     Http::rateLimit('teacher-register',5,3600);
     $enabled=fetch_one("SELECT setting_value FROM app_settings WHERE setting_key='teacher_registration_enabled'");
     if (($enabled['setting_value']??'true')==='false') Http::json(['error'=>'إنشاء حسابات المعلمات متوقف حاليًا. تواصلي مع مالكة الموقع.'],403);
     $data = Http::input();
+    if ($portal && (empty($_SESSION['dhalim_registration_csrf']) || !hash_equals((string) $_SESSION['dhalim_registration_csrf'], (string) ($data['csrf'] ?? '')))) Http::json(['error'=>'انتهت جلسة التسجيل. حدّثي الصفحة.'],403);
+    if ($portal && !PortalAccess::ready()) Http::json(['error'=>'تسجيل بوابة ظليم غير متاح حاليًا.'],503);
     Http::requireFields($data, ['name', 'email', 'password']);
     $name = trim((string) $data['name']);
     $email = Http::schoolEmail((string) $data['email']);
@@ -84,6 +86,28 @@ function teacher_register(): never
         Http::json(['error' => 'البريد الإلكتروني مستخدم مسبقًا.'], 409);
     }
 
+    if ($portal) {
+        if (mb_strlen($name)<3 || mb_strlen($name)>140 || strlen($password)>72) Http::json(['error'=>'راجعي الاسم وطول كلمة المرور.'],422);
+        foreach (['students','owners','platform_users','ms_users'] as $table) {
+            if (fetch_one('SELECT id FROM '.$table.' WHERE email = ?',[$email])) Http::json(['error'=>'البريد الإلكتروني مستخدم مسبقًا. استخدمي الحساب الموجود.'],409);
+        }
+        $pdo=Database::connection();
+        try {
+            $pdo->beginTransaction();
+            $pdo->prepare("INSERT INTO teachers(name,email,password_hash,status) VALUES (?,?,?,'pending')")->execute([$name,$email,password_hash($password,PASSWORD_DEFAULT)]);
+            $id=(int)$pdo->lastInsertId();
+            $pdo->prepare("INSERT INTO mb_native_access(subject_type,subject_id,access_mode,portal_enabled) VALUES ('teacher',?,'portal_only',1)")->execute([$id]);
+            $pdo->prepare('INSERT INTO ms_users(external_id,name,email) VALUES (?,?,?)')->execute(['teacher:'.$id,$name,$email]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            if ($e instanceof PDOException && (int)($e->errorInfo[1]??0)===1062) Http::json(['error'=>'البريد الإلكتروني مستخدم مسبقًا.'],409);
+            throw $e;
+        }
+        Activity::log('system',null,'طلب حساب معلمة في بوابة ظليم',"طلب جديد للبريد {$email}");
+        Http::json(['ok'=>true,'message'=>'تم إرسال طلبك إلى المعلم الأول في بوابة ظليم للموافقة.'],201);
+    }
+
     $stmt = Database::connection()->prepare(
         "INSERT INTO teachers (name, email, password_hash, status) VALUES (?, ?, ?, 'pending')"
     );
@@ -94,7 +118,7 @@ function teacher_register(): never
 
 function logout_route(string $role): never
 {
-    $user = $role === 'owner' ? OwnerDelegation::context() : Auth::requireRole($role);
+    $user = $role === 'owner' ? Auth::requireRealOwner() : Auth::requireRole($role);
     Auth::verifyCsrf();
     if ($role !== 'owner' && Auth::isOwnerPreview()) {
         $owner = Auth::realUser();
