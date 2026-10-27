@@ -60,7 +60,6 @@ function public_login(string $role): never
     }
     $user = Auth::attempt($role, $email, (string) $data['password'], isset($data['otp']) ? (string)$data['otp'] : null);
     $identity=Auth::realUser();
-    if(OwnerDelegation::allowed($identity))$user['redirect']='/dhalim/?board=1';
     if($identity){$user['portal']=PortalAccess::state($identity);if(!PortalAccess::canMadar($identity))$user['redirect']=PortalAccess::destination($identity);}
     Http::json($user);
 }

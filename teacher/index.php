@@ -6,7 +6,6 @@ if (!$user || $user['role'] !== 'teacher') {
     header('Location: /teacher/login.html');
     exit;
 }
-if (!Auth::isOwnerPreview() && OwnerDelegation::allowed($user)) {header('Location: /dhalim/?board=1');exit;}
 if (!empty($_SESSION['ms_return_after_login'])) {
     $next=(string)$_SESSION['ms_return_after_login'];unset($_SESSION['ms_return_after_login']);
     $next=PortalAccess::returnTarget($next);
@@ -14,4 +13,4 @@ if (!empty($_SESSION['ms_return_after_login'])) {
 }
 PortalAccess::pageGuard($user);
 $html=file_get_contents(__DIR__.'/index.html');
-echo str_replace('</body>','<script src="/surveys/public/assets/portal-link.js?v=20261023"></script></body>',$html);
+echo str_replace('</body>','<script src="/surveys/public/assets/portal-link.js?v=20261027-redirect"></script></body>',$html);

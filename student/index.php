@@ -8,4 +8,4 @@ if (!$user || $user['role'] !== 'student') {
 }
 PortalAccess::pageGuard($user);
 $html=file_get_contents(__DIR__.'/index.html');
-echo str_replace('</body>','<script src="/surveys/public/assets/portal-link.js?v=20261023"></script></body>',$html);
+echo str_replace('</body>','<script src="/surveys/public/assets/portal-link.js?v=20261027-redirect"></script></body>',$html);
