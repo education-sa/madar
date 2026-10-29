@@ -34,6 +34,13 @@ final class PortalAccess
         $s=self::state($u);return $s['portal_enabled'] && in_array($s['access_mode'],['both','portal_only'],true);
     }
     public static function canMadar(array $u): bool {return ($u['status']??'')==='active' && (self::owner($u)||OwnerDelegation::allowed($u)||in_array(self::state($u)['access_mode'],['madar_only','both'],true));}
+    public static function madarDestination(array $u): ?string {
+        if(!self::canMadar($u))return null;
+        return match($u['role']??''){
+            'owner'=>'/owner/dashboard','teacher'=>'/teacher/','student'=>'/student/',
+            'parent'=>'/parent/','admin'=>'/admin/',default=>null,
+        };
+    }
     public static function destination(array $u): string {if(self::owner($u))return '/owner/dashboard?section=teachers';if(OwnerDelegation::allowed($u))return '/dhalim/?board=1';return match($u['role']??''){'student'=>'/dhalim/student/','parent'=>'/dhalim/parent/',default=>'/dhalim/'};}
     public static function guardServicePage(): void {
         $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH);
