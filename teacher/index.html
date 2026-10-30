@@ -68,8 +68,13 @@
       <button class="nav-item" data-route="library-panel"><span class="ic">📚</span> الموارد المكتبية</button>
       <button class="nav-item" data-route="knowledge-exchange"><span class="ic">🤝</span> تبادل المعرفة</button>
 
-      <a class="nav-item" href="/meetings/"><span class="ic">◉</span> الاجتماعات التفاعلية</a>
-      <a class="nav-item" href="/meetings/?view=recordings"><span class="ic">▣</span> تسجيلات اجتماعاتي</a>
+      <details class="meetings-nav">
+        <summary class="nav-item" style="list-style:none;cursor:pointer"><span class="ic">◉</span> الاجتماعات التفاعلية <span aria-hidden="true" style="margin-inline-start:auto">⌄</span></summary>
+        <div style="padding-inline-start:18px">
+          <a class="nav-item" href="/meetings/"><span class="ic">◉</span> دخول الاجتماعات</a>
+          <a class="nav-item" href="/meetings/?view=recordings"><span class="ic">▣</span> تسجيلات اجتماعاتي</a>
+        </div>
+      </details>
       <div class="nav-group-label">أخرى</div>
       <button class="nav-item" data-route="parent-panel"><span class="ic">👨‍👩‍👧</span> ولي الأمر</button>
       <button class="nav-item" data-route="calendar"><span class="ic">📅</span> التقويم والمواعيد</button>
