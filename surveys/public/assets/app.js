@@ -80,7 +80,7 @@ async function openShared(token){const result=await api('open',null,{token});cur
 submitSurvey=async function(){
  if(!currentRemote){notify('هذه معاينة. احفظي المسودة وانشريها لاستقبال الإجابات.',true);return;}
  if(busy)return;const missing=ALL_Q.find(q=>state.answers[q.id]===undefined);if(missing){goTo(missing.num);notify('أجيبي عن جميع الأسئلة.',true);return;}
- if(!document.getElementById('identityConsent').checked){goTo(TOTAL_Q+1);notify('يلزم الموافقة على إرسال التقييم باسمك.',true);return;}
+ if(!document.getElementById('identityConsent').checked){goTo(TOTAL_Q+1);notify('يلزم الموافقة على شروط وسياسات الموقع.',true);return;}
  busy=true;btnNext.disabled=true;
  try{await api(guestMode?'guest_submit':'submit',{id:currentRemote.id,token:new URLSearchParams(location.search).get('s'),answers:state.answers,notes:state.notes,identity_consent:true});goTo(TOTAL_Q+3);}
  catch(err){notify(err.message,true);}finally{busy=false;updateNav();}

@@ -313,8 +313,22 @@ function buildSurveyUI() {
             <div class="q-text">ملاحظات إضافية (اختياري)</div>
           </div>
           <label class="field"><span>اسم المقيمة من حسابك</span><input type="text" id="reviewerName" readonly autocomplete="name" value="${escapeHtml(state.reviewerName)}"></label>
-          <p class="local-data-note">هذا التقييم مرتبط باسمك. تستطيع صاحبة الاستبيان والإدارة المخولة مشاهدة اسمك وإجاباتك وملاحظاتك؛ التقييم ليس مجهول الهوية.</p>
-          <label class="identity-consent"><input type="checkbox" id="identityConsent"> أوافق على إرسال تقييمي باسمي وإتاحته لصاحبة الاستبيان والإدارة المخولة.</label><label class="field"><span>ملاحظاتك النصية</span><textarea id="notesText" rows="4">${escapeHtml(state.notes)}</textarea></label>
+          <label class="identity-consent"><input type="checkbox" id="identityConsent"> أوافق على شروط وسياسات الموقع.</label>
+          <details class="survey-site-terms" style="margin:8px 0 20px;text-align:right">
+            <summary style="color:var(--primary);cursor:pointer;text-decoration:underline;font-weight:700">شروط الموقع</summary>
+            <div style="margin-top:12px;padding:16px;border:1px solid var(--line);border-radius:12px;line-height:1.9">
+              <h3 style="margin:0 0 10px">شروط وسياسات استخدام الموقع</h3>
+              <ol style="padding-inline-start:22px;margin:0">
+                <li>احترام الدين الإسلامي والوطن ورموزه وقيم المجتمع، والامتناع عن أي محتوى مسيء أو محرض على الكراهية أو العنف.</li>
+                <li>احترام جميع المستخدمات والمستخدمين، وعدم الإساءة أو التنمر أو التشهير أو نشر محتوى غير لائق.</li>
+                <li>استخدام الموقع للأغراض التعليمية المصرح بها، وإدخال معلومات صحيحة، والمحافظة على سرية بيانات الدخول وعدم مشاركة الحساب.</li>
+                <li>احترام خصوصية الآخرين وحقوق الملكية الفكرية، وعدم نشر بياناتهم أو صورهم أو أعمالهم دون إذن.</li>
+                <li>يمكن للإدارة المخولة الاطلاع على جميع الأنشطة والمحتويات المسجلة في الموقع، بما فيها المشاركات والتقييمات والإجابات والملاحظات والملفات وبيانات الحساب المرتبطة بها، لأغراض التشغيل والإشراف ومعالجة المخالفات، وفق الصلاحيات وسياسات الخصوصية.</li>
+                <li>الاستبيانات ليست مجهولة الهوية؛ ترتبط باسم حسابك، ويمكن لصاحبة الاستبيان والإدارة المخولة الاطلاع على اسمك وإجاباتك وملاحظاتك.</li>
+                <li>يحق للإدارة معالجة المحتوى المخالف وتقييد استخدام الحساب وفق سياسات الموقع. تعني الموافقة أنك اطلعت على هذه الشروط وسياسات الموقع وتلتزم بها.</li>
+              </ol>
+            </div>
+          </details><label class="field"><span>ملاحظاتك النصية</span><textarea id="notesText" rows="4">${escapeHtml(state.notes)}</textarea></label>
         </div>
       </div>
     </section>

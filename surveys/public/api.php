@@ -67,7 +67,7 @@ try {
   }
   $guest=$_SESSION['ms_guests'][$key]??null;if (!$guest) fail('اكتبي اسم الزائر أولًا.',401);
   if (!empty($guest['submitted'])) fail('سبق إرسال هذا التقييم.',409);
-  if (($b['identity_consent']??false)!==true) fail('يلزم الموافقة على إرسال التقييم باسمك.');
+  if (($b['identity_consent']??false)!==true) fail('يلزم الموافقة على شروط وسياسات الموقع.');
   $valid=msValidateAnswers(json_decode($s['definition'],true),$b['answers']??null);
   $notes=text($b['notes']??'',10000);db()->beginTransaction();
   $live=sql('SELECT status FROM ms_surveys WHERE id=? FOR UPDATE',[$s['id']])->fetchColumn();if($live!=='published')fail('أُغلق الاستبيان.',409);
@@ -179,7 +179,7 @@ try {
   if ($s['status']!=='published'||!hash_equals($s['share_token'],text($b['token']??'',48))) fail('الاستبيان غير متاح.',403);
   $owner=sql('SELECT active FROM ms_users WHERE id=?',[$s['owner_id']])->fetchColumn();if (!$owner) fail('حساب صاحبة الاستبيان معطل.',403);
   if ((int)$s['owner_id']===(int)$u['id']) fail('لا يمكنك تقييم نفسك.',403);
-  if (($b['identity_consent']??false)!==true) fail('يلزم الإقرار بأن التقييم مرتبط باسمك.');
+  if (($b['identity_consent']??false)!==true) fail('يلزم الموافقة على شروط وسياسات الموقع.');
   $valid=msValidateAnswers(json_decode($s['definition'],true),$b['answers']??null);
   try { sql('INSERT INTO ms_responses(survey_id,reviewer_id,answers,notes) VALUES (?,?,?,?)',[$id,$u['id'],json_encode($valid),text($b['notes']??'',10000)]); }
   catch (PDOException $e) { if ($e->getCode()==='23000') fail('سبق حفظ تقييمك لهذا الاستبيان.',409);throw $e; }
